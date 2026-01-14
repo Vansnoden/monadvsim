@@ -47,6 +47,7 @@ public class MainWindow extends JFrame{
   // Private functions
   
   private void initComponents(){
+    this.initMenu();
     this.initContentPanel();
   }
   
@@ -59,7 +60,44 @@ public class MainWindow extends JFrame{
   }
   
   private void initMenu(){
-    
+    this.menuBar = new JMenuBar();
+    this.initProjectMenu();
+    this.setJMenuBar(menuBar);
+  }
+  
+  private void initProjectMenu(){
+    this.projectMenu = new JMenu("Project");
+    this.initProjectMenuItems();
+    this.addProjectMenuItems();
+    this.menuBar.add(this.projectMenu);
+  }
+  
+  private void initProjectMenuItems(){
+    this.newProjectMenuItem = new JMenuItem("New");
+    this.saveProjectMenuItem = new JMenuItem("Save");
+    this.saveAsProjectMenuItem = new JMenuItem("Save As");
+    this.projectPropertiesMenuItem = new JMenuItem("Properties"); 
+    this.exportProjectMenuItem = new JMenuItem("Export");
+    this.quitMenuItem = new JMenuItem("Quit");
+  }
+  
+  private void addProjectMenuItems(){
+    this.projectMenu.add(this.newProjectMenuItem);
+    this.projectMenu.add(this.saveProjectMenuItem);
+    this.projectMenu.add(this.saveAsProjectMenuItem);
+    this.projectMenu.addSeparator();
+    this.projectMenu.add(this.projectPropertiesMenuItem); 
+    this.projectMenu.add(this.exportProjectMenuItem);
+    this.projectMenu.addSeparator();
+    this.projectMenu.add(this.quitMenuItem);
+  }
+  
+  private void initLayerMenu(){
+    this.layerMenu = new JMenu("Layer");
+  }
+  
+  private void initHelpMenu(){
+    this.helpMenu = new JMenu("Help");
   }
   
   private void initToolbar(){
