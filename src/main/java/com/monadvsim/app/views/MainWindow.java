@@ -62,6 +62,7 @@ public class MainWindow extends JFrame{
   private void initMenu(){
     this.menuBar = new JMenuBar();
     this.initProjectMenu();
+    this.initLayerMenu();
     this.setJMenuBar(menuBar);
   }
   
@@ -94,6 +95,19 @@ public class MainWindow extends JFrame{
   
   private void initLayerMenu(){
     this.layerMenu = new JMenu("Layer");
+    this.initLayerMenuItems();
+    this.addLayerMenuItems();
+    this.menuBar.add(this.layerMenu);
+  }
+  
+  private void initLayerMenuItems(){
+    this.addLayerMenuItem = new JMenuItem("Add Layer");
+    this.removeLayerMenuItem = new JMenuItem("Remove Layer");
+  }
+  
+  private void addLayerMenuItems(){
+    this.layerMenu.add(this.addLayerMenuItem);
+    this.layerMenu.add(this.removeLayerMenuItem);
   }
   
   private void initHelpMenu(){
