@@ -27,7 +27,7 @@ public class MainWindow extends JFrame{
   private JMenuItem newProjectMenuItem=null, saveProjectMenuItem=null, saveAsProjectMenuItem=null;
   private JMenuItem projectPropertiesMenuItem=null, projectExportMenuItem=null, exportProjectMenuItem=null;
   private JMenuItem quitMenuItem=null, addLayerMenuItem=null, removeLayerMenuItem=null;
-  private JMenuItem documentationMenuItem=null, donatioMenuItem=null;
+  private JMenuItem documentationMenuItem=null, donationMenuItem=null;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -63,6 +63,7 @@ public class MainWindow extends JFrame{
     this.menuBar = new JMenuBar();
     this.initProjectMenu();
     this.initLayerMenu();
+    this.initHelpMenu();
     this.setJMenuBar(menuBar);
   }
   
@@ -112,12 +113,26 @@ public class MainWindow extends JFrame{
   
   private void initHelpMenu(){
     this.helpMenu = new JMenu("Help");
+    this.initHelpMenuItems();
+    this.addHelpMenuItem();
+    this.menuBar.add(this.helpMenu);
+  }
+  
+  private void initHelpMenuItems(){
+    this.documentationMenuItem = new JMenuItem("Documentation");
+    this.donationMenuItem = new JMenuItem("Donate!");
+  }
+  
+  private void addHelpMenuItem(){
+    this.helpMenu.add(this.documentationMenuItem);
+    this.helpMenu.add(this.donationMenuItem);
   }
   
   private void initToolbar(){
     this.toolbar = new JToolBar();
     this.initToolButtons();
     this.addToolButtonsToToolbar();
+    this.toolbar.setFloatable(false);
     this.content.add(this.toolbar, BorderLayout.NORTH);
   }
   
