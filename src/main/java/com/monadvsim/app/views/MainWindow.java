@@ -137,7 +137,8 @@ public class MainWindow extends JFrame{
     this.initOptionsPanel();
     this.initCanvasPanel();
     this.splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, this.optionsPanel, this.canvasPanel);
-    this.splitPane.setDividerLocation(200);
+    this.splitPane.setDividerLocation(250);
+    this.splitPane.setEnabled(false);
     this.content.add(this.splitPane, BorderLayout.CENTER);
     this.initStatusBar();
     this.add(this.content);
