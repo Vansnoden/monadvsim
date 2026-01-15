@@ -4,9 +4,11 @@ import javax.swing.JFrame;
 import javax.swing.JPanel;
 import javax.swing.JSplitPane;
 import javax.swing.JButton;
+import javax.swing.JLabel;
 import javax.swing.JToolBar;
 import javax.swing.JMenuBar;
 import javax.swing.JMenu;
+import javax.swing.BorderFactory;
 import javax.swing.JMenuItem;
 import javax.swing.ImageIcon;
 import java.net.URL;
@@ -19,7 +21,7 @@ public class MainWindow extends JFrame{
   
   private Project projectModel=null;
   private JSplitPane splitPane=null;
-  private JPanel content=null, optionsPanel=null, canvasPanel=null;
+  private JPanel content=null, optionsPanel=null, canvasPanel=null, statusBar=null;
   private JToolBar toolbar=null;
   private JButton btnNewProject=null, btnOpenProject=null, btnSaveProject=null;
   private JButton btnAddLayer=null, btnPanview=null, btnZoomIn=null;
@@ -137,6 +139,7 @@ public class MainWindow extends JFrame{
     this.splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, this.optionsPanel, this.canvasPanel);
     this.splitPane.setDividerLocation(200);
     this.content.add(this.splitPane, BorderLayout.CENTER);
+    this.initStatusBar();
     this.add(this.content);
   }
   
@@ -198,6 +201,13 @@ public class MainWindow extends JFrame{
   private void initCanvasPanel(){
     this.canvasPanel = new JPanel();
     this.canvasPanel.setPreferredSize(new Dimension(700, 0));
+  }
+  
+  private void initStatusBar(){
+    this.statusBar = new JPanel(new BorderLayout());
+    this.statusBar.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
+    this.statusBar.add(new JLabel("monadvsim@2025"), BorderLayout.EAST);
+    this.content.add(this.statusBar, BorderLayout.SOUTH);
   }
   
 }
