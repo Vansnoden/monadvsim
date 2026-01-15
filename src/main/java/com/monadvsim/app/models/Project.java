@@ -9,7 +9,7 @@ public class Project{
   private String name = "New Project";
   private String crs = "EPSG:4326";
   private List<Layer> layers = new ArrayList<>();
-  private transient File projectFile = null;
+  private File projectFile = null;
   
   public Project(){}
   
@@ -19,6 +19,10 @@ public class Project{
   
   public void setName(String name){ 
     this.name=name; 
+  }
+  
+  public void setProjectFile(File newFile){
+    this.projectFile = newFile;
   }
 
   public String getCrs(){
