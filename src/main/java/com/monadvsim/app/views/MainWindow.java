@@ -48,6 +48,68 @@ public class MainWindow extends JFrame{
     this.projectModel = project;
   }
   
+  public JSplitPane getSplitPane(){ return this.splitPane; }
+  
+  public JPanel getContentPanel(){ return this.content; }
+  
+  public JPanel getOptionsPanel(){ return this.optionsPanel; }
+  
+  public JPanel getCanvasPanel(){ return this.canvasPanel; }
+  
+  public JPanel getStatusBar(){ return this.statusBar; }
+  
+  public JToolBar getToolbar(){ return this.toolbar; }
+  
+  public JButton getBtnNewProject(){ return this.btnNewProject; } 
+  
+  public JButton getBtnOpenProject(){ return this.btnOpenProject; }
+  
+  public JButton getBtnSaveProject(){ return this.btnSaveProject; }
+  
+  public JButton getBtnAddLayer(){ return this.btnAddLayer; }
+  
+  public JButton getBtnPanview(){ return this.btnPanview; } 
+  
+  public JButton getBtnZoomIn(){ return this.btnZoomIn; }
+  
+  public JButton getBtnZoomOut(){ return this.btnZoomOut; }
+  
+  public JButton getBtnFullview(){ return this.btnFullview; }
+  
+  public JButton getBtnRun(){ return this.btnRun; }
+  
+  public JButton getBtnPause(){ return this.btnPause; }
+  
+  public JMenuBar getJMenuBar(){ return this.menuBar; }
+  
+  public JMenu getProjectMenu(){ return this.projectMenu; }
+  
+  public JMenu getLayerMenu(){ return this.layerMenu; }
+  
+  public JMenu getHelpMenu(){ return this.helpMenu; }
+  
+  public JMenuItem getNewProjectMenuItem(){ return this.newProjectMenuItem; }
+  
+  public JMenuItem getSaveProjectMenuItem(){ return this.saveProjectMenuItem; }
+  
+  public JMenuItem getSaveAsProjectMenuItem(){ return this.saveAsProjectMenuItem; }
+  
+  public JMenuItem getProjectPropertiesMenuItem(){ return this.projectPropertiesMenuItem; }
+  
+  public JMenuItem getProjectExportMenuItem(){ return this.projectExportMenuItem; }
+  
+  public JMenuItem getExportProjectMenuItem(){ return this.exportProjectMenuItem; }
+  
+  public JMenuItem getQuitMenuItem(){ return this.quitMenuItem; }
+  
+  public JMenuItem getAddLayerMenuItem(){ return this.addLayerMenuItem; }
+  
+  public JMenuItem getRemoveLayerMenuItem(){ return this.removeLayerMenuItem; }
+  
+  public JMenuItem getDocumentationMenuItem(){ return this.documentationMenuItem; }
+  
+  public JMenuItem getDonationMenuItem(){ return this.donationMenuItem; }
+  
   // Private functions
   
   private void initComponents(){
