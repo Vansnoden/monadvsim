@@ -2,6 +2,7 @@ package com.monadvsim.app.views;
 
 import javax.swing.JFrame;
 import javax.swing.JPanel;
+import javax.swing.JSplitPane;
 import javax.swing.JButton;
 import javax.swing.JToolBar;
 import javax.swing.JMenuBar;
@@ -17,7 +18,8 @@ import com.monadvsim.app.models.Project;
 public class MainWindow extends JFrame{
   
   private Project projectModel=null;
-  private JPanel content=null;
+  private JSplitPane splitPane=null;
+  private JPanel content=null, optionsPanel=null, canvasPanel=null;
   private JToolBar toolbar=null;
   private JButton btnNewProject=null, btnOpenProject=null, btnSaveProject=null;
   private JButton btnAddLayer=null, btnPanview=null, btnZoomIn=null;
@@ -49,14 +51,6 @@ public class MainWindow extends JFrame{
   private void initComponents(){
     this.initMenu();
     this.initContentPanel();
-  }
-  
-  private void initContentPanel(){
-    this.content = new JPanel();
-    this.content.setPreferredSize(new Dimension(900, 650));
-    this.content.setLayout(new BorderLayout());
-    this.initToolbar();
-    this.add(this.content);
   }
   
   private void initMenu(){
@@ -128,6 +122,24 @@ public class MainWindow extends JFrame{
     this.helpMenu.add(this.donationMenuItem);
   }
   
+  private ImageIcon loadIcon(String name){
+    URL imageURL = getClass().getResource("/icons/" + name + ".png");
+    return (imageURL != null)? new ImageIcon(imageURL) : null;
+  }
+  
+  private void initContentPanel(){
+    this.content = new JPanel();
+    this.content.setPreferredSize(new Dimension(900, 650));
+    this.content.setLayout(new BorderLayout());
+    this.initToolbar();
+    this.initOptionsPanel();
+    this.initCanvasPanel();
+    this.splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, this.optionsPanel, this.canvasPanel);
+    this.splitPane.setDividerLocation(200);
+    this.content.add(this.splitPane, BorderLayout.CENTER);
+    this.add(this.content);
+  }
+  
   private void initToolbar(){
     this.toolbar = new JToolBar();
     this.initToolButtons();
@@ -178,9 +190,14 @@ public class MainWindow extends JFrame{
     this.toolbar.add(this.btnPause);
   }
   
-  private ImageIcon loadIcon(String name){
-    URL imageURL = getClass().getResource("/icons/" + name + ".png");
-    return (imageURL != null)? new ImageIcon(imageURL) : null;
+  private void initOptionsPanel(){
+    this.optionsPanel = new JPanel();
+    this.optionsPanel.setPreferredSize(new Dimension(200, 0));
+  }
+  
+  private void initCanvasPanel(){
+    this.canvasPanel = new JPanel();
+    this.canvasPanel.setPreferredSize(new Dimension(700, 0));
   }
   
 }
