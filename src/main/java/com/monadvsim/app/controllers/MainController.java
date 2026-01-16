@@ -29,7 +29,23 @@ public class MainController{
     DialogNewProject dialog = new DialogNewProject();
     dialog.getBtnSelectFolder().addActionListener(l -> {
       File selectedFolder = openFileChooser(dialog, JFileChooser.DIRECTORIES_ONLY, null);
-      System.out.println("Select Folder: "+selectedFolder.getName());
+      dialog.getSelectFolderLabel().setText(selectedFolder.getAbsolutePath());
+    });
+    dialog.getBtnSave().addActionListener(l -> {
+    try {
+      String name = dialog.getProjectNameField().getText();
+      File pFile = new File(dialog.getSelectFolderLabel().getText(), name + ".mvsim");
+      model = new Project();
+      model.setName(name);
+      model.setCrsCode("EPSG:4326"); 
+      model.setProjectFile(pFile);
+      persistenceService.saveProject(model, pFile);
+      view.setTitle("MonadVSIM - " + name);
+      dialog.dispose();
+    } catch (Exception ex) {
+      JOptionPane.showMessageDialog(dialog, "New project creation failed: " + ex.getMessage());
+    }
+      dialog.dispose();
     });
   }
   
