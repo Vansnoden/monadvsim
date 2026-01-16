@@ -22,6 +22,7 @@ public class MainWindow extends JFrame{
   private Project projectModel=null;
   private JSplitPane splitPane=null;
   private JPanel content=null, optionsPanel=null, canvasPanel=null, statusBar=null;
+  private SimulationCanvas simCanvas = null;
   private JToolBar toolbar=null;
   private JButton btnNewProject=null, btnOpenProject=null, btnSaveProject=null;
   private JButton btnAddLayer=null, btnPanview=null, btnZoomIn=null;
@@ -263,8 +264,14 @@ public class MainWindow extends JFrame{
   }
   
   private void initCanvasPanel(){
-    this.canvasPanel = new JPanel();
+    this.canvasPanel = new JPanel(new BorderLayout());
     this.canvasPanel.setPreferredSize(new Dimension(700, 0));
+    this.initSimCanvas();
+    this.canvasPanel.add(this.simCanvas, BorderLayout.CENTER);
+  }
+  
+  private void initSimCanvas(){
+    this.simCanvas = new SimulationCanvas();
   }
   
   private void initStatusBar(){

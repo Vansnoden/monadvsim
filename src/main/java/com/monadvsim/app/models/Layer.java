@@ -8,6 +8,17 @@ import java.io.File;
 import java.io.Serializable;
 
 
+@JsonTypeInfo(
+    use = JsonTypeInfo.Id.NAME, 
+    include = JsonTypeInfo.As.PROPERTY, 
+    property = "type"
+)
+@JsonSubTypes({
+    @JsonSubTypes.Type(value = VectorLayer.class, name = "vector"),
+    @JsonSubTypes.Type(value = RasterLayer.class, name = "raster"),
+    @JsonSubTypes.Type(value = AgentLayer.class, name = "agents")
+})
+@JsonIgnoreProperties(ignoreUnknown = true)
 public abstract class Layer implements Serializable {
   
   protected String name;
@@ -23,6 +34,7 @@ public abstract class Layer implements Serializable {
     this.relativePath = relativePath;
   }
   
+  @JsonIgnore
   public CoordinateReferenceSystem getCoordinateReferenceSystem() {
   try {
       if (crsCode == null || crsCode.isEmpty()) {
@@ -34,6 +46,7 @@ public abstract class Layer implements Serializable {
     }
   }
   
+  @JsonIgnore
   public abstract org.geotools.map.Layer getGeoToolsLayer(File projectFile);
   
   public String getName() { return name; }

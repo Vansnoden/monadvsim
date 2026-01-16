@@ -54,7 +54,7 @@ public class DialogNewProject extends JDialog{
     this.btnSave = new JButton("Save Project");
     this.projectNameField = new JTextField(20);
     this.selectFolderLabel = new JLabel("No folder selected");
-    this.selectFolderLabel.setForeground(Color.GRAY); // Professional "de-emphasized" look
+    this.selectFolderLabel.setForeground(Color.GRAY);
     JPanel formFieldsPanel = new JPanel(new GridBagLayout());
     formFieldsPanel.setBorder(BorderFactory.createTitledBorder("Project Information"));
     GridBagConstraints gbc = new GridBagConstraints();

@@ -3,13 +3,23 @@ package com.monadvsim.app.models;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
 
 
+@JacksonXmlRootElement(localName = "monadProject")
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class Project{
+
+  @JacksonXmlProperty(isAttribute = true)
   private String name = "New Project";
+  @JacksonXmlProperty
   private String crs = "EPSG:4326";
+  @JacksonXmlElementWrapper(localName = "layers")
+  @JacksonXmlProperty(localName = "layer")
   private List<Layer> layers = new ArrayList<>();
-  private File projectFile = null;
+  @JsonIgnore
+  private transient File projectFile = null; // transient ensures Java's default serializer ignores it
   
   public Project(){}
   
@@ -25,21 +35,21 @@ public class Project{
     this.projectFile = newFile;
   }
 
+  @JsonIgnore
   public String getCrs(){
     return crs; 
   }
   
+  @JsonIgnore
   public void setCrs(String crs){ 
     this.crs=crs;
   }
 
-  public String getCrsCode(){ 
-    return this.crs; 
-  }
-  
-  public void setCrsCode(String code){
-    this.crs=code; 
-  }
+  @JsonIgnore
+  public File getProjectFile() { return projectFile; }
+    
+  @JsonIgnore
+  public void setProjectFile(File pf) { this.projectFile = pf; }
   
   public List<Layer> getLayers() { 
     if (layers == null) {
