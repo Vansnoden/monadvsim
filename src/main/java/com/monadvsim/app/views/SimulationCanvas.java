@@ -1,14 +1,14 @@
 package com.monadvsim.app.views;
 
-import org.geotools.swing.JMapFrame;
+import org.geotools.swing.JMapPane;
 
-public class SimulationCanvas extends JMapFrame{
+public class SimulationCanvas extends JMapPane{
 
   public SimulationCanvas(){
     
   }
   
-  private initComponents(){
+  private void initComponents(){
     
   }
 }

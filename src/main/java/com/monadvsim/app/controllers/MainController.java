@@ -1,6 +1,7 @@
 package com.monadvsim.app.controllers;
 
 import com.monadvsim.app.models.Project;
+import com.monadvsim.app.models.ProjectPersistenceService;
 import com.monadvsim.app.views.MainWindow;
 import com.monadvsim.app.views.DialogNewProject;
 import javax.swing.JFileChooser;
@@ -9,15 +10,27 @@ import java.util.List;
 import java.util.Arrays;
 import javax.swing.filechooser.FileNameExtensionFilter;
 import java.io.File;
+import javax.swing.JOptionPane;
+import org.geotools.swing.tool.PanTool;
+import org.geotools.swing.tool.ZoomInTool;
+import org.geotools.swing.tool.ZoomOutTool;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+import java.io.File;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class MainController{
   
   private Project model = null;
   private MainWindow view = null;
+  private ProjectPersistenceService projectPersistenceService = null;
   
   public MainController(Project model, MainWindow view){
     this.model = model;
     this.view = view;
+    this.projectPersistenceService = new ProjectPersistenceService();
     this.initListeners();
   }
   
@@ -37,9 +50,9 @@ public class MainController{
       File pFile = new File(dialog.getSelectFolderLabel().getText(), name + ".mvsim");
       model = new Project();
       model.setName(name);
-      model.setCrsCode("EPSG:4326"); 
+      model.setCrs("EPSG:4326"); 
       model.setProjectFile(pFile);
-      persistenceService.saveProject(model, pFile);
+      projectPersistenceService.saveProject(model, pFile);
       view.setTitle("MonadVSIM - " + name);
       dialog.dispose();
     } catch (Exception ex) {

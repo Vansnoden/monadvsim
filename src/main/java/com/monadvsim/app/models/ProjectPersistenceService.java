@@ -34,7 +34,6 @@ public class ProjectPersistenceService {
     // Backup original paths so we can restore them after the XML is written
     Map<Layer, String> originalPaths = new HashMap<>();
     File projectDir = file.getParentFile();
-
     for (Layer layer : project.getLayers()) {
       String path = layer.getRelativePath();
       if (path != null && !path.startsWith("internal://")) {
@@ -71,7 +70,6 @@ public class ProjectPersistenceService {
   */
   private String makeRelative(File baseDir, File absoluteFile) {
     try {
-      // Uses URI logic to handle different OS path separators (Windows vs Linux)
       return baseDir.toURI().relativize(absoluteFile.toURI()).getPath();
     } catch (Exception e) {
       return absoluteFile.getAbsolutePath();

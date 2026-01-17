@@ -1,6 +1,10 @@
 package com.monadvsim.app.models;
 
 
+import java.io.File;
+import com.fasterxml.jackson.annotation.JsonIgnore;
+
+
 public class AgentLayer extends Layer{
 
   public AgentLayer() { 
@@ -10,5 +14,10 @@ public class AgentLayer extends Layer{
 
   public AgentLayer(String name) { 
     super(name, "internal://agents"); 
+  }
+  
+  @Override @JsonIgnore
+  public org.geotools.map.Layer getGeoToolsLayer(File projectFile){
+    return null;
   }
 }

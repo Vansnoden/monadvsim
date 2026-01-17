@@ -31,6 +31,7 @@ public class Project{
     this.name=name; 
   }
   
+  @JsonIgnore
   public void setProjectFile(File newFile){
     this.projectFile = newFile;
   }
@@ -47,9 +48,6 @@ public class Project{
 
   @JsonIgnore
   public File getProjectFile() { return projectFile; }
-    
-  @JsonIgnore
-  public void setProjectFile(File pf) { this.projectFile = pf; }
   
   public List<Layer> getLayers() { 
     if (layers == null) {
@@ -61,4 +59,5 @@ public class Project{
   public void setLayers(List<Layer> layers) { 
     this.layers = layers; 
   }
+  
 }
