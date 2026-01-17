@@ -24,12 +24,12 @@ import java.util.logging.Logger;
 
 public class MainController{
   
-  private Project model = null;
+  private Project project = null;
   private MainWindow view = null;
   private ProjectPersistenceService projectPersistenceService = null;
   
-  public MainController(Project model, MainWindow view){
-    this.model = model;
+  public MainController(Project project, MainWindow view){
+    this.project = project;
     this.view = view;
     this.projectPersistenceService = new ProjectPersistenceService();
     this.initListeners();
@@ -50,11 +50,11 @@ public class MainController{
     try {
       String name = dialog.getProjectNameField().getText();
       File pFile = new File(dialog.getSelectFolderLabel().getText(), name + ".mvsim");
-      model = new Project();
-      model.setName(name);
-      model.setCrs("EPSG:4326"); 
-      model.setProjectFile(pFile);
-      projectPersistenceService.saveProject(model, pFile);
+      project = new Project();
+      project.setName(name);
+      project.setCrs("EPSG:4326"); 
+      project.setProjectFile(pFile);
+      projectPersistenceService.saveProject(project, pFile);
       view.setTitle("MonadVSIM - " + name);
       dialog.dispose();
     } catch (Exception ex) {
@@ -64,8 +64,24 @@ public class MainController{
     });
   }
   
+  private void handleSaveProject() throws Exception {
+    if (project.getProjectFile() == null) { 
+      handleNewProject();
+    } else {
+      projectPersistenceService.saveProject(project, project.getProjectFile());
+      JOptionPane.showMessageDialog(view, "Project Saved Successfully."); 
+    }
+  }
+  
   private void handleNewLayer(){
-    DialogNewLayer dialog = new DialogNewLayer();
+    DialogNewLayer dialog = new DialogNewLayer(view);
+    if (dialog.isSucceeded()) { 
+      if (dialog.getLayerType().equals("Agent Layer")) {
+        handleCreateAgentLayer(dialog.getLayerName(), dialog.getPopulation(), dialog.isWrapAround());
+      } else {
+        handleCreateSpatialLayer(dialog.getLayerType(), dialog.getLayerName());
+      }
+    }
   }
   
   private File openFileChooser(JDialog parent, int mode, List<String> ext){
@@ -102,6 +118,35 @@ public class MainController{
         return chooser.getSelectedFile();
     }
     return null;
+  }
+  
+  private void refreshUI() {
+    view.updateLayerTree(project.getLayers());
+    view.getSimulationCanvas().updateLayers(project.getLayers(), project.getProjectFile()); 
+  }
+  
+  private void toggleLayerVisibility(Layer layer) {
+    layer.setVisible(!layer.isVisible());
+    refreshUI();
+  }
+
+  private void handleCreateAgentLayer(String name, int population, boolean wrap) {
+  AgentLayer al = new AgentLayer(name);
+  al.setWrapAround(wrap); 
+  al.setPopulation(population, project);
+  project.getLayers().add(al);
+  refreshUI(); 
+  }
+
+  private void handleCreateSpatialLayer(String type, String name) {
+  JFileChooser chooser = new JFileChooser();
+  if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
+  File layerFile = chooser.getSelectedFile();
+  Layer newLayer = type.equals("Vector Layer") ? 
+        new VectorLayer(name, layerFile.getAbsolutePath()) : new RasterLayer(name, layerFile.getAbsolutePath());
+  project.getLayers().add(newLayer);
+  refreshUI();
+  } 
   }
 
 }

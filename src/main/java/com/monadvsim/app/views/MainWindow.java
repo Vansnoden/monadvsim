@@ -15,6 +15,10 @@ import java.net.URL;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import com.monadvsim.app.models.Project;
+import javax.swing.JTree;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.JScrollPane;
 
 
 public class MainWindow extends JFrame{
@@ -33,6 +37,7 @@ public class MainWindow extends JFrame{
   private JMenuItem projectPropertiesMenuItem=null, projectExportMenuItem=null, exportProjectMenuItem=null;
   private JMenuItem quitMenuItem=null, addLayerMenuItem=null, removeLayerMenuItem=null;
   private JMenuItem documentationMenuItem=null, donationMenuItem=null;
+  private JTree layerTree=null;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -110,6 +115,8 @@ public class MainWindow extends JFrame{
   public JMenuItem getDocumentationMenuItem(){ return this.documentationMenuItem; }
   
   public JMenuItem getDonationMenuItem(){ return this.donationMenuItem; }
+  
+  public JTree getLayerTree() { return layerTree; }
   
   // Private functions
   
@@ -261,6 +268,17 @@ public class MainWindow extends JFrame{
   private void initOptionsPanel(){
     this.optionsPanel = new JPanel();
     this.optionsPanel.setPreferredSize(new Dimension(200, 0));
+    this.initProjectExplorer();
+  }
+  
+  private void initProjectExplorer(){
+    this.treeRoot = new DefaultMutableTreeNode("Layers");
+    this.layerTree = new JTree(treeRoot);
+    this.layerTree.setCellRenderer(new LayerTreeRenderer());
+    JPanel treePanel = new JPanel(new BorderLayout());
+    treePanel.add(new JLabel("Project Explorer"), BorderLayout.NORTH);
+    treePanel.add(new JScrollPane(layerTree), BorderLayout.CENTER);
+    this.optionsPanel.add(treePanel, BorderLayout.CENTER);
   }
   
   private void initCanvasPanel(){

@@ -31,6 +31,14 @@ public class DialogNewLayer extends JDialog {
     this.setVisible(true);
   }
   
+  public JComboBox getLayerTypeField(){
+    return this.layerTypeField;
+  }
+  
+  public JButton getBtnSave(){ return this.btnSave; }
+  
+  public JTextField getLayerNameField(){ return this.layerNameField; }
+  
   private void initComponents(){
     this.content = new JPanel(new BorderLayout(10, 10));
     this.content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10)); 
