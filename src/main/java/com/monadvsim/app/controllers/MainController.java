@@ -4,6 +4,7 @@ import com.monadvsim.app.models.Project;
 import com.monadvsim.app.models.ProjectPersistenceService;
 import com.monadvsim.app.views.MainWindow;
 import com.monadvsim.app.views.DialogNewProject;
+import com.monadvsim.app.views.DialogNewLayer;
 import javax.swing.JFileChooser;
 import javax.swing.JDialog;
 import java.util.List;
@@ -36,6 +37,7 @@ public class MainController{
   
   private void initListeners(){
     this.view.getBtnNewProject().addActionListener(l -> handleNewProject());
+    this.view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
   }
   
   private void handleNewProject(){
@@ -60,6 +62,10 @@ public class MainController{
     }
       dialog.dispose();
     });
+  }
+  
+  private void handleNewLayer(){
+    DialogNewLayer dialog = new DialogNewLayer();
   }
   
   private File openFileChooser(JDialog parent, int mode, List<String> ext){
