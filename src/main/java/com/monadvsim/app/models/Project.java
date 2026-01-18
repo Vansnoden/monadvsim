@@ -50,6 +50,11 @@ public class Project{
   public void setCrs(String crs){ 
     this.crs=crs;
   }
+  
+  @JsonIgnore
+  public void setCrsCode(String crs){ 
+    this.crs=crs;
+  }
 
   @JsonIgnore
   public File getProjectFile() { return projectFile; }

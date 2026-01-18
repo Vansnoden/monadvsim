@@ -10,6 +10,8 @@ import javax.swing.JTree;
 import com.monadvsim.app.views.MainWindow;
 import com.monadvsim.app.views.DialogNewProject;
 import com.monadvsim.app.views.DialogNewLayer;
+import com.monadvsim.app.views.DialogProjectProperties;
+import com.monadvsim.app.views.DialogLayerProperties;
 import javax.swing.JFileChooser;
 import javax.swing.JDialog;
 import java.util.List;
@@ -29,6 +31,12 @@ import java.util.logging.Logger;
 import javax.swing.tree.DefaultMutableTreeNode;
 import java.awt.Rectangle;
 import javax.swing.SwingUtilities;
+import javax.swing.JPopupMenu;
+import javax.swing.JMenuItem;
+import javax.swing.JMenu;
+import javax.swing.tree.TreePath;
+import javax.swing.JColorChooser;
+import javax.swing.SpinnerNumberModel;
 
 
 
@@ -195,7 +203,7 @@ public class MainController{
   }
   
   private void handleProjectProperties() {
-    ProjectPropertiesDialog dialog = new ProjectPropertiesDialog(view, project.getName(), project.getCrsCode());
+    DialogProjectProperties dialog = new DialogProjectProperties(view, project.getName(), project.getCrsCode());
     dialog.getBtnApply().addActionListener(e -> { 
       project.setName(dialog.getProjectName());
       project.setCrsCode(dialog.getSelectedCrs());
@@ -204,11 +212,6 @@ public class MainController{
       dialog.dispose();
     });
     dialog.setVisible(true); 
-  }
-  
-  private void toggleLayerVisibility(Layer layer) {
-    layer.setVisible(!layer.isVisible());
-    refreshUI();
   }
   
   private void showProjectContextMenu(MouseEvent e) {
@@ -233,5 +236,27 @@ public class MainController{
     menu.add(remove); 
     menu.show(e.getComponent(), e.getX(), e.getY());
   }
+  
+  private void handleLayerProperties(Layer layer) {
+    DialogLayerProperties dialog = new DialogLayerProperties(view, layer);
+    dialog.setVisible(true);
+    if (dialog.isConfirmed()) {
+      layer.setName(dialog.getLayerName());
+      layer.setVisible(dialog.isVisible());
+      layer.setCrsCode(dialog.getSelectedCrs());
+      if (layer instanceof AgentLayer al) {
+        al.setColorHex(dialog.getColorHex());
+        al.setWrapAround(dialog.isWrap());
+        al.setColorHex(dialog.getColorHex());
+        al.setTrailsEnabled(dialog.isTrailsEnabled()); // Ensure this is checked!
+        if (al.getAgentsCount() != dialog.getPopulation()) {
+          al.setPopulation(dialog.getPopulation(), project);
+        }
+      }
+      refreshUI();
+    }
+  }
+  
+  
 
 }
