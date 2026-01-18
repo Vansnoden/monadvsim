@@ -26,8 +26,10 @@ import com.fasterxml.jackson.dataformat.xml.annotation.*;
 public class AgentLayer extends Layer {
   
   private List<Agent> agents = new CopyOnWriteArrayList<>();
+  
   @JacksonXmlElementWrapper(localName = "rules")
   @JacksonXmlProperty(localName = "rule")
+  @JsonProperty("rules")
   private List<AgentRule> rules = new CopyOnWriteArrayList<>();
   private boolean wrapAround = true;
   private String colorHex = "#00FF00";
@@ -250,7 +252,7 @@ public class AgentLayer extends Layer {
   public org.geotools.map.Layer getGeoToolsLayer(File f) { return null; }
   
   // --- Getters & Setters ---
-  @JsonProperty("rules")
+  @JsonIgnore 
   public List<AgentRule> getRules() { 
       return rules; 
   }

@@ -52,7 +52,7 @@ public class Agent implements Serializable {
   public void step(Project project, AgentLayer layer, Envelope bounds) {
     if (!alive) return;
     // 1. Get speed from the primary rule
-    double speed = layer.getPrimaryRule() != null ? layer.getPrimaryRule().getMaxSpeed() : 0.05;
+    double speed = layer.getPrimaryRule() != null ? layer.getPrimaryRule().getMaxSpeed() : 50;
     // 2. Calculate potential move (Brownian motion + velocity)
     double nextX = x + (vx * speed) + (Math.random() - 0.5) * (speed * 0.5);
     double nextY = y + (vy * speed) + (Math.random() - 0.5) * (speed * 0.5);
