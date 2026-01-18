@@ -1,409 +1,278 @@
 package com.monadvsim.app.controllers;
 
-import com.monadvsim.app.models.Project;
-import com.monadvsim.app.models.ProjectPersistenceService;
-import com.monadvsim.app.models.RecentProjectsService;
-import com.monadvsim.app.models.VectorLayer;
-import com.monadvsim.app.models.RasterLayer;
-import com.monadvsim.app.models.AgentLayer;
-import com.monadvsim.app.models.Layer;
-import com.monadvsim.app.views.MainWindow;
-import com.monadvsim.app.views.DialogNewProject;
-import com.monadvsim.app.views.DialogNewLayer;
-import com.monadvsim.app.views.DialogLoading;
-import com.monadvsim.app.views.DialogProjectProperties;
-import com.monadvsim.app.views.DialogLayerProperties;
-import com.monadvsim.app.views.DialogRuleEditor;
-
+import com.monadvsim.app.models.*;
+import com.monadvsim.app.views.*;
 import javax.swing.*;
 import javax.swing.filechooser.FileNameExtensionFilter;
-import javax.swing.tree.DefaultMutableTreeNode;
-import javax.swing.tree.TreePath;
+import javax.swing.table.*;
+import javax.swing.tree.*;
 import java.awt.*;
-import java.awt.event.MouseAdapter;
-import java.awt.event.MouseEvent;
-import java.awt.geom.AffineTransform;
-import java.awt.geom.Point2D;
+import java.awt.event.*;
+import java.awt.geom.*;
+import java.awt.image.Raster;
 import java.io.File;
 import java.util.List;
 
-import org.geotools.swing.tool.PanTool;
-import org.geotools.swing.tool.ZoomInTool;
-import org.geotools.swing.tool.ZoomOutTool;
+import org.geotools.swing.tool.*;
+import org.geotools.api.data.SimpleFeatureSource;
+import org.geotools.data.simple.SimpleFeatureCollection; // Fixed Import for 34.1
+import org.geotools.api.feature.simple.SimpleFeature;
+import org.geotools.api.feature.type.AttributeDescriptor;
+import org.geotools.feature.FeatureIterator;
+import org.geotools.coverage.grid.GridCoverage2D;
 
 public class MainController {
-
-    private Project project = null;
-    private MainWindow view = null;
-    private ProjectPersistenceService projectPersistenceService = null;
+    private Project project;
+    private final MainWindow view;
+    private final ProjectPersistenceService pService = new ProjectPersistenceService();
     private final RecentProjectsService recentService = new RecentProjectsService();
     private boolean isBaking = false;
-    private Timer simulationTimer;
+    private Timer simTimer;
 
     public MainController(Project project, MainWindow view) {
         this.project = project;
         this.view = view;
-        this.projectPersistenceService = new ProjectPersistenceService();
         this.view.setStatusBarCRS(project.getCrsCode());
-        this.initListeners();
+        initListeners();
         updateRecentMenu();
-        if (project.getCrsCode() != null) {
-            view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
-        }
+        if (project.getCrsCode() != null) view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
     }
 
     private void initListeners() {
-        this.view.getBtnNewProject().addActionListener(l -> handleNewProject());
-        this.view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
-        this.view.getBtnOpenProject().addActionListener(l -> handleOpenProjectFlow());
-        this.view.getBtnSaveProject().addActionListener(l -> handleSaveProject());
-        this.view.getBtnRunSim().addActionListener(l -> toggleSimulation(true));
-        this.view.getBtnPauseSim().addActionListener(l -> toggleSimulation(false));
-        this.initMapTools();
-        this.handleLayerTreeMouse();
-        this.initSimulationClock();
-        this.handleViewPortCoordinatesUpdate();
+        view.getBtnNewProject().addActionListener(l -> handleNewProject());
+        view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
+        view.getBtnOpenProject().addActionListener(l -> handleOpenProjectFlow());
+        view.getBtnSaveProject().addActionListener(l -> handleSaveProject());
+        view.getBtnRunSim().addActionListener(l -> toggleSimulation(true));
+        view.getBtnPauseSim().addActionListener(l -> toggleSimulation(false));
+        initMapTools();
+        handleLayerTreeMouse();
+        initSimulationClock();
+        handleCoordsUpdate();
     }
 
-    private void handleViewPortCoordinatesUpdate() {
-        this.view.getSimulationCanvas().addMouseMotionListener(new MouseAdapter() {
-            @Override
+    private void handleCoordsUpdate() {
+        view.getSimulationCanvas().addMouseMotionListener(new MouseAdapter() {
             public void mouseMoved(MouseEvent e) {
-                if (view.getSimulationCanvas().getMapContent() == null
-                        || view.getSimulationCanvas().getMapContent().getViewport() == null) return;
+                if (view.getSimulationCanvas().getMapContent() == null) return;
                 try {
-                    AffineTransform screenToWorld = view.getSimulationCanvas().getScreenToWorldTransform();
-                    if (screenToWorld != null) {
-                        Point2D screenPt = e.getPoint();
-                        Point2D worldPt = new Point2D.Double();
-                        screenToWorld.transform(screenPt, worldPt);
-                        view.getLblCoordinates().setText(
-                                String.format("X: %.4f, Y: %.4f", worldPt.getX(), worldPt.getY())
-                        );
+                    AffineTransform at = view.getSimulationCanvas().getScreenToWorldTransform();
+                    if (at != null) {
+                        Point2D worldPt = at.transform(e.getPoint(), null);
+                        view.getLblCoordinates().setText(String.format("X: %.4f, Y: %.4f", worldPt.getX(), worldPt.getY()));
                     }
-                } catch (Exception ex) {
-                    // Ignore transformation errors
-                }
+                } catch (Exception ex) {}
             }
         });
     }
 
     private void handleOpenProject(File file) {
-        DialogLoading loading = new DialogLoading(view, "Opening Project...");
-        SwingWorker<Project, Void> worker = new SwingWorker<>() {
-            @Override
-            protected Project doInBackground() throws Exception {
-                return projectPersistenceService.loadProject(file);
-            }
-
-            @Override
+        DialogLoading loading = new DialogLoading(view, "Opening...");
+        new SwingWorker<Project, Void>() {
+            protected Project doInBackground() throws Exception { return pService.loadProject(file); }
             protected void done() {
                 try {
                     project = get();
-                    recentService.addProject(file);
-                    updateRecentMenu();
+                    recentService.addProject(file); updateRecentMenu();
                     view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
-                    refreshUI();
-                    view.setProjectNameInTree(project.getName());
+                    refreshUI(); view.setProjectNameInTree(project.getName());
                     view.setTitle("MonadVSIM - " + project.getName());
                     view.getSimulationCanvas().zoomToData();
-                } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(view, "Load failed: " + ex.getMessage());
-                    ex.printStackTrace();
-                } finally {
-                    loading.dispose();
-                }
+                } catch (Exception ex) { JOptionPane.showMessageDialog(view, "Load failed: " + ex.getMessage()); }
+                finally { loading.dispose(); }
             }
-        };
-        worker.execute();
+        }.execute();
     }
 
     private void handleOpenProjectFlow() {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileFilter(new FileNameExtensionFilter("Monad Project", "mvsim"));
-        if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
-            handleOpenProject(chooser.getSelectedFile());
-        }
+        JFileChooser c = new JFileChooser();
+        c.setFileFilter(new FileNameExtensionFilter("Monad Project", "mvsim"));
+        if (c.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) handleOpenProject(c.getSelectedFile());
     }
 
     private void handleNewProject() {
-        DialogNewProject dialog = new DialogNewProject();
-        dialog.getBtnSelectFolder().addActionListener(l -> {
-            File selectedFolder = openFileChooser(dialog, JFileChooser.DIRECTORIES_ONLY, null);
-            if (selectedFolder != null) dialog.getSelectFolderLabel().setText(selectedFolder.getAbsolutePath());
+        DialogNewProject d = new DialogNewProject();
+        d.getBtnSelectFolder().addActionListener(l -> {
+            JFileChooser c = new JFileChooser(); c.setFileSelectionMode(JFileChooser.DIRECTORIES_ONLY);
+            if (c.showOpenDialog(d) == JFileChooser.APPROVE_OPTION) d.getSelectFolderLabel().setText(c.getSelectedFile().getAbsolutePath());
         });
-        dialog.getBtnSave().addActionListener(l -> {
+        d.getBtnSave().addActionListener(l -> {
             try {
-                String name = dialog.getProjectNameField().getText();
-                File pFile = new File(dialog.getSelectFolderLabel().getText(), name + ".mvsim");
-                project = new Project();
-                project.setName(name);
-                project.setCrs("EPSG:4326");
-                project.setProjectFile(pFile);
-                projectPersistenceService.saveProject(project, pFile);
-                view.setTitle("MonadVSIM - " + name);
-                refreshUI();
-                dialog.dispose();
-            } catch (Exception ex) {
-                JOptionPane.showMessageDialog(dialog, "New project creation failed: " + ex.getMessage());
-            }
+                String n = d.getProjectNameField().getText();
+                File f = new File(d.getSelectFolderLabel().getText(), n + ".mvsim");
+                project = new Project(); project.setName(n); project.setCrs("EPSG:4326"); project.setProjectFile(f);
+                pService.saveProject(project, f);
+                view.setTitle("MonadVSIM - " + n); refreshUI(); d.dispose();
+            } catch (Exception ex) { JOptionPane.showMessageDialog(d, "Error: " + ex.getMessage()); }
         });
-        dialog.setVisible(true);
-    }
-
-    private void updateRecentMenu() {
-        JMenu menu = view.getRecentProjectsMenu();
-        if (menu == null) return;
-        menu.removeAll();
-        List<String> paths = recentService.getRecentProjects();
-        for (String path : paths) {
-            File file = new File(path);
-            JMenuItem item = new JMenuItem(file.getName());
-            item.setToolTipText(path);
-            item.addActionListener(e -> handleOpenProject(file));
-            menu.add(item);
-        }
+        d.setVisible(true);
     }
 
     private void handleLayerTreeMouse() {
-        this.view.getLayerTree().addMouseListener(new MouseAdapter() {
-            @Override
+        view.getLayerTree().addMouseListener(new MouseAdapter() {
             public void mousePressed(MouseEvent e) {
                 TreePath path = view.getLayerTree().getPathForLocation(e.getX(), e.getY());
                 if (path == null) return;
                 DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
-                int row = view.getLayerTree().getRowForPath(path);
                 if (node.getUserObject() instanceof Layer layer) {
-                    Rectangle rect = view.getLayerTree().getRowBounds(row);
-                    if (SwingUtilities.isLeftMouseButton(e) && e.getX() < rect.x + 25) {
-                        toggleLayerVisibility(layer);
+                    if (SwingUtilities.isLeftMouseButton(e) && e.getX() < view.getLayerTree().getRowBounds(view.getLayerTree().getRowForPath(path)).x + 25) {
+                        layer.setVisible(!layer.isVisible()); refreshUI();
                     } else if (SwingUtilities.isRightMouseButton(e)) {
-                        view.getLayerTree().setSelectionPath(path);
-                        showTreeContextMenu(e, layer);
+                        view.getLayerTree().setSelectionPath(path); showTreeContextMenu(e, layer);
                     }
-                } else if (SwingUtilities.isRightMouseButton(e) && row == 0) {
-                    showProjectContextMenu(e);
-                }
+                } else if (SwingUtilities.isRightMouseButton(e) && view.getLayerTree().getRowForPath(path) == 0) showProjectContextMenu(e);
             }
         });
-    }
-
-    private void initMapTools() {
-        this.view.getBtnZoomIn().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomInTool()));
-        this.view.getBtnZoomOut().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomOutTool()));
-        this.view.getBtnPanview().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new PanTool()));
-        this.view.getBtnFullview().addActionListener(e -> {
-            view.getSimulationCanvas().setActiveTool(null);
-            view.getSimulationCanvas().zoomToData();
-        });
-    }
-
-    private void handleSaveProject() {
-        try {
-            if (project.getProjectFile() == null) {
-                handleNewProject();
-            } else {
-                projectPersistenceService.saveProject(project, project.getProjectFile());
-                JOptionPane.showMessageDialog(view, "Project Saved Successfully.");
-            }
-        } catch (Exception e) {
-            JOptionPane.showMessageDialog(view, "Save Failed: " + e.getMessage());
-        }
-    }
-
-    private void handleNewLayer() {
-        DialogNewLayer dialog = new DialogNewLayer(view);
-        if (dialog.isSucceeded()) {
-            if (dialog.getLayerType().equals("Agent Layer")) {
-                handleCreateAgentLayer(dialog.getLayerName(), dialog.getPopulation(), dialog.isWrapAround());
-            } else {
-                handleCreateSpatialLayer(dialog.getLayerType(), dialog.getLayerName());
-            }
-        }
-    }
-
-    private File openFileChooser(JDialog parent, int mode, List<String> ext) {
-        JFileChooser chooser = new JFileChooser();
-        chooser.setFileSelectionMode(mode);
-        if (ext != null && !ext.isEmpty()) {
-            FileNameExtensionFilter filter = new FileNameExtensionFilter("Supported Files", ext.toArray(new String[0]));
-            chooser.setFileFilter(filter);
-        }
-        if (chooser.showOpenDialog(parent) == JFileChooser.APPROVE_OPTION) {
-            return chooser.getSelectedFile();
-        }
-        return null;
-    }
-
-    private void refreshUI() {
-        view.updateLayerTree(project.getLayers());
-        view.getSimulationCanvas().updateLayers(project.getLayers(), project.getProjectFile());
-    }
-
-    private void toggleLayerVisibility(Layer layer) {
-        layer.setVisible(!layer.isVisible());
-        refreshUI();
-    }
-
-    private void handleCreateAgentLayer(String name, int population, boolean wrap) {
-        AgentLayer al = new AgentLayer(name);
-        al.setWrapAround(wrap);
-        al.setPopulation(population, project);
-        project.getLayers().add(al);
-        refreshUI();
-    }
-
-    private void handleCreateSpatialLayer(String type, String name) {
-        JFileChooser chooser = new JFileChooser();
-        if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
-            File layerFile = chooser.getSelectedFile();
-            Layer newLayer = type.equals("Vector Layer") ?
-                    new VectorLayer(name, layerFile.getAbsolutePath()) :
-                    new RasterLayer(name, layerFile.getAbsolutePath());
-            project.getLayers().add(newLayer);
-            refreshUI();
-        }
-    }
-
-    private void handleProjectProperties() {
-        DialogProjectProperties dialog = new DialogProjectProperties(view, project.getName(), project.getCrsCode());
-        dialog.getBtnApply().addActionListener(e -> {
-            project.setName(dialog.getProjectName());
-            project.setCrsCode(dialog.getSelectedCrs());
-            view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
-            refreshUI();
-            dialog.dispose();
-        });
-        dialog.setVisible(true);
-    }
-
-    private void showProjectContextMenu(MouseEvent e) {
-        JPopupMenu menu = new JPopupMenu();
-        JMenuItem prop = new JMenuItem("Project Properties...");
-        prop.addActionListener(al -> handleProjectProperties());
-        menu.add(prop);
-        menu.show(e.getComponent(), e.getX(), e.getY());
     }
 
     private void showTreeContextMenu(MouseEvent e, Layer layer) {
-        JPopupMenu menu = new JPopupMenu();
-        JMenuItem prop = new JMenuItem("Layer Properties...");
-        prop.addActionListener(al -> handleLayerProperties(layer));
-        menu.add(prop);
+        JPopupMenu m = new JPopupMenu();
+        JMenuItem prop = new JMenuItem("Properties"); prop.addActionListener(a -> handleLayerProperties(layer)); m.add(prop);
         if (layer instanceof AgentLayer al) {
-            JMenuItem ruleItem = new JMenuItem("Configure Rules...");
-            ruleItem.addActionListener(alEvent -> {
-                DialogRuleEditor editor = new DialogRuleEditor(view, al, project);
-                editor.setVisible(true);
-            });
-            menu.add(ruleItem);
+            JMenuItem rule = new JMenuItem("Rules"); rule.addActionListener(a -> new DialogRuleEditor(view, al, project).setVisible(true)); m.add(rule);
         }
-        menu.addSeparator();
-        JMenuItem remove = new JMenuItem("Remove Layer");
-        remove.addActionListener(al -> {
-            project.getLayers().remove(layer);
-            refreshUI();
-        });
-        menu.add(remove);
-        menu.show(e.getComponent(), e.getX(), e.getY());
+        JMenuItem inspect = new JMenuItem("Inspect Data Table"); inspect.addActionListener(a -> openDataTable(layer)); m.add(inspect);
+        m.addSeparator();
+        JMenuItem rem = new JMenuItem("Remove"); rem.addActionListener(a -> { project.getLayers().remove(layer); refreshUI(); }); m.add(rem);
+        m.show(e.getComponent(), e.getX(), e.getY());
     }
 
-    private void handleLayerProperties(Layer layer) {
-        DialogLayerProperties dialog = new DialogLayerProperties(view, layer);
-        dialog.setVisible(true);
-        if (dialog.isConfirmed()) {
-            layer.setName(dialog.getLayerName());
-            layer.setVisible(dialog.isVisible());
-            layer.setCrsCode(dialog.getSelectedCrs());
-            if (layer instanceof AgentLayer al) {
-                al.setColorHex(dialog.getColorHex());
-                al.setWrapAround(dialog.isWrap());
-                al.setTrailsEnabled(dialog.isTrailsEnabled());
-                if (al.getAgentsCount() != dialog.getPopulation()) {
-                    al.setPopulation(dialog.getPopulation(), project);
+    public void openDataTable(Layer layer) {
+        try {
+            DefaultTableModel model = new DefaultTableModel();
+            if (layer instanceof VectorLayer vl) model = getVectorTableModel(vl);
+            else if (layer instanceof RasterLayer rl) model = getRasterTableModel(rl);
+            else if (layer instanceof AgentLayer al) model = getAgentTableModel(al);
+            showDataViewer(layer.getName(), model);
+        } catch (Exception ex) { ex.printStackTrace(); }
+    }
+
+    private DefaultTableModel getVectorTableModel(VectorLayer vl) throws Exception {
+        DefaultTableModel m = new DefaultTableModel();
+        SimpleFeatureSource s = (SimpleFeatureSource) vl.getFeatureSource(project.getProjectFile());
+        SimpleFeatureCollection coll = s.getFeatures();
+        for (AttributeDescriptor ad : coll.getSchema().getAttributeDescriptors()) m.addColumn(ad.getLocalName());
+        try (FeatureIterator<SimpleFeature> it = coll.features()) {
+            int count = 0;
+            while (it.hasNext() && count++ < 500) m.addRow(it.next().getAttributes().toArray());
+        }
+        return m;
+    }
+
+    private DefaultTableModel getRasterTableModel(RasterLayer rl) throws Exception {
+        DefaultTableModel m = new DefaultTableModel(new String[]{"X","Y","Value"}, 0);
+        GridCoverage2D g = (GridCoverage2D) rl.getGridCoverage(project.getProjectFile());
+        Raster r = g.getRenderedImage().getData();
+        for (int i = 0; i < 20; i++) for (int j = 0; j < 20; j++) m.addRow(new Object[]{i, j, r.getSampleDouble(i, j, 0)});
+        return m;
+    }
+
+    private DefaultTableModel getAgentTableModel(AgentLayer al) {
+        DefaultTableModel m = new DefaultTableModel(new String[]{"ID","X","Y","Status"}, 0);
+        List<Agent> agents = al.getAgents();
+        for (int i = 0; i < agents.size(); i++) {
+            Agent a = agents.get(i);
+            m.addRow(new Object[]{i, String.format("%.4f", a.getX()), String.format("%.4f", a.getY()), a.isAlive() ? "Alive" : "Dead"});
+        }
+        return m;
+    }
+
+    private void showDataViewer(String title, TableModel m) {
+        JDialog d = new JDialog(view, "Data: " + title, false);
+        JTable t = new JTable(m); t.setAutoCreateRowSorter(true);
+        d.add(new JScrollPane(t)); d.setSize(600, 400); d.setLocationRelativeTo(view); d.setVisible(true);
+    }
+
+    private void handleNewLayer() {
+        DialogNewLayer d = new DialogNewLayer(view);
+        if (d.isSucceeded()) {
+            if (d.getLayerType().equals("Agent Layer")) {
+                AgentLayer al = new AgentLayer(d.getLayerName()); al.setWrapAround(d.isWrapAround());
+                al.setPopulation(d.getPopulation(), project); project.getLayers().add(al);
+            } else {
+                JFileChooser c = new JFileChooser();
+                if (c.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
+                    Layer nl = d.getLayerType().equals("Vector Layer") ? 
+                        new VectorLayer(d.getLayerName(), c.getSelectedFile().getAbsolutePath()) :
+                        new RasterLayer(d.getLayerName(), c.getSelectedFile().getAbsolutePath());
+                    project.getLayers().add(nl);
                 }
-            } else if (layer instanceof VectorLayer vl) {
-                vl.setColorHex(dialog.getColorHex());
             }
-            layer.setOpacity(dialog.getOpacity());
+            refreshUI();
+        }
+    }
+
+    private void handleLayerProperties(Layer l) {
+        DialogLayerProperties d = new DialogLayerProperties(view, l); d.setVisible(true);
+        if (d.isConfirmed()) {
+            l.setName(d.getLayerName()); l.setVisible(d.isVisible()); l.setOpacity(d.getOpacity());
+            if (l instanceof AgentLayer al) { al.setWrapAround(d.isWrap()); al.setPopulation(d.getPopulation(), project); }
             refreshUI();
         }
     }
 
     public void toggleSimulation(boolean run) {
         if (run) {
-            if (project.getProjectFile() == null) {
-                JOptionPane.showMessageDialog(view, "Please save the project before running simulation.");
-                return;
-            }
-            ensureTerrainBaked(() -> {
-                simulationTimer.start();
-                view.getBtnRunSim().setEnabled(false);
-                view.getBtnPauseSim().setEnabled(true);
-            });
+            if (project.getProjectFile() == null) return;
+            ensureTerrainBaked(() -> { simTimer.start(); view.getBtnRunSim().setEnabled(false); view.getBtnPauseSim().setEnabled(true); });
         } else {
-            if (simulationTimer != null) simulationTimer.stop();
-            view.getBtnRunSim().setEnabled(true);
-            view.getBtnPauseSim().setEnabled(false);
+            if (simTimer != null) simTimer.stop();
+            view.getBtnRunSim().setEnabled(true); view.getBtnPauseSim().setEnabled(false);
         }
     }
 
-    private void ensureTerrainBaked(Runnable callback) {
-        AgentLayer al = findFirstAgentLayer();
-        if (al == null) {
-            JOptionPane.showMessageDialog(view, "No visible Agent Layer found.");
-            return;
-        }
-
+    private void ensureTerrainBaked(Runnable cb) {
+        AgentLayer al = project.getLayers().stream().filter(l -> l instanceof AgentLayer && l.isVisible()).map(l -> (AgentLayer)l).findFirst().orElse(null);
+        if (al == null) return;
         if (al.getTerrainCache() == null) {
-            isBaking = true;
-            view.getProgressBar().setVisible(true);
-            view.getProgressBar().setStringPainted(true);
-
+            isBaking = true; view.getProgressBar().setVisible(true);
             new SwingWorker<Void, Integer>() {
-                @Override
-                protected Void doInBackground() throws Exception {
-                    al.bakeTerrainCache(project, 1000, progress -> publish(progress));
-                    return null;
-                }
-
-                @Override
-                protected void process(List<Integer> chunks) {
-                    int latest = chunks.get(chunks.size() - 1);
-                    view.getProgressBar().setValue(latest);
-                    view.getProgressBar().setString("Baking Terrain: " + latest + "%");
-                }
-
-                @Override
-                protected void done() {
-                    isBaking = false;
-                    view.getProgressBar().setVisible(false);
-                    callback.run();
-                }
+                protected Void doInBackground() throws Exception { al.bakeTerrainCache(project, 1000, p -> publish(p)); return null; }
+                protected void process(List<Integer> c) { view.getProgressBar().setValue(c.get(c.size()-1)); }
+                protected void done() { isBaking = false; view.getProgressBar().setVisible(false); cb.run(); }
             }.execute();
-        } else {
-            callback.run();
-        }
-    }
-
-    private AgentLayer findFirstAgentLayer() {
-        return project.getLayers().stream()
-                .filter(l -> l instanceof AgentLayer && l.isVisible())
-                .map(l -> (AgentLayer) l)
-                .findFirst()
-                .orElse(null);
+        } else cb.run();
     }
 
     private void initSimulationClock() {
-        // Smooth 60FPS target
-        simulationTimer = new Timer(16, e -> {
+        simTimer = new Timer(16, e -> {
             if (project == null || isBaking) return;
-            for (Layer layer : project.getLayers()) {
-                if (layer instanceof AgentLayer al && al.isVisible()) {
-                    al.updateAll(project);
-                }
-            }
+            project.getLayers().stream().filter(l -> l instanceof AgentLayer && l.isVisible()).forEach(l -> ((AgentLayer)l).updateAll(project));
             view.getSimulationCanvas().repaint();
         });
+    }
+
+    private void handleSaveProject() { try { pService.saveProject(project, project.getProjectFile()); } catch (Exception e) {} }
+
+    private void initMapTools() {
+        view.getBtnZoomIn().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomInTool()));
+        view.getBtnZoomOut().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomOutTool()));
+        view.getBtnPanview().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new PanTool()));
+        view.getBtnFullview().addActionListener(e -> { view.getSimulationCanvas().setActiveTool(null); view.getSimulationCanvas().zoomToData(); });
+    }
+
+    private void refreshUI() { view.updateLayerTree(project.getLayers()); view.getSimulationCanvas().updateLayers(project.getLayers(), project.getProjectFile()); }
+
+    private void updateRecentMenu() { 
+        JMenu m = view.getRecentProjectsMenu(); 
+        if (m == null) return; m.removeAll(); 
+        recentService.getRecentProjects().forEach(p -> { 
+            JMenuItem i = new JMenuItem(new File(p).getName()); 
+            i.addActionListener(e -> handleOpenProject(new File(p))); m.add(i); 
+        }); 
+    }
+
+    private void showProjectContextMenu(MouseEvent e) { 
+        JPopupMenu m = new JPopupMenu(); JMenuItem p = new JMenuItem("Properties"); 
+        p.addActionListener(a -> handleProjectProperties()); m.add(p); 
+        m.show(e.getComponent(), e.getX(), e.getY()); 
+    }
+
+    private void handleProjectProperties() { 
+        DialogProjectProperties d = new DialogProjectProperties(view, project.getName(), project.getCrsCode()); 
+        d.getBtnApply().addActionListener(e -> { 
+            project.setName(d.getProjectName()); project.setCrsCode(d.getSelectedCrs()); 
+            view.getSimulationCanvas().updateViewportCRS(project.getCrsCode()); refreshUI(); d.dispose(); 
+        }); d.setVisible(true); 
     }
 }
