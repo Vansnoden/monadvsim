@@ -319,6 +319,8 @@ public class MainController{
         if (al.getAgentsCount() != dialog.getPopulation()) {
           al.setPopulation(dialog.getPopulation(), project);
         }
+      }else if (layer instanceof VectorLayer vl){
+        vl.setColorHex(dialog.getColorHex());
       }
       refreshUI();
     }

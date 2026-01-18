@@ -32,13 +32,13 @@ public class DialogLayerProperties extends JDialog {
     private JCheckBox visibleCheck;
     private JSlider opacitySlider;
     private JComboBox<String> crsBox;
+    private JButton colorBtn;
     
     // Agent-specific components
     private JSpinner popSpinner;
     private JCheckBox wrapCheck;
     private JCheckBox heatCheck;
     private JCheckBox trailCheck;
-    private JButton colorBtn;
 
     public DialogLayerProperties(Frame owner, Layer layer) {
         super(owner, "Properties: " + layer.getName(), true);
@@ -54,22 +54,42 @@ public class DialogLayerProperties extends JDialog {
         gbc.fill = GridBagConstraints.HORIZONTAL; 
         gbc.insets = new Insets(5, 5, 5, 5);
         gbc.gridx = 0; gbc.gridy = 0;
-
         // 1. Common Properties (Applies to Vector, Raster, and Agent Layers)
         mainPanel.add(new JLabel("Name:"), gbc);
-        gbc.gridx = 1; nameField = new JTextField(layer.getName(), 15); mainPanel.add(nameField, gbc);
+        gbc.gridx = 1; nameField = new JTextField(layer.getName(), 15); 
+        mainPanel.add(nameField, gbc);
 
         gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("Opacity:"), gbc);
-        gbc.gridx = 1; opacitySlider = new JSlider(0, 100, (int)(layer.getOpacity() * 100)); mainPanel.add(opacitySlider, gbc);
+        gbc.gridx = 1; opacitySlider = new JSlider(0, 100, (int)(layer.getOpacity() * 100)); 
+        mainPanel.add(opacitySlider, gbc);
 
         gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("Visible:"), gbc);
-        gbc.gridx = 1; visibleCheck = new JCheckBox("", layer.isVisible()); mainPanel.add(visibleCheck, gbc);
+        gbc.gridx = 1; visibleCheck = new JCheckBox("", layer.isVisible()); 
+        mainPanel.add(visibleCheck, gbc);
 
         gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("CRS:"), gbc);
         gbc.gridx = 1; crsBox = new JComboBox<>(new String[]{"EPSG:4326", "EPSG:3857"});
         crsBox.setSelectedItem(layer.getCrsCode()); mainPanel.add(crsBox, gbc);
+        
+        // Vector Specific properties
+        if (layer instanceof VectorLayer vl){
+          gbc.gridx = 0; gbc.gridy++; 
+          mainPanel.add(new JLabel("Polygon Color:"), gbc);
+          gbc.gridx = 1;
+          colorBtn = new JButton(" "); 
+          try {
+            colorBtn.setBackground(Color.decode(vl.getColorHex()));
+          } catch (Exception e) {
+            colorBtn.setBackground(Color.GREEN);
+          }
+          colorBtn.addActionListener(e -> {
+            Color c = JColorChooser.showDialog(this, "Select Polygon Color", colorBtn.getBackground());
+            if (c != null) colorBtn.setBackground(c);
+          });
+          mainPanel.add(colorBtn, gbc);
+        }
 
-        // 2. Agent Specific Properties (Dynamic UI)
+        // Agent Specific Properties
         if (layer instanceof AgentLayer al) {
             gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("Agent Color:"), gbc);
             gbc.gridx = 1; 
@@ -108,7 +128,9 @@ public class DialogLayerProperties extends JDialog {
         JButton deleteBtn = new JButton("Remove Layer");
         deleteBtn.setForeground(Color.RED);
         deleteBtn.addActionListener(e -> {
-            int confirm = JOptionPane.showConfirmDialog(this, "Delete this layer?", "Confirm", JOptionPane.YES_NO_OPTION);
+            int confirm = JOptionPane.showConfirmDialog(this, 
+              "Delete this layer?", "Confirm", 
+              JOptionPane.YES_NO_OPTION);
             if (confirm == JOptionPane.YES_OPTION) {
                 deleteRequested = true;
                 confirmed = true;
