@@ -29,6 +29,7 @@ import java.awt.event.KeyEvent;
 import java.awt.Toolkit;
 import javax.swing.AbstractAction;
 import java.awt.event.ActionEvent;
+import java.awt.Color;
 
 
 
@@ -51,6 +52,8 @@ public class MainWindow extends JFrame{
   private JTree layerTree=null;
   private DefaultMutableTreeNode treeRoot=null;
   private JProgressBar progressBar = null;
+  private JLabel lblCoordinates;
+  private JLabel lblCRS;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -136,6 +139,14 @@ public class MainWindow extends JFrame{
   public SimulationCanvas getSimulationCanvas() { return this.simCanvas; }
   
   public JProgressBar getProgressBar(){ return this.progressBar; }
+  
+  public JLabel getLblCoordinates() { return lblCoordinates; }
+  
+  public JLabel getLblCRS() { return lblCRS; }
+  
+  public void setStatusBarCRS(String crs) {
+    if (lblCRS != null) lblCRS.setText("System: " + crs);
+  }
   
   public void setProjectNameInTree(String name) {
     if (treeRoot != null && layerTree != null) {
@@ -348,14 +359,23 @@ public class MainWindow extends JFrame{
   
   private void initStatusBar(){
     this.statusBar = new JPanel(new BorderLayout());
-    this.statusBar.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
+    this.statusBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Color.LIGHT_GRAY));
+    // West side: Mouse Coordinates
+    this.lblCoordinates = new JLabel("X: 0.00, Y: 0.00");
+    this.lblCoordinates.setPreferredSize(new Dimension(200, 20));
+    // Center side: CRS display
+    this.lblCRS = new JLabel("System: EPSG:4326");
+    this.lblCRS.setHorizontalAlignment(JLabel.CENTER);
+    // East side: Progress and Branding
     this.progressBar = new JProgressBar();
-    this.progressBar.setMaximum(100);
-    JPanel progessPanel = new JPanel(new BorderLayout());
-    progessPanel.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8));
-    progessPanel.add(this.progressBar, BorderLayout.EAST);
-    this.statusBar.add(progessPanel, BorderLayout.CENTER);
-    this.statusBar.add(new JLabel("monadvsim@2025"), BorderLayout.EAST);
+    this.progressBar.setPreferredSize(new Dimension(150, 18));
+    this.progressBar.setVisible(false); // Hide by default
+    JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+    eastPanel.add(this.progressBar);
+    eastPanel.add(new JLabel("monadvsim@2026"));
+    this.statusBar.add(lblCoordinates, BorderLayout.WEST);
+    this.statusBar.add(lblCRS, BorderLayout.CENTER);
+    this.statusBar.add(eastPanel, BorderLayout.EAST);
     this.content.add(this.statusBar, BorderLayout.SOUTH);
   }
   

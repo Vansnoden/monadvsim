@@ -11,6 +11,11 @@ import org.geotools.coverage.grid.io.GridFormatFinder;
 import org.geotools.factory.CommonFactoryFinder;
 import org.geotools.map.GridReaderLayer;
 import org.geotools.styling.SLD;
+import org.geotools.api.filter.FilterFactory;
+import org.geotools.api.filter.expression.Expression;
+import org.geotools.factory.CommonFactoryFinder;
+import org.geotools.api.style.RasterSymbolizer;
+import org.geotools.api.style.StyleFactory;
 
 import java.io.File;
 import java.io.IOException;
@@ -67,9 +72,14 @@ public class RasterLayer extends Layer{
       if (format == null) return null;
       this.readerReference = format.getReader(file);
       StyleFactory sf = CommonFactoryFinder.getStyleFactory();
+      org.geotools.api.filter.FilterFactory ff = CommonFactoryFinder.getFilterFactory(null);
       RasterSymbolizer symbolizer = sf.createRasterSymbolizer();
+      org.geotools.api.filter.expression.Expression opacityExpr = ff.literal(this.getOpacity());
+      symbolizer.setOpacity(opacityExpr);
       return new GridReaderLayer(readerReference, SLD.wrapSymbolizers(symbolizer));
-    } catch (Exception e) { return null; }
+    } catch (Exception e) { 
+      return null; 
+    }
   }
 
     @JsonIgnore

@@ -42,6 +42,8 @@ import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
 import com.monadvsim.app.views.DialogRuleEditor;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Point2D;
 
 
 public class MainController{
@@ -57,6 +59,7 @@ public class MainController{
     this.project = project;
     this.view = view;
     this.projectPersistenceService = new ProjectPersistenceService();
+    this.view.setStatusBarCRS(project.getCrsCode());
     this.initListeners();
     updateRecentMenu();
     if (project.getCrsCode() != null) {
@@ -73,7 +76,34 @@ public class MainController{
     this.view.getBtnPauseSim().addActionListener(l -> stopSimulation());
     this.initMapTools();
     this.handleLayerTreeMouse();
-    this.initSimulationClock();;
+    this.initSimulationClock();
+    this.handleViewPortCoordinatesUpdate();
+  }
+  
+  private void handleViewPortCoordinatesUpdate(){
+    this.view.getSimulationCanvas().addMouseMotionListener(new java.awt.event.MouseAdapter() {
+        @Override
+        public void mouseMoved(java.awt.event.MouseEvent e) {
+            if (view.getSimulationCanvas().getMapContent() == null 
+            || view.getSimulationCanvas().getMapContent().getViewport() == null) return;
+            try {
+                // GeoTools 32+ way to get the transform
+                AffineTransform screenToWorld = view.getSimulationCanvas().getScreenToWorldTransform();
+                
+                if (screenToWorld != null) {
+                    Point2D screenPt = e.getPoint();
+                    Point2D worldPt = new Point2D.Double();
+                    screenToWorld.transform(screenPt, worldPt);
+                    // Push string to MainWindow status bar
+                    view.getLblCoordinates().setText(
+                        String.format("X: %.4f, Y: %.4f", worldPt.getX(), worldPt.getY())
+                    );
+                }
+            } catch (Exception ex) {
+                // Silently ignore transformation errors during zooms
+            }
+        }
+    });
   }
   
   private void handleOpenProject(File file) {
