@@ -2,6 +2,7 @@ package com.monadvsim.app.controllers;
 
 import com.monadvsim.app.models.Project;
 import com.monadvsim.app.models.ProjectPersistenceService;
+import com.monadvsim.app.models.RecentProjectsService;
 import com.monadvsim.app.models.VectorLayer;
 import com.monadvsim.app.models.RasterLayer;
 import com.monadvsim.app.models.AgentLayer;
@@ -10,6 +11,7 @@ import javax.swing.JTree;
 import com.monadvsim.app.views.MainWindow;
 import com.monadvsim.app.views.DialogNewProject;
 import com.monadvsim.app.views.DialogNewLayer;
+import com.monadvsim.app.views.DialogLoading;
 import com.monadvsim.app.views.DialogProjectProperties;
 import com.monadvsim.app.views.DialogLayerProperties;
 import javax.swing.JFileChooser;
@@ -37,7 +39,8 @@ import javax.swing.JMenu;
 import javax.swing.tree.TreePath;
 import javax.swing.JColorChooser;
 import javax.swing.SpinnerNumberModel;
-
+import javax.swing.SwingWorker;
+import javax.swing.Timer;
 
 
 public class MainController{
@@ -45,19 +48,65 @@ public class MainController{
   private Project project = null;
   private MainWindow view = null;
   private ProjectPersistenceService projectPersistenceService = null;
+  private final RecentProjectsService recentService = new RecentProjectsService();
+  private boolean isBaking = false;
+  private Timer simulationTimer;
   
   public MainController(Project project, MainWindow view){
     this.project = project;
     this.view = view;
     this.projectPersistenceService = new ProjectPersistenceService();
     this.initListeners();
+    updateRecentMenu();
+    if (project.getCrsCode() != null) {
+        view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
+    }
   }
   
   private void initListeners(){
     this.view.getBtnNewProject().addActionListener(l -> handleNewProject());
     this.view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
+    this.view.getBtnOpenProject().addActionListener(l -> handleOpenProjectFlow());
+    this.view.getBtnSaveProject().addActionListener(l -> handleSaveProject());
+    this.view.getBtnRunSim().addActionListener(l -> startSimulation());
+    this.view.getBtnPauseSim().addActionListener(l -> stopSimulation());
     this.initMapTools();
     this.handleLayerTreeMouse();
+  }
+  
+  private void handleOpenProject(File file) {
+    DialogLoading loading = new DialogLoading(view, "Opening Project...");
+    SwingWorker<Project, Void> worker = new SwingWorker<>() { 
+      @Override
+      protected Project doInBackground() throws Exception {
+        return projectPersistenceService.loadProject(file);
+      }
+      @Override
+      protected void done() {
+        try {
+          project = get();
+          recentService.addProject(file); 
+          updateRecentMenu();
+          view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
+          refreshUI();
+          view.setProjectNameInTree(project.getName());
+          view.setTitle("MonadVSIM - " + project.getName());
+          // Force a full zoom to the new data
+          view.getSimulationCanvas().zoomToData();
+        } catch (Exception ex) {
+          JOptionPane.showMessageDialog(view, "Load failed: " + ex.getMessage());
+        } finally { loading.dispose(); }
+      }
+    };
+    worker.execute();
+  }
+  
+  private void handleOpenProjectFlow() {
+    JFileChooser chooser = new JFileChooser();
+    chooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("Monad Project", "mvsim")); 
+    if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
+      handleOpenProject(chooser.getSelectedFile());
+    } 
   }
   
   private void handleNewProject(){
@@ -82,6 +131,20 @@ public class MainController{
     }
       dialog.dispose();
     });
+  }
+  
+  private void updateRecentMenu() {
+    JMenu menu = view.getRecentProjectsMenu();
+    if (menu == null) return;
+    menu.removeAll(); 
+    List<String> paths = recentService.getRecentProjects();
+    for (String path : paths) {
+      File file = new File(path);
+      JMenuItem item = new JMenuItem(file.getName()); 
+      item.setToolTipText(path);
+      item.addActionListener(e -> handleOpenProject(file));
+      menu.add(item);
+    }
   }
   
   private void handleLayerTreeMouse(){
@@ -118,12 +181,16 @@ public class MainController{
     });
   }
   
-  private void handleSaveProject() throws Exception {
-    if (project.getProjectFile() == null) { 
-      handleNewProject();
-    } else {
-      projectPersistenceService.saveProject(project, project.getProjectFile());
-      JOptionPane.showMessageDialog(view, "Project Saved Successfully."); 
+  private void handleSaveProject(){
+    try{
+      if (project.getProjectFile() == null) { 
+        handleNewProject();
+      } else {
+        projectPersistenceService.saveProject(project, project.getProjectFile());
+        JOptionPane.showMessageDialog(view, "Project Saved Successfully."); 
+      }
+    }catch(Exception e){
+      e.printStackTrace();   
     }
   }
   
@@ -257,6 +324,10 @@ public class MainController{
     }
   }
   
+  private void startSimulation(){
+  }
   
+  private void stopSimulation(){
+  }
 
 }

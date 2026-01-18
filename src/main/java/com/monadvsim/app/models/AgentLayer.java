@@ -204,7 +204,15 @@ public class AgentLayer extends Layer{
   public String getColorHex() { return colorHex; }
   public void setColorHex(String colorHex) { this.colorHex = colorHex; }
   @JsonIgnore public int getAgentsCount() { return agents.size(); }
-  public Map<String, Object> probeEnvironment(double x,double y, Project project){
-    return null;
+  public Map<String, Object> probeEnvironment(double x, double y, Project project) {
+    Map<String, Object> readings = new HashMap<>();
+    for (Layer l : project.getLayers()) {
+      if (l instanceof RasterLayer rl && rl.isVisible()) {
+        // "Sense" the value of the raster (e.g., elevation or temperature) at current location
+        Double val = rl.getValueAt(x, y, project.getProjectFile());
+        readings.put(rl.getName(), val);
+      }
+    }
+    return readings;
   }
 }

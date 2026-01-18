@@ -40,7 +40,7 @@ public class MainWindow extends JFrame{
   private JButton btnAddLayer=null, btnPanview=null, btnZoomIn=null;
   private JButton btnZoomOut=null, btnFullview=null, btnRun=null, btnPause=null;
   private JMenuBar menuBar=null;
-  private JMenu projectMenu=null, layerMenu=null, helpMenu=null;
+  private JMenu projectMenu=null, recentProjectsMenu=null, layerMenu=null, helpMenu=null;
   private JMenuItem newProjectMenuItem=null, saveProjectMenuItem=null, saveAsProjectMenuItem=null;
   private JMenuItem projectPropertiesMenuItem=null, projectExportMenuItem=null, exportProjectMenuItem=null;
   private JMenuItem quitMenuItem=null, addLayerMenuItem=null, removeLayerMenuItem=null;
@@ -91,9 +91,9 @@ public class MainWindow extends JFrame{
   
   public JButton getBtnFullview(){ return this.btnFullview; }
   
-  public JButton getBtnRun(){ return this.btnRun; }
+  public JButton getBtnRunSim(){ return this.btnRun; }
   
-  public JButton getBtnPause(){ return this.btnPause; }
+  public JButton getBtnPauseSim(){ return this.btnPause; }
   
   public JMenuBar getJMenuBar(){ return this.menuBar; }
   
@@ -124,6 +124,8 @@ public class MainWindow extends JFrame{
   public JMenuItem getDocumentationMenuItem(){ return this.documentationMenuItem; }
   
   public JMenuItem getDonationMenuItem(){ return this.donationMenuItem; }
+  
+  public JMenu getRecentProjectsMenu(){ return this.recentProjectsMenu; }
   
   public JTree getLayerTree() { return layerTree; }
   
@@ -178,6 +180,7 @@ public class MainWindow extends JFrame{
   
   private void initProjectMenu(){
     this.projectMenu = new JMenu("Project");
+    this.recentProjectsMenu = new JMenu("Recent Projects");
     this.initProjectMenuItems();
     this.addProjectMenuItems();
     this.menuBar.add(this.projectMenu);
@@ -194,6 +197,8 @@ public class MainWindow extends JFrame{
   
   private void addProjectMenuItems(){
     this.projectMenu.add(this.newProjectMenuItem);
+    this.projectMenu.add(this.projectMenu);
+    this.projectMenu.addSeparator();
     this.projectMenu.add(this.saveProjectMenuItem);
     this.projectMenu.add(this.saveAsProjectMenuItem);
     this.projectMenu.addSeparator();
