@@ -270,4 +270,8 @@ public class AgentLayer extends Layer {
   public String getColorHex() { return colorHex; }
   public void setColorHex(String colorHex) { this.colorHex = colorHex; }
   @JsonIgnore public int getAgentsCount() { return agents.size(); }
+  @JsonIgnore
+  public byte[][] getTerrainCache() {
+      return terrainCache;
+  }
 }

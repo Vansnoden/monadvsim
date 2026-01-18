@@ -25,6 +25,7 @@ public class Agent implements Serializable {
   private static final long serialVersionUID = 1L;
   private boolean alive = true;
   private double x, y, vx, vy;
+  private static final int MAX_HISTORY = 20;
   
   // We need a GeometryFactory to create Points for spatial queries
   @JsonIgnore
@@ -50,36 +51,38 @@ public class Agent implements Serializable {
   */
   public void step(Project project, AgentLayer layer, Envelope bounds) {
     if (!alive) return;
-    // 1. PROBE & EVALUATE SURVIVAL
-    Map<String, Object> surroundings = probeEnvironment(this.x, this.y, project);
-    
-    // Use the new multi-rule check
-    if (!layer.checkSurvival(surroundings)) {
-      this.alive = false;
-      return;
+    // 1. Get speed from the primary rule
+    double speed = layer.getPrimaryRule() != null ? layer.getPrimaryRule().getMaxSpeed() : 0.05;
+    // 2. Calculate potential move (Brownian motion + velocity)
+    double nextX = x + (vx * speed) + (Math.random() - 0.5) * (speed * 0.5);
+    double nextY = y + (vy * speed) + (Math.random() - 0.5) * (speed * 0.5);
+    // 3. Handle Map Wrap-around or Bounce
+    if (layer.isWrapAround()) {
+      if (nextX < bounds.getMinX()) nextX = bounds.getMaxX();
+      if (nextX > bounds.getMaxX()) nextX = bounds.getMinX();
+      if (nextY < bounds.getMinY()) nextY = bounds.getMaxY();
+      if (nextY > bounds.getMaxY()) nextY = bounds.getMaxY();
     }
-
-    // 2. MOVEMENT
-    // We use the speed from the primary rule (or an average)
-    AgentRule primaryRule = layer.getPrimaryRule();
-    double unitScale = (project.getCrsCode() != null && project.getCrsCode().contains("3857")) ? 1000.0 : 0.0001;
-    double speed = (primaryRule != null ? primaryRule.getMaxSpeed() : 0.05) * unitScale;
-
-    double nextX = this.x + (this.vx * speed);
-    double nextY = this.y + (this.vy * speed);
-
+    // 4. SENSE & THINK: Validate Movement (Collision)
     if (layer.validateMovement(nextX, nextY)) {
       this.x = nextX;
       this.y = nextY;
+      // Manage history for trails
+      if (layer.isTrailsEnabled()) {
+        history.add(new Point2D.Double(x, y));
+        if (history.size() > MAX_HISTORY) history.remove(0);
+      }
     } else {
-      // Bounce/Turn logic
-      double angle = Math.random() * 2 * Math.PI;
-      vx = Math.cos(angle);
-      vy = Math.sin(angle);
+      // Change direction on collision
+      double angle = Math.random() * Math.PI * 2;
+      this.vx = Math.cos(angle);
+      this.vy = Math.sin(angle);
     }
-
-    handleBoundaries(bounds, layer.isWrapAround());
-    updateHistory();
+    // 5. SURVIVAL: Check Environmental Risks
+    Map<String, Object> env = layer.probeEnvironment(x, y, project);
+    if (!layer.checkSurvival(env)) {
+      this.alive = false;
+    }
   }
   
   private void reverseDirection() {
