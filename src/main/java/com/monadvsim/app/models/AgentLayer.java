@@ -19,10 +19,15 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
+
 
 public class AgentLayer extends Layer {
   
   private List<Agent> agents = new CopyOnWriteArrayList<>();
+  @JacksonXmlElementWrapper(localName = "rules")
+  @JacksonXmlProperty(localName = "rule")
   private List<AgentRule> rules = new CopyOnWriteArrayList<>();
   private boolean wrapAround = true;
   private String colorHex = "#00FF00";

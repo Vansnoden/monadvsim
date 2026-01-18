@@ -3,6 +3,8 @@ package com.monadvsim.app.models;
 import java.io.Serializable;
 import java.util.HashMap;
 import java.util.Map;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
 
 /**
  * Defines the physical laws and constraints for agents in a specific layer.
@@ -11,13 +13,22 @@ public class AgentRule implements Serializable {
     private static final long serialVersionUID = 1L;
     
     // Movement: Is this terrain type traversable? 
+    @JacksonXmlProperty(localName = "behaviorEntry")
+    @JacksonXmlElementWrapper(localName = "behavior")
     private Map<String, Boolean> behavior = new HashMap<>();
     
     // Survival: Does this terrain type kill the agent? (Vector)
+    @JacksonXmlProperty(localName = "survivalEntry")
+    @JacksonXmlElementWrapper(localName = "survivalMap")
     private Map<String, Boolean> survivalMap = new HashMap<>();
     
     // Environmental Thresholds: Value ranges that are lethal (Raster)
+    @JacksonXmlProperty(localName = "lethalMaxEntry")
+    @JacksonXmlElementWrapper(localName = "lethalMaxThresholds")
     private Map<String, Double> lethalMaxThresholds = new HashMap<>();
+    
+    @JacksonXmlProperty(localName = "lethalMinEntry")
+    @JacksonXmlElementWrapper(localName = "lethalMinThresholds")
     private Map<String, Double> lethalMinThresholds = new HashMap<>();
 
     private double maxSpeed = 0.05; 

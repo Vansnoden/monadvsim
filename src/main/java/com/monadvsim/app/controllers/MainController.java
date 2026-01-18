@@ -333,6 +333,7 @@ public class MainController{
       }else if (layer instanceof VectorLayer vl){
         vl.setColorHex(dialog.getColorHex());
       }
+      layer.setOpacity(dialog.getOpacity());
       refreshUI();
     }
   }

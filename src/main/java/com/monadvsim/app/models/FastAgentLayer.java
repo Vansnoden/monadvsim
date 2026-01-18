@@ -35,6 +35,11 @@ public class FastAgentLayer extends DirectLayer {
         g2d.drawRect((int)sPt.x - 2, (int)sPt.y - 2, 4, 4);
         continue;
       }
+      float opacity = agentLayer.getOpacity();
+      Composite originalComposite = g2d.getComposite();
+      if (opacity < 1.0f) {
+          g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity));
+      }
       if (agentLayer.isTrailsEnabled()) {
         g2d.setColor(new Color(agentColor.getRed(), agentColor.getGreen(), agentColor.getBlue(), 100));
         List<Point2D.Double> history = a.getHistory();
