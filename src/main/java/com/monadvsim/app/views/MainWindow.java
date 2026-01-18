@@ -309,7 +309,7 @@ public class MainWindow extends JFrame{
   }
   
   private void initOptionsPanel(){
-    this.optionsPanel = new JPanel();
+    this.optionsPanel = new JPanel(new BorderLayout());
     this.optionsPanel.setPreferredSize(new Dimension(200, 0));
     this.initProjectExplorer();
   }
