@@ -26,6 +26,11 @@ import java.io.File;
 import java.util.List;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import javax.swing.tree.DefaultMutableTreeNode;
+import java.awt.Rectangle;
+import javax.swing.SwingUtilities;
+
+
 
 public class MainController{
   
@@ -43,6 +48,7 @@ public class MainController{
   private void initListeners(){
     this.view.getBtnNewProject().addActionListener(l -> handleNewProject());
     this.view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
+    this.initMapTools();
   }
   
   private void handleNewProject(){
@@ -66,6 +72,40 @@ public class MainController{
       JOptionPane.showMessageDialog(dialog, "New project creation failed: " + ex.getMessage());
     }
       dialog.dispose();
+    });
+  }
+  
+  private void handleLayerTreeMouse(){
+    this.view.getLayerTree().addMouseListener(new MouseAdapter() {
+      @Override
+      public void mousePressed(MouseEvent e) {
+        TreePath path = view.getLayerTree().getPathForLocation(e.getX(), e.getY());
+        if (path == null) return;
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent(); 
+        int row = view.getLayerTree().getRowForPath(path);
+        if (node.getUserObject() instanceof Layer layer) { 
+          Rectangle rect = view.getLayerTree().getRowBounds(row);
+          if (SwingUtilities.isLeftMouseButton(e) && e.getX() < rect.x + 25) { 
+            toggleLayerVisibility(layer);
+          } else if (SwingUtilities.isRightMouseButton(e)) {
+            view.getLayerTree().setSelectionPath(path);
+            showTreeContextMenu(e, layer);
+          }
+        } else if (SwingUtilities.isRightMouseButton(e) && row == 0) {
+          showProjectContextMenu(e);
+        }
+      }
+    });
+  }
+  
+  private void initMapTools(){
+    // Map Tools
+    this.view.getBtnZoomIn().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomInTool()));
+    this.view.getBtnZoomOut().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new ZoomOutTool()));
+    this.view.getBtnPanview().addActionListener(e -> view.getSimulationCanvas().setActiveTool(new PanTool())); 
+    this.view.getBtnFullview().addActionListener(e -> {
+        view.getSimulationCanvas().setActiveTool(null);
+        view.getSimulationCanvas().zoomToData();
     });
   }
   
@@ -152,6 +192,46 @@ public class MainController{
       project.getLayers().add(newLayer);
       refreshUI();
     } 
+  }
+  
+  private void handleProjectProperties() {
+    ProjectPropertiesDialog dialog = new ProjectPropertiesDialog(view, project.getName(), project.getCrsCode());
+    dialog.getBtnApply().addActionListener(e -> { 
+      project.setName(dialog.getProjectName());
+      project.setCrsCode(dialog.getSelectedCrs());
+      view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
+      refreshUI();
+      dialog.dispose();
+    });
+    dialog.setVisible(true); 
+  }
+  
+  private void toggleLayerVisibility(Layer layer) {
+    layer.setVisible(!layer.isVisible());
+    refreshUI();
+  }
+  
+  private void showProjectContextMenu(MouseEvent e) {
+    JPopupMenu menu = new JPopupMenu();
+    JMenuItem prop = new JMenuItem("Project Properties..."); 
+    prop.addActionListener(al -> handleProjectProperties());
+    menu.add(prop);
+    menu.show(e.getComponent(), e.getX(), e.getY());
+  } 
+  
+  private void showTreeContextMenu(MouseEvent e, Layer layer) {
+    JPopupMenu menu = new JPopupMenu();
+    JMenuItem prop = new JMenuItem("Layer Properties...");
+    prop.addActionListener(al -> handleLayerProperties(layer));
+    menu.add(prop);
+    menu.addSeparator();
+    JMenuItem remove = new JMenuItem("Remove Layer"); 
+    remove.addActionListener(al -> { 
+      project.getLayers().remove(layer); 
+      refreshUI(); 
+    });
+    menu.add(remove); 
+    menu.show(e.getComponent(), e.getX(), e.getY());
   }
 
 }
