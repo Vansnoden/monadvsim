@@ -28,12 +28,12 @@ public class DialogNewLayer extends JDialog {
   private JCheckBox wrapAroundCheck=null;
   private JButton btnSave=null;
   private boolean succeeded = false;
-  private String[] layerOptions = {"Vector Layer", "Raster Layer", "Agents Layer"};
+  private String[] layerOptions = {"Vector Layer", "Raster Layer", "Agent Layer"};
 
   public DialogNewLayer(Frame parent){
     super(parent, "Add New Layer", true);
     this.setTitle("Add Layer");
-    this.setSize(350,200);
+    this.setSize(350,300);
     this.initComponents();
     this.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
     this.setLocationRelativeTo(parent);
@@ -75,6 +75,7 @@ public class DialogNewLayer extends JDialog {
     this.wrapAroundCheck.setEnabled(isAgent);
     this.layerNameField = new JTextField(30);
     this.btnSave = new JButton("Add New Layer");
+    
     JPanel formFieldsPanel = new JPanel(new GridBagLayout());
     formFieldsPanel.setBorder(BorderFactory.createTitledBorder("Layer Information"));
     GridBagConstraints gbc = new GridBagConstraints();
@@ -92,6 +93,7 @@ public class DialogNewLayer extends JDialog {
     gbc.gridx = 1; gbc.gridy = 1;
     gbc.weightx = 1.0;
     formFieldsPanel.add(this.layerNameField, gbc);
+    
     JPanel agentLayerSettings = new JPanel(new GridBagLayout());
     agentLayerSettings.setBorder(BorderFactory.createTitledBorder("Agent Layer Details"));
     GridBagConstraints gbc2 = new GridBagConstraints();
@@ -103,12 +105,13 @@ public class DialogNewLayer extends JDialog {
     gbc2.gridx = 1; gbc2.gridy = 0;
     gbc2.weightx = 0;
     agentLayerSettings.add(populationSpinner, gbc2);
-    gbc.gridx = 0; gbc.gridy = 1;
-    gbc.weightx = 0;
+    gbc2.gridx = 0; gbc2.gridy = 1;
+    gbc2.weightx = 0;
     agentLayerSettings.add(new JLabel("World Wrap:"), gbc2);
-    gbc.gridx = 1; gbc.gridy = 1;
-    gbc.weightx = 0;
-    agentLayerSettings.add(wrapAroundCheck, gbc);
+    gbc2.gridx = 1; gbc2.gridy = 1;
+    gbc2.weightx = 0;
+    agentLayerSettings.add(wrapAroundCheck, gbc2);
+    
     JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); // Align save to right
     formButtonsPanel.add(this.btnSave);
     this.content.add(formFieldsPanel, BorderLayout.NORTH);
