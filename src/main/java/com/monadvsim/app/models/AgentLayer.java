@@ -250,8 +250,13 @@ public class AgentLayer extends Layer {
   public org.geotools.map.Layer getGeoToolsLayer(File f) { return null; }
   
   // --- Getters & Setters ---
-  public List<AgentRule> getRules() { return rules; }
+  @JsonProperty("rules")
+  public List<AgentRule> getRules() { 
+      return rules; 
+  }
+  
   public void addRule(AgentRule rule) { this.rules.add(rule); }
+  
   public void clearRules() { this.rules.clear(); }
 
   @JsonIgnore
@@ -260,16 +265,28 @@ public class AgentLayer extends Layer {
   }
   
   public boolean isHeatmapEnabled() { return heatmapEnabled; }
+  
   public void setHeatmapEnabled(boolean heatmapEnabled) { this.heatmapEnabled = heatmapEnabled; }
+  
   public boolean isTrailsEnabled() { return trailsEnabled; }
+  
   public void setTrailsEnabled(boolean trailsEnabled) { this.trailsEnabled = trailsEnabled; }
+  
   public List<Agent> getAgents() { return agents; }
+  
   public void setAgents(List<Agent> agents) { this.agents = agents; }
+  
   public boolean isWrapAround() { return wrapAround; }
+  
   public void setWrapAround(boolean wrapAround) { this.wrapAround = wrapAround; }
+  
   public String getColorHex() { return colorHex; }
+  
   public void setColorHex(String colorHex) { this.colorHex = colorHex; }
-  @JsonIgnore public int getAgentsCount() { return agents.size(); }
+  
+  @JsonIgnore 
+  public int getAgentsCount() { return agents.size(); }
+  
   @JsonIgnore
   public byte[][] getTerrainCache() {
       return terrainCache;

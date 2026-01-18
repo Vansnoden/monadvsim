@@ -9,29 +9,16 @@ import com.fasterxml.jackson.dataformat.xml.annotation.*;
 /**
  * Defines the physical laws and constraints for agents in a specific layer.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class AgentRule implements Serializable {
-    private static final long serialVersionUID = 1L;
-    
-    // Movement: Is this terrain type traversable? 
-    @JacksonXmlProperty(localName = "behaviorEntry")
-    @JacksonXmlElementWrapper(localName = "behavior")
-    private Map<String, Boolean> behavior = new HashMap<>();
-    
-    // Survival: Does this terrain type kill the agent? (Vector)
-    @JacksonXmlProperty(localName = "survivalEntry")
-    @JacksonXmlElementWrapper(localName = "survivalMap")
-    private Map<String, Boolean> survivalMap = new HashMap<>();
-    
-    // Environmental Thresholds: Value ranges that are lethal (Raster)
-    @JacksonXmlProperty(localName = "lethalMaxEntry")
-    @JacksonXmlElementWrapper(localName = "lethalMaxThresholds")
-    private Map<String, Double> lethalMaxThresholds = new HashMap<>();
-    
-    @JacksonXmlProperty(localName = "lethalMinEntry")
-    @JacksonXmlElementWrapper(localName = "lethalMinThresholds")
-    private Map<String, Double> lethalMinThresholds = new HashMap<>();
 
+    private static final long serialVersionUID = 1L;
+    private Map<String, Boolean> behavior = new HashMap<>();
+    private Map<String, Boolean> survivalMap = new HashMap<>();
+    private Map<String, Double> lethalMaxThresholds = new HashMap<>();
+    private Map<String, Double> lethalMinThresholds = new HashMap<>();
     private double maxSpeed = 0.05; 
+
 
     public AgentRule() {
         // Default Movement Rules
@@ -72,10 +59,30 @@ public class AgentRule implements Serializable {
 
     // --- Getters and Setters ---
     public double getMaxSpeed() { return maxSpeed; }
+    
     public void setMaxSpeed(double maxSpeed) { this.maxSpeed = maxSpeed; }
     
+    @JsonProperty("behavior")
+    @JacksonXmlElementWrapper(localName = "behavior")
+    @JacksonXmlProperty(localName = "behaviorEntry")
     public Map<String, Boolean> getBehaviorMap() { return behavior; }
+    public void setBehaviorMap(Map<String, Boolean>  map) { this.behavior = map; }
+    
+    @JsonProperty("lethalMaxThresholds")
+    @JacksonXmlElementWrapper(localName = "lethalMaxThresholds")
+    @JacksonXmlProperty(localName = "lethalMaxEntry")
     public Map<String, Double> getLethalMaxThresholds() { return lethalMaxThresholds; }
+    public void setLethalMaxThresholds(Map<String, Double> map) { this.lethalMaxThresholds = map; }
+    
+    @JsonProperty("lethalMinThresholds")
+    @JacksonXmlElementWrapper(localName = "lethalMinThresholds")
+    @JacksonXmlProperty(localName = "lethalMinEntry")
     public Map<String, Double> getLethalMinThresholds() { return lethalMinThresholds; }
+    public void setLethalMinThresholds(Map<String, Double> map) { this.lethalMinThresholds = map; }
+    
+    @JsonProperty("survivalMap")
+    @JacksonXmlElementWrapper(localName = "survivalMap")
+    @JacksonXmlProperty(localName = "survivalEntry")
     public Map<String, Boolean> getSurvivalMap() { return survivalMap; }
+    public void setSurvivalMap( Map<String, Boolean>  map) { this.survivalMap =  map; }
 }
