@@ -15,15 +15,23 @@ import java.net.URL;
 import java.awt.BorderLayout;
 import java.awt.Dimension;
 import com.monadvsim.app.models.Project;
+import com.monadvsim.app.models.Layer;
 import javax.swing.JTree;
 import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.JScrollPane;
+import javax.swing.KeyStroke;
+import javax.swing.JComponent;
+import java.util.List;
+import java.awt.event.KeyEvent;
+import java.awt.Toolkit;
+import javax.swing.AbstractAction;
+import java.awt.event.ActionEvent;
 
 
 public class MainWindow extends JFrame{
   
-  private Project projectModel=null;
+  private Project project=null;
   private JSplitPane splitPane=null;
   private JPanel content=null, optionsPanel=null, canvasPanel=null, statusBar=null;
   private SimulationCanvas simCanvas = null;
@@ -38,6 +46,7 @@ public class MainWindow extends JFrame{
   private JMenuItem quitMenuItem=null, addLayerMenuItem=null, removeLayerMenuItem=null;
   private JMenuItem documentationMenuItem=null, donationMenuItem=null;
   private JTree layerTree=null;
+  private DefaultMutableTreeNode treeRoot=null;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -51,7 +60,7 @@ public class MainWindow extends JFrame{
   
   // Getters and Setters
   public void setProjectModel(Project project){ 
-    this.projectModel = project;
+    this.project = project;
   }
   
   public JSplitPane getSplitPane(){ return this.splitPane; }
@@ -118,7 +127,41 @@ public class MainWindow extends JFrame{
   
   public JTree getLayerTree() { return layerTree; }
   
+  public SimulationCanvas getSimulationCanvas() { return this.simCanvas; }
+  
+  public void setProjectNameInTree(String name) {
+    if (treeRoot != null && layerTree != null) {
+      treeRoot.setUserObject(name);
+      ((DefaultTreeModel) layerTree.getModel()).nodeChanged(treeRoot);
+    }
+  }
+  
+  public void updateLayerTree(List<Layer> layers) {
+    treeRoot.removeAllChildren();
+    if (layers != null) {
+      for (Layer layer : layers) {
+        treeRoot.add(new DefaultMutableTreeNode(layer));
+      }
+    }
+    ((DefaultTreeModel) layerTree.getModel()).reload();
+    for (int i = 0; i < layerTree.getRowCount(); i++) layerTree.expandRow(i);
+  }
+
+  public void refreshCanvas() {
+    if (this.simCanvas != null && project != null) {
+      this.simCanvas.updateLayers(project.getLayers(), project.getProjectFile());
+    }
+  }
+  
   // Private functions
+  
+  private void setupShortcuts() {
+    KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
+    this.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(saveShortcut, "saveAction");
+    this.getRootPane().getActionMap().put("saveAction", new AbstractAction() {
+      @Override public void actionPerformed(ActionEvent e) { btnSaveProject.doClick(); }
+    });
+  }
   
   private void initComponents(){
     this.initMenu();

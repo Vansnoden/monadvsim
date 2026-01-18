@@ -10,6 +10,13 @@ import java.awt.BorderLayout;
 import javax.swing.ImageIcon;
 import java.net.URL;
 import javax.swing.UIManager;
+import javax.swing.JPanel;
+import javax.swing.JLabel;
+import com.monadvsim.app.models.Layer;
+import java.awt.Font;
+import javax.swing.tree.DefaultMutableTreeNode;
+import java.awt.Component;
+import javax.swing.JTree;
 
 
 public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {

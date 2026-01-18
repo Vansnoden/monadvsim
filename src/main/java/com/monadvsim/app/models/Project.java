@@ -42,6 +42,11 @@ public class Project{
   }
   
   @JsonIgnore
+  public String getCrsCode(){
+    return crs; 
+  }
+  
+  @JsonIgnore
   public void setCrs(String crs){ 
     this.crs=crs;
   }

@@ -2,6 +2,11 @@ package com.monadvsim.app.controllers;
 
 import com.monadvsim.app.models.Project;
 import com.monadvsim.app.models.ProjectPersistenceService;
+import com.monadvsim.app.models.VectorLayer;
+import com.monadvsim.app.models.RasterLayer;
+import com.monadvsim.app.models.AgentLayer;
+import com.monadvsim.app.models.Layer;
+import javax.swing.JTree;
 import com.monadvsim.app.views.MainWindow;
 import com.monadvsim.app.views.DialogNewProject;
 import com.monadvsim.app.views.DialogNewLayer;
@@ -131,22 +136,22 @@ public class MainController{
   }
 
   private void handleCreateAgentLayer(String name, int population, boolean wrap) {
-  AgentLayer al = new AgentLayer(name);
-  al.setWrapAround(wrap); 
-  al.setPopulation(population, project);
-  project.getLayers().add(al);
-  refreshUI(); 
+    AgentLayer al = new AgentLayer(name);
+    al.setWrapAround(wrap); 
+    al.setPopulation(population, project);
+    project.getLayers().add(al);
+    refreshUI(); 
   }
 
   private void handleCreateSpatialLayer(String type, String name) {
-  JFileChooser chooser = new JFileChooser();
-  if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
-  File layerFile = chooser.getSelectedFile();
-  Layer newLayer = type.equals("Vector Layer") ? 
+    JFileChooser chooser = new JFileChooser();
+    if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
+      File layerFile = chooser.getSelectedFile();
+      Layer newLayer = type.equals("Vector Layer") ? 
         new VectorLayer(name, layerFile.getAbsolutePath()) : new RasterLayer(name, layerFile.getAbsolutePath());
-  project.getLayers().add(newLayer);
-  refreshUI();
-  } 
+      project.getLayers().add(newLayer);
+      refreshUI();
+    } 
   }
 
 }
