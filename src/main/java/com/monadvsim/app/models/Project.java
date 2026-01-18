@@ -36,22 +36,18 @@ public class Project{
     this.projectFile = newFile;
   }
 
-  @JsonIgnore
   public String getCrs(){
     return crs; 
   }
   
-  @JsonIgnore
   public String getCrsCode(){
     return crs; 
   }
   
-  @JsonIgnore
   public void setCrs(String crs){ 
     this.crs=crs;
   }
   
-  @JsonIgnore
   public void setCrsCode(String crs){ 
     this.crs=crs;
   }

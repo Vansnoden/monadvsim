@@ -94,6 +94,7 @@ public class MainController{
           // Force a full zoom to the new data
           view.getSimulationCanvas().zoomToData();
         } catch (Exception ex) {
+          ex.printStackTrace();
           JOptionPane.showMessageDialog(view, "Load failed: " + ex.getMessage());
         } finally { loading.dispose(); }
       }

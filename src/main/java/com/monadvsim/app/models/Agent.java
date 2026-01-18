@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
 
 
 /**
@@ -20,7 +22,7 @@ public class Agent implements Serializable {
 
     private double x, y, vx, vy;
     
-    // transient: history is re-initialized after loading to save disk space
+    @JsonIgnore
     private transient List<Point2D.Double> history = new ArrayList<>();
 
     public Agent() {} 
@@ -113,6 +115,7 @@ public class Agent implements Serializable {
     public void setX(double x) { this.x = x; }
     public void setY(double y) { this.y = y; }
     
+    @JsonIgnore
     public List<Point2D.Double> getHistory() {
         if (history == null) history = new ArrayList<>();
         return history;
