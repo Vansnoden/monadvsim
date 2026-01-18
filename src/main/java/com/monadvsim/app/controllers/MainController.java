@@ -41,6 +41,7 @@ import javax.swing.JColorChooser;
 import javax.swing.SpinnerNumberModel;
 import javax.swing.SwingWorker;
 import javax.swing.Timer;
+import com.monadvsim.app.views.DialogRuleEditor;
 
 
 public class MainController{
@@ -296,6 +297,14 @@ public class MainController{
     JMenuItem prop = new JMenuItem("Layer Properties...");
     prop.addActionListener(al -> handleLayerProperties(layer));
     menu.add(prop);
+    if (layer instanceof AgentLayer al) {
+        JMenuItem ruleItem = new JMenuItem("Configure Rules...");
+        ruleItem.addActionListener(alEvent -> {
+            DialogRuleEditor editor = new DialogRuleEditor(view, al, project);
+            editor.setVisible(true);
+        });
+        menu.add(ruleItem);
+    }
     menu.addSeparator();
     JMenuItem remove = new JMenuItem("Remove Layer"); 
     remove.addActionListener(al -> { 

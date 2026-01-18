@@ -15,17 +15,60 @@ import java.util.Map;
  */
 public class AgentRule implements Serializable {
     private static final long serialVersionUID = 1L;
+    
+    // Movement: Is this terrain type traversable? (Vector/Baked Cache)
+    private Map<String, Boolean> traversability = new HashMap<>();
+    
+    // Survival: Does this terrain type kill the agent? (Vector)
+    private Map<String, Boolean> survivalMap = new HashMap<>();
+    
+    // Environmental Thresholds: Value ranges that are lethal (Raster)
+    // Key = Layer Name, Value = Double threshold
+    private Map<String, Double> lethalMaxThresholds = new HashMap<>();
+    private Map<String, Double> lethalMinThresholds = new HashMap<>();
 
     private Map<String, Boolean> behavior = new HashMap<>();
     private double maxSpeed = 0.05; // Base speed factor in degrees/meters per tick
     private transient GeometryFactory geometryFactory = new GeometryFactory();
 
     public AgentRule() {
-        // Default rules: survive on land, blocked by water or empty space
-        behavior.put("land", true);
-        behavior.put("water", false);
-        behavior.put("empty", false); 
+        // Default Movement Rules
+        traversability.put("land", true);
+        traversability.put("water", false);
+        traversability.put("empty", false);
+        // Default Survival Rules (everything is safe by default)
+        survivalMap.put("land", true);
+        survivalMap.put("water", false); // Drown in water
     }
+    
+    /**
+     * Evaluates if the agent stays alive based on a sensed value from a layer.
+     */
+    public boolean checkSurvival(String layerName, Object value) {
+        // 1. Check Vector Category Survival
+        if (value instanceof String category) {
+            return survivalMap.getOrDefault(category.toLowerCase(), true);
+        }
+
+        // 2. Check Raster Numeric Survival (e.g., Temperature, Elevation)
+        if (value instanceof Double val) {
+            if (lethalMaxThresholds.containsKey(layerName) && val > lethalMaxThresholds.get(layerName)) {
+                return false; // Too high
+            }
+            if (lethalMinThresholds.containsKey(layerName) && val < lethalMinThresholds.get(layerName)) {
+                return false; // Too low
+            }
+        }
+        return true;
+    }
+    
+    public boolean isAllowed(String terrain) {
+        return traversability.getOrDefault(terrain.toLowerCase(), false);
+    }
+    
+    public void setLethalMax(String layerName, double max) { lethalMaxThresholds.put(layerName, max); }
+    public void setTraversable(String terrain, boolean allowed) { traversability.put(terrain, allowed); }
+    public void setSurvivable(String terrain, boolean survivable) { survivalMap.put(terrain, survivable); }
 
     /**
      * Checks if a specific coordinate is traversable based on the baked terrain data.
@@ -55,11 +98,6 @@ public class AgentRule implements Serializable {
 
         // If no feature was found under the agent, use the "empty" behavior
         return behavior.getOrDefault("empty", false);
-    }
-
-    public boolean isAllowed(String terrain) {
-        if (terrain == null) return behavior.getOrDefault("empty", false);
-        return behavior.getOrDefault(terrain.toLowerCase(), false);
     }
 
     public void setBehavior(String terrainType, boolean allowed) {

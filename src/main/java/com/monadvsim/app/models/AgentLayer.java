@@ -78,7 +78,11 @@ public class AgentLayer extends Layer{
   
   public void updateAll(Project project) {
     Envelope bounds = getSimulationExtent(project);
+    // 1. Run the simulation step for everyone (Parallel)
     agents.parallelStream().forEach(a -> a.step(project, this, bounds));
+    // 2. Cleanup: Remove dead agents to free up memory and CPU
+    // We can do this every step, or every N steps to save processing time
+    agents.removeIf(a -> !a.isAlive());
   }
   
   /**
