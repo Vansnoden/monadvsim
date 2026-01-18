@@ -13,13 +13,29 @@ import javax.swing.JMenuItem;
 import javax.swing.ImageIcon;
 import java.net.URL;
 import java.awt.BorderLayout;
+import java.awt.FlowLayout;
 import java.awt.Dimension;
 import com.monadvsim.app.models.Project;
+import com.monadvsim.app.models.Layer;
+import javax.swing.JTree;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.JScrollPane;
+import javax.swing.KeyStroke;
+import javax.swing.JProgressBar;
+import javax.swing.JComponent;
+import java.util.List;
+import java.awt.event.KeyEvent;
+import java.awt.Toolkit;
+import javax.swing.AbstractAction;
+import java.awt.event.ActionEvent;
+import java.awt.Color;
+
 
 
 public class MainWindow extends JFrame{
   
-  private Project projectModel=null;
+  private Project project=null;
   private JSplitPane splitPane=null;
   private JPanel content=null, optionsPanel=null, canvasPanel=null, statusBar=null;
   private SimulationCanvas simCanvas = null;
@@ -28,11 +44,16 @@ public class MainWindow extends JFrame{
   private JButton btnAddLayer=null, btnPanview=null, btnZoomIn=null;
   private JButton btnZoomOut=null, btnFullview=null, btnRun=null, btnPause=null;
   private JMenuBar menuBar=null;
-  private JMenu projectMenu=null, layerMenu=null, helpMenu=null;
+  private JMenu projectMenu=null, recentProjectsMenu=null, layerMenu=null, helpMenu=null;
   private JMenuItem newProjectMenuItem=null, saveProjectMenuItem=null, saveAsProjectMenuItem=null;
   private JMenuItem projectPropertiesMenuItem=null, projectExportMenuItem=null, exportProjectMenuItem=null;
   private JMenuItem quitMenuItem=null, addLayerMenuItem=null, removeLayerMenuItem=null;
   private JMenuItem documentationMenuItem=null, donationMenuItem=null;
+  private JTree layerTree=null;
+  private DefaultMutableTreeNode treeRoot=null;
+  private JProgressBar progressBar = null;
+  private JLabel lblCoordinates;
+  private JLabel lblCRS;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -46,7 +67,7 @@ public class MainWindow extends JFrame{
   
   // Getters and Setters
   public void setProjectModel(Project project){ 
-    this.projectModel = project;
+    this.project = project;
   }
   
   public JSplitPane getSplitPane(){ return this.splitPane; }
@@ -77,9 +98,9 @@ public class MainWindow extends JFrame{
   
   public JButton getBtnFullview(){ return this.btnFullview; }
   
-  public JButton getBtnRun(){ return this.btnRun; }
+  public JButton getBtnRunSim(){ return this.btnRun; }
   
-  public JButton getBtnPause(){ return this.btnPause; }
+  public JButton getBtnPauseSim(){ return this.btnPause; }
   
   public JMenuBar getJMenuBar(){ return this.menuBar; }
   
@@ -111,7 +132,55 @@ public class MainWindow extends JFrame{
   
   public JMenuItem getDonationMenuItem(){ return this.donationMenuItem; }
   
+  public JMenu getRecentProjectsMenu(){ return this.recentProjectsMenu; }
+  
+  public JTree getLayerTree() { return layerTree; }
+  
+  public SimulationCanvas getSimulationCanvas() { return this.simCanvas; }
+  
+  public JProgressBar getProgressBar(){ return this.progressBar; }
+  
+  public JLabel getLblCoordinates() { return lblCoordinates; }
+  
+  public JLabel getLblCRS() { return lblCRS; }
+  
+  public void setStatusBarCRS(String crs) {
+    if (lblCRS != null) lblCRS.setText("System: " + crs);
+  }
+  
+  public void setProjectNameInTree(String name) {
+    if (treeRoot != null && layerTree != null) {
+      treeRoot.setUserObject(name);
+      ((DefaultTreeModel) layerTree.getModel()).nodeChanged(treeRoot);
+    }
+  }
+  
+  public void updateLayerTree(List<Layer> layers) {
+    treeRoot.removeAllChildren();
+    if (layers != null) {
+      for (Layer layer : layers) {
+        treeRoot.add(new DefaultMutableTreeNode(layer));
+      }
+    }
+    ((DefaultTreeModel) layerTree.getModel()).reload();
+    for (int i = 0; i < layerTree.getRowCount(); i++) layerTree.expandRow(i);
+  }
+
+  public void refreshCanvas() {
+    if (this.simCanvas != null && project != null) {
+      this.simCanvas.updateLayers(project.getLayers(), project.getProjectFile());
+    }
+  }
+  
   // Private functions
+  
+  private void setupShortcuts() {
+    KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
+    this.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(saveShortcut, "saveAction");
+    this.getRootPane().getActionMap().put("saveAction", new AbstractAction() {
+      @Override public void actionPerformed(ActionEvent e) { btnSaveProject.doClick(); }
+    });
+  }
   
   private void initComponents(){
     this.initMenu();
@@ -128,6 +197,7 @@ public class MainWindow extends JFrame{
   
   private void initProjectMenu(){
     this.projectMenu = new JMenu("Project");
+    this.recentProjectsMenu = new JMenu("Recent Projects");
     this.initProjectMenuItems();
     this.addProjectMenuItems();
     this.menuBar.add(this.projectMenu);
@@ -144,6 +214,8 @@ public class MainWindow extends JFrame{
   
   private void addProjectMenuItems(){
     this.projectMenu.add(this.newProjectMenuItem);
+    this.projectMenu.add(this.projectMenu);
+    this.projectMenu.addSeparator();
     this.projectMenu.add(this.saveProjectMenuItem);
     this.projectMenu.add(this.saveAsProjectMenuItem);
     this.projectMenu.addSeparator();
@@ -259,8 +331,19 @@ public class MainWindow extends JFrame{
   }
   
   private void initOptionsPanel(){
-    this.optionsPanel = new JPanel();
+    this.optionsPanel = new JPanel(new BorderLayout());
     this.optionsPanel.setPreferredSize(new Dimension(200, 0));
+    this.initProjectExplorer();
+  }
+  
+  private void initProjectExplorer(){
+    this.treeRoot = new DefaultMutableTreeNode("Layers");
+    this.layerTree = new JTree(treeRoot);
+    this.layerTree.setCellRenderer(new LayerTreeRenderer());
+    JPanel treePanel = new JPanel(new BorderLayout());
+    treePanel.add(new JLabel("Project Explorer"), BorderLayout.NORTH);
+    treePanel.add(new JScrollPane(layerTree), BorderLayout.CENTER);
+    this.optionsPanel.add(treePanel, BorderLayout.CENTER);
   }
   
   private void initCanvasPanel(){
@@ -276,8 +359,23 @@ public class MainWindow extends JFrame{
   
   private void initStatusBar(){
     this.statusBar = new JPanel(new BorderLayout());
-    this.statusBar.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
-    this.statusBar.add(new JLabel("monadvsim@2025"), BorderLayout.EAST);
+    this.statusBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Color.LIGHT_GRAY));
+    // West side: Mouse Coordinates
+    this.lblCoordinates = new JLabel("X: 0.00, Y: 0.00");
+    this.lblCoordinates.setPreferredSize(new Dimension(200, 20));
+    // Center side: CRS display
+    this.lblCRS = new JLabel("System: EPSG:4326");
+    this.lblCRS.setHorizontalAlignment(JLabel.CENTER);
+    // East side: Progress and Branding
+    this.progressBar = new JProgressBar();
+    this.progressBar.setPreferredSize(new Dimension(150, 18));
+    this.progressBar.setVisible(false); // Hide by default
+    JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+    eastPanel.add(this.progressBar);
+    eastPanel.add(new JLabel("monadvsim@2026"));
+    this.statusBar.add(lblCoordinates, BorderLayout.WEST);
+    this.statusBar.add(lblCRS, BorderLayout.CENTER);
+    this.statusBar.add(eastPanel, BorderLayout.EAST);
     this.content.add(this.statusBar, BorderLayout.SOUTH);
   }
   
