@@ -50,29 +50,34 @@ public class Agent implements Serializable {
   */
   public void step(Project project, AgentLayer layer, Envelope bounds) {
     if (!alive) return;
-
-    // Use the method in AgentLayer instead of the local one to keep Agent "clean"
-    // or ensure this local probeEnvironment method works.
+    // 1. PROBE & EVALUATE SURVIVAL
     Map<String, Object> surroundings = probeEnvironment(this.x, this.y, project);
-    AgentRule rule = layer.getRule();
-    for (Map.Entry<String, Object> entry : surroundings.entrySet()) {
-      if (!rule.checkSurvival(entry.getKey(), entry.getValue())) {
-        this.alive = false;
-        return;
-      }
+    
+    // Use the new multi-rule check
+    if (!layer.checkSurvival(surroundings)) {
+      this.alive = false;
+      return;
     }
+
+    // 2. MOVEMENT
+    // We use the speed from the primary rule (or an average)
+    AgentRule primaryRule = layer.getPrimaryRule();
     double unitScale = (project.getCrsCode() != null && project.getCrsCode().contains("3857")) ? 1000.0 : 0.0001;
-    double speed = rule.getMaxSpeed() * unitScale;
+    double speed = (primaryRule != null ? primaryRule.getMaxSpeed() : 0.05) * unitScale;
+
     double nextX = this.x + (this.vx * speed);
     double nextY = this.y + (this.vy * speed);
+
     if (layer.validateMovement(nextX, nextY)) {
       this.x = nextX;
       this.y = nextY;
     } else {
+      // Bounce/Turn logic
       double angle = Math.random() * 2 * Math.PI;
       vx = Math.cos(angle);
       vy = Math.sin(angle);
     }
+
     handleBoundaries(bounds, layer.isWrapAround());
     updateHistory();
   }
