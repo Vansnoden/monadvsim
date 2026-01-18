@@ -13,18 +13,22 @@ public class DialogRuleEditor extends JDialog {
     private final AgentLayer agentLayer;
     private final Project project;
     
+    // UI Components kept as fields to manage focus/editing state
+    private JTable movementTable;
+    private JTable rasterTable;
     private DefaultTableModel movementTableModel;
     private DefaultTableModel rasterTableModel;
     private JSpinner speedSpinner;
-    
-    private DefaultListModel<String> ruleListModel;
     private JList<String> ruleList;
+    private DefaultListModel<String> ruleListModel;
+    
     private int selectedRuleIndex = 0;
 
     public DialogRuleEditor(JFrame parent, AgentLayer layer, Project project) {
         super(parent, "Rule Manager: " + layer.getName(), true);
         this.agentLayer = layer;
         this.project = project;
+        
         initComponents();
         refreshRuleList();
         
@@ -43,7 +47,7 @@ public class DialogRuleEditor extends JDialog {
         // --- LEFT PANEL: Rule Stack ---
         JPanel leftPanel = new JPanel(new BorderLayout());
         leftPanel.setBorder(BorderFactory.createTitledBorder("Rules Stack"));
-        leftPanel.setPreferredSize(new Dimension(150, 0));
+        leftPanel.setPreferredSize(new Dimension(180, 0));
         
         ruleListModel = new DefaultListModel<>();
         ruleList = new JList<>(ruleListModel);
@@ -51,7 +55,7 @@ public class DialogRuleEditor extends JDialog {
         
         ruleList.addListSelectionListener(e -> {
             if (!e.getValueIsAdjusting()) {
-                saveCurrentToMemory(); // Save before switching
+                saveCurrentToMemory(); // Auto-save before switching
                 int idx = ruleList.getSelectedIndex();
                 if (idx >= 0) {
                     selectedRuleIndex = idx;
@@ -61,8 +65,8 @@ public class DialogRuleEditor extends JDialog {
         });
 
         JPanel ruleButtons = new JPanel(new GridLayout(1, 2));
-        JButton btnAdd = new JButton("+");
-        JButton btnDel = new JButton("-");
+        JButton btnAdd = new JButton("Add");
+        JButton btnDel = new JButton("Remove");
         
         btnAdd.addActionListener(e -> {
             agentLayer.addRule(new AgentRule());
@@ -86,11 +90,11 @@ public class DialogRuleEditor extends JDialog {
         leftPanel.add(ruleButtons, BorderLayout.SOUTH);
         add(leftPanel, BorderLayout.WEST);
 
-        // --- CENTER PANEL: Tabbed Configuration ---
+        // --- CENTER PANEL: Configuration ---
         JPanel centerPanel = new JPanel(new BorderLayout(5, 5));
         
         JPanel topSettings = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        topSettings.add(new JLabel("Base Speed:"));
+        topSettings.add(new JLabel("Base Speed (units/tick):"));
         speedSpinner = new JSpinner(new SpinnerNumberModel(0.05, 0.0, 1000.0, 0.01));
         topSettings.add(speedSpinner);
         centerPanel.add(topSettings, BorderLayout.NORTH);
@@ -101,18 +105,20 @@ public class DialogRuleEditor extends JDialog {
         movementTableModel = new DefaultTableModel(new Object[]{"Terrain Type", "Traversable"}, 0) {
             @Override public Class<?> getColumnClass(int col) { return col == 1 ? Boolean.class : String.class; }
         };
-        tabs.addTab("Movement/Terrain", new JScrollPane(new JTable(movementTableModel)));
+        movementTable = new JTable(movementTableModel);
+        tabs.addTab("Movement/Terrain", new JScrollPane(movementTable));
 
         // Tab B: Raster Thresholds
         rasterTableModel = new DefaultTableModel(new Object[]{"Raster Layer", "Lethal if Value >"}, 0);
-        tabs.addTab("Environmental Risks", new JScrollPane(new JTable(rasterTableModel)));
+        rasterTable = new JTable(rasterTableModel);
+        tabs.addTab("Environmental Risks", new JScrollPane(rasterTable));
 
         centerPanel.add(tabs, BorderLayout.CENTER);
         add(centerPanel, BorderLayout.CENTER);
 
         // --- SOUTH PANEL: Actions ---
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-        JButton btnApply = new JButton("Apply All Rules");
+        JButton btnApply = new JButton("Save & Close");
         btnApply.addActionListener(e -> {
             saveCurrentToMemory();
             dispose();
@@ -136,11 +142,9 @@ public class DialogRuleEditor extends JDialog {
 
         // Load Movement Table
         movementTableModel.setRowCount(0);
-        // Default types if nothing is set
         if (rule.getBehaviorMap().isEmpty()) {
             movementTableModel.addRow(new Object[]{"land", true});
             movementTableModel.addRow(new Object[]{"water", false});
-            movementTableModel.addRow(new Object[]{"empty", false});
         } else {
             for (Map.Entry<String, Boolean> entry : rule.getBehaviorMap().entrySet()) {
                 movementTableModel.addRow(new Object[]{entry.getKey(), entry.getValue()});
@@ -159,9 +163,12 @@ public class DialogRuleEditor extends JDialog {
 
     private void saveCurrentToMemory() {
         if (selectedRuleIndex < 0 || selectedRuleIndex >= agentLayer.getRules().size()) return;
-        AgentRule rule = agentLayer.getRules().get(selectedRuleIndex);
         
-        rule.setMaxSpeed((Double) speedSpinner.getValue());
+        // MANDATORY: Force Swing to commit values from UI to Model
+        stopEditing();
+
+        AgentRule rule = agentLayer.getRules().get(selectedRuleIndex);
+        rule.setMaxSpeed(((Number) speedSpinner.getValue()).doubleValue());
 
         // Save Terrain
         for (int i = 0; i < movementTableModel.getRowCount(); i++) {
@@ -178,6 +185,25 @@ public class DialogRuleEditor extends JDialog {
                 double dVal = Double.parseDouble(val.toString());
                 rule.getLethalMaxThresholds().put(layerName, dVal);
             } catch (Exception ignored) {}
+        }
+    }
+
+    /**
+     * Stops active editing in tables and spinners to ensure the data 
+     * is correctly flushed to the models before we read from them.
+     */
+    private void stopEditing() {
+        // Stop Spinner editing
+        try {
+            speedSpinner.commitEdit();
+        } catch (Exception ignored) {}
+
+        // Stop Table editing if any cell is active
+        if (movementTable.isEditing()) {
+            movementTable.getCellEditor().stopCellEditing();
+        }
+        if (rasterTable.isEditing()) {
+            rasterTable.getCellEditor().stopCellEditing();
         }
     }
 }
