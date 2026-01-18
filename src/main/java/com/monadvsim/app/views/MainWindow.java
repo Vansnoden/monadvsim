@@ -13,6 +13,7 @@ import javax.swing.JMenuItem;
 import javax.swing.ImageIcon;
 import java.net.URL;
 import java.awt.BorderLayout;
+import java.awt.FlowLayout;
 import java.awt.Dimension;
 import com.monadvsim.app.models.Project;
 import com.monadvsim.app.models.Layer;
@@ -21,12 +22,14 @@ import javax.swing.tree.DefaultMutableTreeNode;
 import javax.swing.tree.DefaultTreeModel;
 import javax.swing.JScrollPane;
 import javax.swing.KeyStroke;
+import javax.swing.JProgressBar;
 import javax.swing.JComponent;
 import java.util.List;
 import java.awt.event.KeyEvent;
 import java.awt.Toolkit;
 import javax.swing.AbstractAction;
 import java.awt.event.ActionEvent;
+
 
 
 public class MainWindow extends JFrame{
@@ -47,6 +50,7 @@ public class MainWindow extends JFrame{
   private JMenuItem documentationMenuItem=null, donationMenuItem=null;
   private JTree layerTree=null;
   private DefaultMutableTreeNode treeRoot=null;
+  private JProgressBar progressBar = null;
   
   public MainWindow(){
     this.setTitle("MonadVSIM");
@@ -130,6 +134,8 @@ public class MainWindow extends JFrame{
   public JTree getLayerTree() { return layerTree; }
   
   public SimulationCanvas getSimulationCanvas() { return this.simCanvas; }
+  
+  public JProgressBar getProgressBar(){ return this.progressBar; }
   
   public void setProjectNameInTree(String name) {
     if (treeRoot != null && layerTree != null) {
@@ -342,7 +348,13 @@ public class MainWindow extends JFrame{
   
   private void initStatusBar(){
     this.statusBar = new JPanel(new BorderLayout());
-    this.statusBar.setBorder(BorderFactory.createEmptyBorder(0, 5, 0, 5));
+    this.statusBar.setBorder(BorderFactory.createEmptyBorder(5, 8, 5, 8));
+    this.progressBar = new JProgressBar();
+    this.progressBar.setMaximum(100);
+    JPanel progessPanel = new JPanel(new BorderLayout());
+    progessPanel.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8));
+    progessPanel.add(this.progressBar, BorderLayout.EAST);
+    this.statusBar.add(progessPanel, BorderLayout.CENTER);
     this.statusBar.add(new JLabel("monadvsim@2025"), BorderLayout.EAST);
     this.content.add(this.statusBar, BorderLayout.SOUTH);
   }

@@ -72,6 +72,7 @@ public class MainController{
     this.view.getBtnPauseSim().addActionListener(l -> stopSimulation());
     this.initMapTools();
     this.handleLayerTreeMouse();
+    this.initSimulationClock();;
   }
   
   private void handleOpenProject(File file) {
@@ -328,9 +329,93 @@ public class MainController{
   }
   
   private void startSimulation(){
+    if (isBaking || (simulationTimer != null && simulationTimer.isRunning())) return;
+    if (project.getProjectFile() == null) {
+      JOptionPane.showMessageDialog(view, "Please save the project before running simulation.");
+      return;
+    }
+    // Find the first visible agent layer to bake (usually only one is active)
+    AgentLayer activeLayer = (AgentLayer) project.getLayers().stream()
+    .filter(l -> l instanceof AgentLayer && l.isVisible())
+    .findFirst().orElse(null);
+
+    if (activeLayer == null) {
+      JOptionPane.showMessageDialog(view, "No visible Agent Layer found.");
+      return;
+    }
+
+    isBaking = true;
+    view.getProgressBar().setVisible(true);
+    view.getProgressBar().setStringPainted(true);
+    view.getProgressBar().setValue(0);
+
+    new SwingWorker<Boolean, Integer>() {
+      @Override
+      protected Boolean doInBackground() throws Exception {
+        // Bake terrain (Terrain awareness prevents agents from walking on water)
+        activeLayer.bakeTerrainCache(project, 1000, progress -> {
+          publish(progress);
+        });
+        return true;
+      }
+
+      @Override
+      protected void process(List<Integer> chunks) {
+        int latest = chunks.get(chunks.size() - 1);
+        view.getProgressBar().setValue(latest);
+        view.getProgressBar().setString("Baking Terrain: " + latest + "%");
+      }
+
+      @Override
+      protected void done() {
+        try {
+          if (get()) {
+            simulationTimer.start();
+            view.getBtnRunSim().setEnabled(false);
+            view.getBtnPauseSim().setEnabled(true);
+          }
+        } catch (Exception ex) {
+          JOptionPane.showMessageDialog(view, "Baking Error: " + ex.getMessage());
+        } finally {
+          isBaking = false;
+          view.getProgressBar().setVisible(false);
+        }
+      }
+    }.execute();
+
   }
   
   private void stopSimulation(){
+    if (simulationTimer != null) simulationTimer.stop();
+    view.getBtnRunSim().setEnabled(true);
+    view.getBtnPauseSim().setEnabled(false);
+  }
+  
+  private void initSimulationClock() {
+    if (simulationTimer != null) simulationTimer.stop();
+
+    int currentDelay = 100;//view.getSliderSimSpeed().getValue();
+    simulationTimer = new Timer(currentDelay, e -> { 
+      // We use a SwingWorker to ensure physics calculations don't freeze the mouse/UI
+      new SwingWorker<Void, Void>() {
+        @Override
+        protected Void doInBackground() {
+          if (project == null) return null;
+          // Update all active agent layers
+          for (Layer layer : project.getLayers()) {
+            if (layer instanceof AgentLayer al && al.isVisible()) {
+              al.updateAll(project); 
+            }
+          }
+          return null;
+        }
+        @Override
+        protected void done() {
+          // Force the SimulationCanvas to call its paintComponent method
+          view.getSimulationCanvas().repaint(); 
+        }
+      }.execute();
+    });
   }
 
 }
