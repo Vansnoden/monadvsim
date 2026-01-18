@@ -17,6 +17,7 @@ import javax.swing.JCheckBox;
 import java.awt.Insets;
 import javax.swing.SpinnerNumberModel;
 import java.awt.Frame;
+import javax.swing.JOptionPane;
 
 
 public class DialogNewLayer extends JDialog {
@@ -75,6 +76,15 @@ public class DialogNewLayer extends JDialog {
     this.wrapAroundCheck.setEnabled(isAgent);
     this.layerNameField = new JTextField(30);
     this.btnSave = new JButton("Add New Layer");
+    this.btnSave.addActionListener(e -> {
+      // Validation: Ensure name is not empty
+      if (layerNameField.getText().trim().isEmpty()) {
+        JOptionPane.showMessageDialog(this, "Please enter a layer name.");
+        return;
+      }
+      succeeded = true;
+      dispose();
+    });
     
     JPanel formFieldsPanel = new JPanel(new GridBagLayout());
     formFieldsPanel.setBorder(BorderFactory.createTitledBorder("Layer Information"));
@@ -112,7 +122,7 @@ public class DialogNewLayer extends JDialog {
     gbc2.weightx = 0;
     agentLayerSettings.add(wrapAroundCheck, gbc2);
     
-    JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); // Align save to right
+    JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); // Align save to right     
     formButtonsPanel.add(this.btnSave);
     this.content.add(formFieldsPanel, BorderLayout.NORTH);
     this.content.add(agentLayerSettings, BorderLayout.CENTER);// Use North so it doesn't stretch vertically
