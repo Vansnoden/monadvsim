@@ -57,6 +57,7 @@ public class MainController{
     this.view.getBtnNewProject().addActionListener(l -> handleNewProject());
     this.view.getBtnAddLayer().addActionListener(l -> handleNewLayer());
     this.initMapTools();
+    this.handleLayerTreeMouse();
   }
   
   private void handleNewProject(){
@@ -195,8 +196,7 @@ public class MainController{
     JFileChooser chooser = new JFileChooser();
     if (chooser.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
       File layerFile = chooser.getSelectedFile();
-      Layer newLayer = type.equals("Vector Layer") ? 
-        new VectorLayer(name, layerFile.getAbsolutePath()) : new RasterLayer(name, layerFile.getAbsolutePath());
+      Layer newLayer = type.equals("Vector Layer") ? new VectorLayer(name, layerFile.getAbsolutePath()) : new RasterLayer(name, layerFile.getAbsolutePath());
       project.getLayers().add(newLayer);
       refreshUI();
     } 
