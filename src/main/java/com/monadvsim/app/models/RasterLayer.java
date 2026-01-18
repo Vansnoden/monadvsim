@@ -66,7 +66,6 @@ public class RasterLayer extends Layer{
       AbstractGridFormat format = GridFormatFinder.findFormat(file);
       if (format == null) return null;
       this.readerReference = format.getReader(file);
-      
       StyleFactory sf = CommonFactoryFinder.getStyleFactory();
       RasterSymbolizer symbolizer = sf.createRasterSymbolizer();
       return new GridReaderLayer(readerReference, SLD.wrapSymbolizers(symbolizer));
@@ -75,13 +74,15 @@ public class RasterLayer extends Layer{
 
     @JsonIgnore
     public GridCoverage getGridCoverage(File projectFile) throws IOException {
-      if (readerReference != null) return readerReference.read(null);
+      if (readerReference != null) {
+            return readerReference.read((org.geotools.api.parameter.GeneralParameterValue[]) null);
+      }
       File file = resolveFile(projectFile);
       if (file == null || !file.exists()) return null;
       AbstractGridFormat format = GridFormatFinder.findFormat(file);
       if (format == null) return null;
       this.readerReference = format.getReader(file);
-      return readerReference.read(null);
+      return readerReference.read((org.geotools.api.parameter.GeneralParameterValue[]) null);
     }
   
 }
