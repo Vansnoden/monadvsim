@@ -125,7 +125,8 @@ public class MainController {
       try {
         String n = d.getProjectNameField().getText();
         File f = new File(d.getSelectFolderLabel().getText(), n + ".mvsim");
-        project = new Project(); project.setName(n); 
+        project = new Project(); 
+        project.setName(n); 
         project.setCrs("EPSG:4326"); 
         project.setProjectFile(f);
         pService.saveProject(project, f);

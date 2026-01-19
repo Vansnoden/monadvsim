@@ -22,6 +22,12 @@ public class VectorLayer extends Layer{
 
 
   private String colorHex = "#00FF00";
+  @JsonIgnore
+  private org.geotools.map.Layer cachedGtLayer;
+  @JsonIgnore
+  private String lastColor = "";
+  @JsonIgnore
+  private org.geotools.api.data.DataStore dataStore;
 
 
   public VectorLayer(){}
@@ -41,56 +47,87 @@ public class VectorLayer extends Layer{
       try (FeatureIterator<SimpleFeature> it = collection.features()) {
         if (it.hasNext()) return it.next();
       }
-    } catch (Exception e) { e.printStackTrace(); }
-      return null;
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
+    return null;
   }
   
   
   public String getColorHex() { return colorHex; }
   
   
+  public void setColorHex(String colorHex) { this.colorHex = colorHex; }
+  
+  
   @JsonIgnore
-  public Object getFeatureSource(File projectFile) throws Exception {
-    File file = resolveFile(projectFile);
-    if (file == null || !file.exists()) return null;
-    org.geotools.api.data.DataStore ds = org.geotools.api.data.DataStoreFinder.getDataStore(
-    Collections.singletonMap("url", file.toURI().toURL()));
-    return ds.getFeatureSource(ds.getTypeNames()[0]);
+  public org.geotools.api.data.FeatureSource<?, ?> getFeatureSource(File projectFile) 
+  throws Exception {
+    if (dataStore == null) {
+      File file = resolveFile(projectFile);
+      if (file == null || !file.exists()) return null;
+      dataStore = org.geotools.api.data.DataStoreFinder.getDataStore(
+              Collections.singletonMap("url", file.toURI().toURL()));
+    }
+    return dataStore != null ? dataStore.getFeatureSource(dataStore.getTypeNames()[0]) : null;
   }
   
   
-  @Override @JsonIgnore
+  @Override
+  @JsonIgnore
   public org.geotools.map.Layer getGeoToolsLayer(File projectFile) {
-    try {
-      SimpleFeatureSource source = (SimpleFeatureSource) getFeatureSource(projectFile);
-      // Convert Hex String to Java Color
-      Color color = Color.decode(colorHex);
-      // Create a style based on the geometry type
-      Style style;
-      String geometryType = source.getSchema().getGeometryDescriptor()
-      .getType().getBinding().getSimpleName();
-      if (geometryType.equalsIgnoreCase("Polygon") 
-        || geometryType.equalsIgnoreCase("MultiPolygon")) {
-        // Fill opacity (0.5) and color
-        style = SLD.createPolygonStyle(Color.BLACK, color.darker(), 1f);
-      } else if (geometryType.equalsIgnoreCase("LineString") 
-        || geometryType.equalsIgnoreCase("MultiLineString")) {
-        style = SLD.createLineStyle(color, 2.0f);
-      } else {
-        // Fallback for Points
-        style = SLD.createPointStyle("Circle", color, color, 0.8f, 5.0f);
+  try {
+    if (cachedGtLayer != null && colorHex.equals(lastColor)) {
+      // Important: Check if the source inside the cached layer is still alive
+      if (cachedGtLayer.getFeatureSource() != null) {
+        return cachedGtLayer;
       }
-      return new FeatureLayer(source, style);
-    } catch (Exception e) { return null; }
+    }
+
+    // Use a generic source check first
+    org.geotools.api.data.FeatureSource<?, ?> source = getFeatureSource(projectFile);
+    if (source == null) return null;
+
+    Color color = Color.decode(colorHex);
+    Style style;
+    
+    // Use the schema to determine geometry type
+    String geometryType = source.getSchema().getGeometryDescriptor().getType().getBinding().getSimpleName();
+
+    if (geometryType.equalsIgnoreCase("Polygon") || geometryType.equalsIgnoreCase("MultiPolygon")) {
+      style = SLD.createPolygonStyle(Color.BLACK, color, 1.0f);
+    } else if (geometryType.equalsIgnoreCase("LineString") || geometryType.equalsIgnoreCase("MultiLineString")) {
+      style = SLD.createLineStyle(color, 2.0f);
+    } else {
+      style = SLD.createPointStyle("Circle", color, color, 0.8f, 5.0f);
+    }
+
+    if (cachedGtLayer != null) {
+      cachedGtLayer.preDispose();
+    }
+
+    // Create the new layer
+    cachedGtLayer = new org.geotools.map.FeatureLayer(source, style);
+    lastColor = colorHex;
+    return cachedGtLayer;
+    
+  } catch (Exception e) {
+    System.err.println("Error creating GeoTools Layer: " + e.getMessage());
+    return null;
   }
+}
   
 
   private File resolveFile(File projectFile) {
     File f = new File(getRelativePath());
-    return f.isAbsolute() ? f : new File(projectFile.getParentFile(), getRelativePath());
+    if (f.isAbsolute()) return f;
+    if (projectFile == null) return null;
+    return new File(projectFile.getParentFile(), getRelativePath());
   }
   
-  
-  public void setColorHex(String colorHex) { this.colorHex = colorHex; }
+  public void dispose() {
+    if (cachedGtLayer != null) cachedGtLayer.preDispose();
+    if (dataStore != null) dataStore.dispose();
+  }
   
 }
