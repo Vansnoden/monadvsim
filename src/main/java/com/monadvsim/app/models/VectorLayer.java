@@ -61,7 +61,7 @@ public class VectorLayer extends Layer{
       String geometryType = source.getSchema().getGeometryDescriptor().getType().getBinding().getSimpleName();
       if (geometryType.equalsIgnoreCase("Polygon") || geometryType.equalsIgnoreCase("MultiPolygon")) {
         // Fill opacity (0.5) and color
-        style = SLD.createPolygonStyle(color, color.darker(), 0.5f);
+        style = SLD.createPolygonStyle(Color.BLACK, color.darker(), 1f);
       } else if (geometryType.equalsIgnoreCase("LineString") || geometryType.equalsIgnoreCase("MultiLineString")) {
         style = SLD.createLineStyle(color, 2.0f);
       } else {
