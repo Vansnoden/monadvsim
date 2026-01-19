@@ -98,7 +98,7 @@ public class Agent implements Serializable {
       this.alive = false;
     }
     
-    System.out.println("Agent Moved at: " + x + "," + y);
+    //System.out.println("Agent Moved at: " + x + "," + y);
   }
   
   
