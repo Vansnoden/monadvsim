@@ -289,6 +289,10 @@ public class MainController {
                 al.setWrapAround(d.isWrap()); 
                 al.setPopulation(d.getPopulation(), project); 
                 al.setBaseSpeed(d.getBaseSpeed());
+                al.setColorHex(d.getColorHex());
+            }
+            if(l instanceof VectorLayer vl){
+              vl.setColorHex(d.getColorHex());
             }
             refreshUI();
         }
