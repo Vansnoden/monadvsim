@@ -46,31 +46,59 @@ public class Agent implements Serializable {
  
   public void step(Project project, AgentLayer layer, Envelope bounds) {
     if (!alive) return;
-    double speed = layer.getPrimaryRule() != null ? layer.getPrimaryRule().getMaxSpeed() : 50;
-    double nextX = x + (vx * speed) + (Math.random() - 0.5) * (speed * 0.5);
-    double nextY = y + (vy * speed) + (Math.random() - 0.5) * (speed * 0.5);
+
+    // 1. Determine Speed
+    // Note: In WGS84, 0.5 is HUGE (approx 55km). 
+    // Try 0.0001 for visible movement at city scale.
+    double speed = (layer.getPrimaryRule() != null) 
+                 ? layer.getPrimaryRule().getMaxSpeed() 
+                 : layer.getBaseSpeed();
+
+    // 2. RECTILINEAR MOVEMENT: No "Wander" logic here.
+    // We keep vx/vy constant until a collision or boundary is hit.
+
+    // 3. Calculate Potential Next Position
+    double nextX = x + (vx * speed);
+    double nextY = y + (vy * speed);
+
+    // 4. WRAP AROUND (Teleportation)
     if (layer.isWrapAround()) {
       if (nextX < bounds.getMinX()) nextX = bounds.getMaxX();
-      if (nextX > bounds.getMaxX()) nextX = bounds.getMinX();
+      else if (nextX > bounds.getMaxX()) nextX = bounds.getMinX();
+      
       if (nextY < bounds.getMinY()) nextY = bounds.getMaxY();
-      if (nextY > bounds.getMaxY()) nextY = bounds.getMaxY();
+      else if (nextY > bounds.getMaxY()) nextY = bounds.getMinY();
+    } 
+    // 5. BOUNDARY BOUNCE (Keeps movement rectilinear)
+    else {
+      if (nextX < bounds.getMinX() || nextX > bounds.getMaxX()) {
+          vx *= -1; // Reflect X
+          nextX = x + (vx * speed); 
+      }
+      if (nextY < bounds.getMinY() || nextY > bounds.getMaxY()) {
+          vy *= -1; // Reflect Y
+          nextY = y + (vy * speed);
+      }
     }
+
+    // 6. TERRAIN VALIDATION
     if (layer.validateMovement(nextX, nextY)) {
       this.x = nextX;
       this.y = nextY;
-      if (layer.isTrailsEnabled()) {
-        history.add(new Point2D.Double(x, y));
-        if (history.size() > MAX_HISTORY) history.remove(0);
-      }
+      if (layer.isTrailsEnabled()) updateHistory();
     } else {
-      double angle = Math.random() * Math.PI * 2;
-      this.vx = Math.cos(angle);
-      this.vy = Math.sin(angle);
+      // HIT A RULE BARRIER: Reflect direction to stay rectilinear
+      vx *= -1;
+      vy *= -1;
     }
+
+    // 7. SURVIVAL CHECK
     Map<String, Object> env = layer.probeEnvironment(x, y, project);
     if (!layer.checkSurvival(env)) {
       this.alive = false;
     }
+    
+    System.out.println("Agent Moved at: " + x + "," + y);
   }
   
   

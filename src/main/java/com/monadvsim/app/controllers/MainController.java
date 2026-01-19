@@ -359,14 +359,20 @@ public class MainController {
 
   private void initSimulationClock() {
     simTimer = new Timer(16, e -> {
-      if (project == null || isBaking) return;
-      for (Layer l : project.getLayers()) {
-        if (l instanceof AgentLayer && l.isVisible()) {
-          AgentLayer al = (AgentLayer) l;
-          al.updateAll(project);
+        if (project == null || isBaking) return;
+        boolean needsRepaint = false;
+        for (Layer l : project.getLayers()) {
+            if (l instanceof AgentLayer al && l.isVisible()) {
+                al.updateAll(project);
+                needsRepaint = true;
+            }
         }
-      }
-      view.getSimulationCanvas().repaint();
+        if (needsRepaint) {
+            // This forces the Swing RepaintManager to prioritize the canvas
+            view.getSimulationCanvas().paintImmediately(0, 0, 
+                view.getSimulationCanvas().getWidth(), 
+                view.getSimulationCanvas().getHeight());
+        }
     });
   }
 
