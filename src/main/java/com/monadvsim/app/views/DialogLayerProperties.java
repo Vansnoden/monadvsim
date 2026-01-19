@@ -44,8 +44,12 @@ public class DialogLayerProperties extends JDialog {
         gbc.gridx = 1; nameField = new JTextField(layer.getName(), 15); 
         mainPanel.add(nameField, gbc);
         
-        gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("Opacity:"), gbc);
-        gbc.gridx = 1; opacitySlider = new JSlider(0, 100, (int)(layer.getOpacity() * 100)); 
+        gbc.gridx = 0; 
+        gbc.gridy++; 
+        JLabel opacityValLabel = new JLabel((int)(layer.getOpacity() * 100) + "%");
+        mainPanel.add(opacityValLabel, gbc);
+        gbc.gridx = 1; 
+        opacitySlider = new JSlider(0, 100, (int)(layer.getOpacity() * 100)); 
         mainPanel.add(opacitySlider, gbc);
         
         gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("Visible:"), gbc);
@@ -55,6 +59,10 @@ public class DialogLayerProperties extends JDialog {
         gbc.gridx = 0; gbc.gridy++; mainPanel.add(new JLabel("CRS:"), gbc);
         gbc.gridx = 1; crsBox = new JComboBox<>(new String[]{"EPSG:4326", "EPSG:3857"});
         crsBox.setSelectedItem(layer.getCrsCode()); mainPanel.add(crsBox, gbc);
+        
+        opacitySlider.addChangeListener(e -> {
+            opacityValLabel.setText(opacitySlider.getValue() + "%");
+        });
         
         // --- 2. Vector Specific properties ---
         if (layer instanceof VectorLayer vl){
@@ -161,7 +169,7 @@ public class DialogLayerProperties extends JDialog {
     public String getLayerName() { return nameField.getText().trim(); }
     
     
-    public float getOpacity() { return opacitySlider.getValue() / 100; }
+    public float getOpacity() { return opacitySlider.getValue() / 100.0f; }
     
     
     public boolean isVisible() { return visibleCheck.isSelected(); }
