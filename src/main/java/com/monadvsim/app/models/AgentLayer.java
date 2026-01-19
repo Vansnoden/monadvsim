@@ -23,12 +23,12 @@ public class AgentLayer extends Layer {
 
     private List<Agent> agents = new CopyOnWriteArrayList<>();
     @JsonProperty("baseSpeed")
-    private double baseSpeed = 0.05;
+    private double baseSpeed = 0.5;
     @JacksonXmlElementWrapper(localName = "rules")
     @JacksonXmlProperty(localName = "rule")
     @JsonProperty("rules")
     private List<AgentRule> rules = new CopyOnWriteArrayList<>();
-    private boolean wrapAround = true;
+    private boolean wrapAround = false;
     private String colorHex = "#00FF00";
     private boolean heatmapEnabled = false;
     private boolean trailsEnabled = false;

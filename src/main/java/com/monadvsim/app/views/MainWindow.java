@@ -30,6 +30,8 @@ import java.awt.Toolkit;
 import javax.swing.AbstractAction;
 import java.awt.event.ActionEvent;
 import java.awt.Color;
+import java.util.Collections;
+import javax.swing.DropMode;
 
 
 
@@ -204,8 +206,11 @@ public class MainWindow extends JFrame{
         treeRoot.add(new DefaultMutableTreeNode(layer));
       }
     }
-    ((DefaultTreeModel) layerTree.getModel()).reload();
-    for (int i = 0; i < layerTree.getRowCount(); i++) layerTree.expandRow(i);
+    DefaultTreeModel model = (DefaultTreeModel) layerTree.getModel();
+    model.nodeStructureChanged(treeRoot);
+    for (int i = 0; i < layerTree.getRowCount(); i++) {
+        layerTree.expandRow(i);
+    }
   }
   
 
