@@ -279,17 +279,20 @@ public class MainController {
         AgentLayer al = new AgentLayer(d.getLayerName()); 
         al.setWrapAround(d.isWrapAround());
         al.setPopulation(d.getPopulation(), project);
-        project.getLayers().add(al);
+        project.getLayers().add(0, al);
       } else {
         JFileChooser c = new JFileChooser();
         if (c.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
           Layer nl = d.getLayerType().equals("Vector Layer") ? 
             new VectorLayer(d.getLayerName(), c.getSelectedFile().getAbsolutePath()) :
             new RasterLayer(d.getLayerName(), c.getSelectedFile().getAbsolutePath());
-          project.getLayers().add(nl);
+          project.getLayers().add(0, nl);
         }
       }
       refreshUI();
+      SwingUtilities.invokeLater(() -> {
+        view.getSimulationCanvas().zoomToData();
+      });
     }
   }
 

@@ -24,7 +24,10 @@ import org.geotools.referencing.CRS;
 
 
 public class SimulationCanvas extends JMapPane {
-
+  
+  static {
+      System.setProperty("org.geotools.referencing.forceXY", "true");
+  }
 
   private List<Layer> internalLayers = new ArrayList<>();
   private String currentEpsgCode = "EPSG:4326"; // Store current CRS state
@@ -54,7 +57,7 @@ public class SimulationCanvas extends JMapPane {
     if (getMapContent() == null) return;
     try {
       this.currentEpsgCode = epsgCode;
-      CoordinateReferenceSystem crs = CRS.decode(epsgCode);
+      CoordinateReferenceSystem crs = CRS.decode(epsgCode, true);
       getMapContent().getViewport().setCoordinateReferenceSystem(crs);
       zoomToData();
       this.repaint();
