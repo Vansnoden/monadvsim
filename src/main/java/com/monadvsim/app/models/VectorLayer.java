@@ -17,20 +17,26 @@ import java.util.Collections;
 import java.awt.Color;
 
 
+
 public class VectorLayer extends Layer{
+
 
   private String colorHex = "#00FF00";
 
+
   public VectorLayer(){}
   
+  
   public VectorLayer(String name, String path) { super(name, path); }
+  
   
   public SimpleFeature getFeatureAt(Point point, File projectFile) {
     try {
       SimpleFeatureSource source = (SimpleFeatureSource) getFeatureSource(projectFile);
       if (source == null) return null;
       FilterFactory ff = CommonFactoryFinder.getFilterFactory();
-      Filter filter = ff.intersects(ff.property(source.getSchema().getGeometryDescriptor().getLocalName()), ff.literal(point));
+      Filter filter = ff.intersects(ff.property(source.getSchema()
+      .getGeometryDescriptor().getLocalName()), ff.literal(point));
       FeatureCollection<?, SimpleFeature> collection = source.getFeatures(filter);
       try (FeatureIterator<SimpleFeature> it = collection.features()) {
         if (it.hasNext()) return it.next();
@@ -39,7 +45,9 @@ public class VectorLayer extends Layer{
       return null;
   }
   
+  
   public String getColorHex() { return colorHex; }
+  
   
   @JsonIgnore
   public Object getFeatureSource(File projectFile) throws Exception {
@@ -50,6 +58,7 @@ public class VectorLayer extends Layer{
     return ds.getFeatureSource(ds.getTypeNames()[0]);
   }
   
+  
   @Override @JsonIgnore
   public org.geotools.map.Layer getGeoToolsLayer(File projectFile) {
     try {
@@ -58,11 +67,14 @@ public class VectorLayer extends Layer{
       Color color = Color.decode(colorHex);
       // Create a style based on the geometry type
       Style style;
-      String geometryType = source.getSchema().getGeometryDescriptor().getType().getBinding().getSimpleName();
-      if (geometryType.equalsIgnoreCase("Polygon") || geometryType.equalsIgnoreCase("MultiPolygon")) {
+      String geometryType = source.getSchema().getGeometryDescriptor()
+      .getType().getBinding().getSimpleName();
+      if (geometryType.equalsIgnoreCase("Polygon") 
+        || geometryType.equalsIgnoreCase("MultiPolygon")) {
         // Fill opacity (0.5) and color
         style = SLD.createPolygonStyle(Color.BLACK, color.darker(), 1f);
-      } else if (geometryType.equalsIgnoreCase("LineString") || geometryType.equalsIgnoreCase("MultiLineString")) {
+      } else if (geometryType.equalsIgnoreCase("LineString") 
+        || geometryType.equalsIgnoreCase("MultiLineString")) {
         style = SLD.createLineStyle(color, 2.0f);
       } else {
         // Fallback for Points
@@ -71,11 +83,13 @@ public class VectorLayer extends Layer{
       return new FeatureLayer(source, style);
     } catch (Exception e) { return null; }
   }
+  
 
   private File resolveFile(File projectFile) {
     File f = new File(getRelativePath());
     return f.isAbsolute() ? f : new File(projectFile.getParentFile(), getRelativePath());
   }
+  
   
   public void setColorHex(String colorHex) { this.colorHex = colorHex; }
   

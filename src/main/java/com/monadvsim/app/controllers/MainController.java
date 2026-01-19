@@ -14,11 +14,13 @@ import java.io.File;
 import java.util.List;
 import org.geotools.swing.tool.*;
 import org.geotools.api.data.SimpleFeatureSource;
-import org.geotools.data.simple.SimpleFeatureCollection; // Fixed Import for 34.1
+import org.geotools.data.simple.SimpleFeatureCollection;
 import org.geotools.api.feature.simple.SimpleFeature;
 import org.geotools.api.feature.type.AttributeDescriptor;
 import org.geotools.feature.FeatureIterator;
 import org.geotools.coverage.grid.GridCoverage2D;
+
+
 
 public class MainController {
 

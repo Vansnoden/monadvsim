@@ -19,9 +19,12 @@ import java.awt.Component;
 import javax.swing.JTree;
 
 
+
 public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {
+  
   private final JCheckBox checkBox = new JCheckBox();
   private final JLabel label = new JLabel();
+  
   
   public LayerTreeRenderer(){
     setLayout(new BorderLayout());
@@ -30,6 +33,7 @@ public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {
     add(checkBox, BorderLayout.WEST);
     add(label, BorderLayout.CENTER);
   }
+  
   
   @Override
   public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected, 
@@ -56,7 +60,8 @@ public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {
     }
     // 3. Handle Selection Colors
     if (selected) {
-      label.setForeground(tree.getSelectionModel().getSelectionPath() != null ? UIManager.getColor("Tree.selectionForeground") : tree.getForeground());
+      label.setForeground(tree.getSelectionModel().getSelectionPath() != null ? 
+      UIManager.getColor("Tree.selectionForeground") : tree.getForeground());
       this.setBackground(UIManager.getColor("Tree.selectionBackground"));
       this.setOpaque(true);
     } else {
@@ -65,6 +70,7 @@ public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {
     }
     return this;
   }
+  
   
   private ImageIcon loadIcon(String name){
     URL imageURL = getClass().getResource("/icons/" + name + ".png");

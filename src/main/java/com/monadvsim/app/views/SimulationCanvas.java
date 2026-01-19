@@ -21,10 +21,14 @@ import org.geotools.swing.tool.CursorTool;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 import org.geotools.referencing.CRS;
 
+
+
 public class SimulationCanvas extends JMapPane {
+
 
     private List<Layer> internalLayers = new ArrayList<>();
     private String currentEpsgCode = "EPSG:4326"; // Store current CRS state
+
 
     public SimulationCanvas() {
         this.setDoubleBuffered(true);
@@ -35,6 +39,7 @@ public class SimulationCanvas extends JMapPane {
         setupRenderer();
     }
 
+
     private void setupRenderer() {
         Map<String, Object> hints = new HashMap<>();
         hints.put("screenDevice", "true");
@@ -43,6 +48,7 @@ public class SimulationCanvas extends JMapPane {
         renderer.setRendererHints(hints);
         this.setRenderer(renderer);
     }
+    
 
     public void updateViewportCRS(String epsgCode) {
         if (getMapContent() == null) return;
@@ -56,6 +62,7 @@ public class SimulationCanvas extends JMapPane {
             System.err.println("CRS Update Failed: " + e.getMessage());
         }
     }
+    
 
     public void updateLayers(List<Layer> projectLayers, File projectFile) {
         this.internalLayers = projectLayers;
@@ -84,7 +91,8 @@ public class SimulationCanvas extends JMapPane {
                 }
             }
 
-            if (existingView == null || existingView.isEmpty() || Double.isNaN(existingView.getSpan(0))) {
+            if (existingView == null || existingView.isEmpty() 
+              || Double.isNaN(existingView.getSpan(0))) {
                 zoomToData();
             } else {
                 this.setDisplayArea(existingView);
@@ -92,6 +100,7 @@ public class SimulationCanvas extends JMapPane {
             this.repaint();
         });
     }
+    
 
     @Override
     protected void paintComponent(Graphics g) {
@@ -115,30 +124,25 @@ public class SimulationCanvas extends JMapPane {
             // Silently fail during window resizing
         }
     }
+    
 
     private void renderAgentLayer(Graphics2D g2d, AgentLayer al, AffineTransform worldToScreen) {
         Composite originalComposite = g2d.getComposite();
-        
         // Apply Global Layer Opacity
         if (al.getOpacity() < 1.0f) {
             g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, al.getOpacity()));
         }
-
         Color agentColor = Color.decode(al.getColorHex());
         List<Agent> agents = al.getAgents();
-        
         // Reusable point objects to reduce pressure on Garbage Collector
         Point2D worldPt = new Point2D.Double();
         Point2D screenPt = new Point2D.Double();
         Point2D p1 = new Point2D.Double();
         Point2D p2 = new Point2D.Double();
-
         int dotSize = 6;
-
         for (Agent a : agents) {
             worldPt.setLocation(a.getX(), a.getY());
             worldToScreen.transform(worldPt, screenPt);
-
             // Render Trails
             if (al.isTrailsEnabled()) {
                 List<Point2D.Double> history = a.getHistory();
@@ -146,26 +150,28 @@ public class SimulationCanvas extends JMapPane {
                 for (int i = 1; i < history.size(); i++) {
                     worldToScreen.transform(history.get(i - 1), p1);
                     worldToScreen.transform(history.get(i), p2);
-                    
                     // Fade trail based on age
                     float trailAlpha = (float) i / history.size();
-                    g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, al.getOpacity() * trailAlpha));
-                    
+                    g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 
+                    al.getOpacity() * trailAlpha));
                     g2d.drawLine((int)p1.getX(), (int)p1.getY(), (int)p2.getX(), (int)p2.getY());
                 }
                 // Reset composite for the main agent dot
-                g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, al.getOpacity()));
+                g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 
+                al.getOpacity()));
             }
-
             // Render Agent Dot
             g2d.setColor(Color.BLACK);
-            g2d.fillOval((int)screenPt.getX() - 1, (int)screenPt.getY() - 1, dotSize + 2, dotSize + 2);
+            g2d.fillOval((int)screenPt.getX() - 1, 
+            (int)screenPt.getY() - 1,
+            dotSize + 2, 
+            dotSize + 2);
             g2d.setColor(agentColor);
             g2d.fillOval((int)screenPt.getX(), (int)screenPt.getY(), dotSize, dotSize);
         }
-
         g2d.setComposite(originalComposite); // Restore
     }
+
 
     public void zoomToData() {
         MapContent content = getMapContent();
@@ -176,6 +182,7 @@ public class SimulationCanvas extends JMapPane {
             }
         }
     }
+
 
     public void setActiveTool(CursorTool tool) {
         super.setCursorTool(tool);

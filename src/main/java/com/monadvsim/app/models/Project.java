@@ -7,6 +7,7 @@ import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.dataformat.xml.annotation.*;
 
 
+
 @JacksonXmlRootElement(localName = "monadProject")
 @JsonIgnoreProperties(ignoreUnknown = true)
 public class Project{
@@ -19,41 +20,51 @@ public class Project{
   @JacksonXmlProperty(localName = "layer")
   private List<Layer> layers = new ArrayList<>();
   @JsonIgnore
-  private transient File projectFile = null; // transient ensures Java's default serializer ignores it
+  private transient File projectFile = null;
+  
   
   public Project(){}
+  
   
   public String getName(){ 
     return this.name; 
   }
   
+  
   public void setName(String name){ 
     this.name=name; 
   }
+  
   
   @JsonIgnore
   public void setProjectFile(File newFile){
     this.projectFile = newFile;
   }
 
+
   public String getCrs(){
     return crs; 
   }
+  
   
   public String getCrsCode(){
     return crs; 
   }
   
+  
   public void setCrs(String crs){ 
     this.crs=crs;
   }
+  
   
   public void setCrsCode(String crs){ 
     this.crs=crs;
   }
 
+
   @JsonIgnore
   public File getProjectFile() { return projectFile; }
+  
   
   public List<Layer> getLayers() { 
     if (layers == null) {
@@ -62,8 +73,8 @@ public class Project{
     return layers; 
   }
   
+  
   public void setLayers(List<Layer> layers) { 
     this.layers = layers; 
-  }
-  
+  } 
 }

@@ -35,6 +35,7 @@ import java.awt.Color;
 
 public class MainWindow extends JFrame{
   
+  
   private Project project=null;
   private JSplitPane splitPane=null;
   private JPanel content=null, optionsPanel=null, canvasPanel=null, statusBar=null;
@@ -55,6 +56,7 @@ public class MainWindow extends JFrame{
   private JLabel lblCoordinates;
   private JLabel lblCRS;
   
+  
   public MainWindow(){
     this.setTitle("MonadVSIM");
     this.initComponents();
@@ -65,88 +67,127 @@ public class MainWindow extends JFrame{
     this.setDefaultCloseOperation(EXIT_ON_CLOSE);
   }
   
-  // Getters and Setters
+  
   public void setProjectModel(Project project){ 
     this.project = project;
   }
   
+  
   public JSplitPane getSplitPane(){ return this.splitPane; }
+  
   
   public JPanel getContentPanel(){ return this.content; }
   
+  
   public JPanel getOptionsPanel(){ return this.optionsPanel; }
+  
   
   public JPanel getCanvasPanel(){ return this.canvasPanel; }
   
+  
   public JPanel getStatusBar(){ return this.statusBar; }
+  
   
   public JToolBar getToolbar(){ return this.toolbar; }
   
+  
   public JButton getBtnNewProject(){ return this.btnNewProject; } 
+  
   
   public JButton getBtnOpenProject(){ return this.btnOpenProject; }
   
+  
   public JButton getBtnSaveProject(){ return this.btnSaveProject; }
+  
   
   public JButton getBtnAddLayer(){ return this.btnAddLayer; }
   
+  
   public JButton getBtnPanview(){ return this.btnPanview; } 
+  
   
   public JButton getBtnZoomIn(){ return this.btnZoomIn; }
   
+  
   public JButton getBtnZoomOut(){ return this.btnZoomOut; }
+  
   
   public JButton getBtnFullview(){ return this.btnFullview; }
   
+  
   public JButton getBtnRunSim(){ return this.btnRun; }
+  
   
   public JButton getBtnPauseSim(){ return this.btnPause; }
   
+  
   public JMenuBar getJMenuBar(){ return this.menuBar; }
+  
   
   public JMenu getProjectMenu(){ return this.projectMenu; }
   
+  
   public JMenu getLayerMenu(){ return this.layerMenu; }
+  
   
   public JMenu getHelpMenu(){ return this.helpMenu; }
   
+  
   public JMenuItem getNewProjectMenuItem(){ return this.newProjectMenuItem; }
+  
   
   public JMenuItem getSaveProjectMenuItem(){ return this.saveProjectMenuItem; }
   
+  
   public JMenuItem getSaveAsProjectMenuItem(){ return this.saveAsProjectMenuItem; }
+  
   
   public JMenuItem getProjectPropertiesMenuItem(){ return this.projectPropertiesMenuItem; }
   
+  
   public JMenuItem getProjectExportMenuItem(){ return this.projectExportMenuItem; }
+  
   
   public JMenuItem getExportProjectMenuItem(){ return this.exportProjectMenuItem; }
   
+  
   public JMenuItem getQuitMenuItem(){ return this.quitMenuItem; }
+  
   
   public JMenuItem getAddLayerMenuItem(){ return this.addLayerMenuItem; }
   
+  
   public JMenuItem getRemoveLayerMenuItem(){ return this.removeLayerMenuItem; }
+  
   
   public JMenuItem getDocumentationMenuItem(){ return this.documentationMenuItem; }
   
+  
   public JMenuItem getDonationMenuItem(){ return this.donationMenuItem; }
+  
   
   public JMenu getRecentProjectsMenu(){ return this.recentProjectsMenu; }
   
+  
   public JTree getLayerTree() { return layerTree; }
+  
   
   public SimulationCanvas getSimulationCanvas() { return this.simCanvas; }
   
+  
   public JProgressBar getProgressBar(){ return this.progressBar; }
+  
   
   public JLabel getLblCoordinates() { return lblCoordinates; }
   
+  
   public JLabel getLblCRS() { return lblCRS; }
+  
   
   public void setStatusBarCRS(String crs) {
     if (lblCRS != null) lblCRS.setText("System: " + crs);
   }
+  
   
   public void setProjectNameInTree(String name) {
     if (treeRoot != null && layerTree != null) {
@@ -154,6 +195,7 @@ public class MainWindow extends JFrame{
       ((DefaultTreeModel) layerTree.getModel()).nodeChanged(treeRoot);
     }
   }
+  
   
   public void updateLayerTree(List<Layer> layers) {
     treeRoot.removeAllChildren();
@@ -165,6 +207,7 @@ public class MainWindow extends JFrame{
     ((DefaultTreeModel) layerTree.getModel()).reload();
     for (int i = 0; i < layerTree.getRowCount(); i++) layerTree.expandRow(i);
   }
+  
 
   public void refreshCanvas() {
     if (this.simCanvas != null && project != null) {
@@ -172,7 +215,6 @@ public class MainWindow extends JFrame{
     }
   }
   
-  // Private functions
   
   private void setupShortcuts() {
     KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
@@ -182,10 +224,12 @@ public class MainWindow extends JFrame{
     });
   }
   
+  
   private void initComponents(){
     this.initMenu();
     this.initContentPanel();
   }
+  
   
   private void initMenu(){
     this.menuBar = new JMenuBar();
@@ -195,6 +239,7 @@ public class MainWindow extends JFrame{
     this.setJMenuBar(menuBar);
   }
   
+  
   private void initProjectMenu(){
     this.projectMenu = new JMenu("Project");
     this.recentProjectsMenu = new JMenu("Recent Projects");
@@ -202,6 +247,7 @@ public class MainWindow extends JFrame{
     this.addProjectMenuItems();
     this.menuBar.add(this.projectMenu);
   }
+  
   
   private void initProjectMenuItems(){
     this.newProjectMenuItem = new JMenuItem("New");
@@ -211,6 +257,7 @@ public class MainWindow extends JFrame{
     this.exportProjectMenuItem = new JMenuItem("Export");
     this.quitMenuItem = new JMenuItem("Quit");
   }
+  
   
   private void addProjectMenuItems(){
     this.projectMenu.add(this.newProjectMenuItem);
@@ -225,6 +272,7 @@ public class MainWindow extends JFrame{
     this.projectMenu.add(this.quitMenuItem);
   }
   
+  
   private void initLayerMenu(){
     this.layerMenu = new JMenu("Layer");
     this.initLayerMenuItems();
@@ -232,15 +280,18 @@ public class MainWindow extends JFrame{
     this.menuBar.add(this.layerMenu);
   }
   
+  
   private void initLayerMenuItems(){
     this.addLayerMenuItem = new JMenuItem("Add Layer");
     this.removeLayerMenuItem = new JMenuItem("Remove Layer");
   }
   
+  
   private void addLayerMenuItems(){
     this.layerMenu.add(this.addLayerMenuItem);
     this.layerMenu.add(this.removeLayerMenuItem);
   }
+  
   
   private void initHelpMenu(){
     this.helpMenu = new JMenu("Help");
@@ -249,20 +300,24 @@ public class MainWindow extends JFrame{
     this.menuBar.add(this.helpMenu);
   }
   
+  
   private void initHelpMenuItems(){
     this.documentationMenuItem = new JMenuItem("Documentation");
     this.donationMenuItem = new JMenuItem("Donate!");
   }
+  
   
   private void addHelpMenuItem(){
     this.helpMenu.add(this.documentationMenuItem);
     this.helpMenu.add(this.donationMenuItem);
   }
   
+  
   private ImageIcon loadIcon(String name){
     URL imageURL = getClass().getResource("/icons/" + name + ".png");
     return (imageURL != null)? new ImageIcon(imageURL) : null;
   }
+  
   
   private void initContentPanel(){
     this.content = new JPanel();
@@ -280,6 +335,7 @@ public class MainWindow extends JFrame{
     this.add(this.content);
   }
   
+  
   private void initToolbar(){
     this.toolbar = new JToolBar();
     this.initToolButtons();
@@ -287,6 +343,7 @@ public class MainWindow extends JFrame{
     this.toolbar.setFloatable(false);
     this.content.add(this.toolbar, BorderLayout.NORTH);
   }
+  
   
   private void initToolButtons(){
     this.btnNewProject = new JButton(loadIcon("new"));
@@ -302,6 +359,7 @@ public class MainWindow extends JFrame{
     this.initToolButtonsTooltipText();
   }
   
+  
   private void initToolButtonsTooltipText(){
     this.btnNewProject.setToolTipText("New Project");
     this.btnOpenProject.setToolTipText("Open Project");
@@ -314,6 +372,7 @@ public class MainWindow extends JFrame{
     this.btnRun.setToolTipText("Run Simulation");
     this.btnPause.setToolTipText("Pause Simulation");
   }
+  
   
   private void addToolButtonsToToolbar(){
     this.toolbar.add(this.btnNewProject);
@@ -330,11 +389,13 @@ public class MainWindow extends JFrame{
     this.toolbar.add(this.btnPause);
   }
   
+  
   private void initOptionsPanel(){
     this.optionsPanel = new JPanel(new BorderLayout());
     this.optionsPanel.setPreferredSize(new Dimension(200, 0));
     this.initProjectExplorer();
   }
+  
   
   private void initProjectExplorer(){
     this.treeRoot = new DefaultMutableTreeNode("Layers");
@@ -346,6 +407,7 @@ public class MainWindow extends JFrame{
     this.optionsPanel.add(treePanel, BorderLayout.CENTER);
   }
   
+  
   private void initCanvasPanel(){
     this.canvasPanel = new JPanel(new BorderLayout());
     this.canvasPanel.setPreferredSize(new Dimension(700, 0));
@@ -353,9 +415,11 @@ public class MainWindow extends JFrame{
     this.canvasPanel.add(this.simCanvas, BorderLayout.CENTER);
   }
   
+  
   private void initSimCanvas(){
     this.simCanvas = new SimulationCanvas();
   }
+  
   
   private void initStatusBar(){
     this.statusBar = new JPanel(new BorderLayout());
