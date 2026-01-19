@@ -9,14 +9,19 @@ import java.awt.*;
 import java.awt.geom.AffineTransform;
 import java.awt.geom.Point2D;
 import java.util.List;
+import org.locationtech.jts.geom.Envelope;
+
 
 
 public class FastAgentLayer extends DirectLayer {
+
   private final AgentLayer agentLayer;
+
 
   public FastAgentLayer(AgentLayer al) {
     this.agentLayer = al;
   }
+
 
   @Override
   public void draw(Graphics2D g2d, MapContent map, MapViewport viewport) {
@@ -41,7 +46,8 @@ public class FastAgentLayer extends DirectLayer {
           g2d.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, opacity));
       }
       if (agentLayer.isTrailsEnabled()) {
-        g2d.setColor(new Color(agentColor.getRed(), agentColor.getGreen(), agentColor.getBlue(), 100));
+        g2d.setColor(new Color(agentColor.getRed(), 
+        agentColor.getGreen(), agentColor.getBlue(), 100));
         List<Point2D.Double> history = a.getHistory();
         for (int i = 1; i < history.size(); i++) {
           Point2D.Double p1 = history.get(i - 1);
@@ -60,10 +66,12 @@ public class FastAgentLayer extends DirectLayer {
     }
   }
 
+
   @Override
   public ReferencedEnvelope getBounds() {
     CoordinateReferenceSystem crs = agentLayer.getCoordinateReferenceSystem();
-    org.locationtech.jts.geom.Envelope env = new org.locationtech.jts.geom.Envelope(-180, 180, -90, 90);
+    Envelope env = new org.locationtech.jts.geom.Envelope(-180, 180, -90, 90);
     return new ReferencedEnvelope(env, crs);
   }
+  
 }

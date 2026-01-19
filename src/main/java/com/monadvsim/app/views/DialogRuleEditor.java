@@ -6,7 +6,10 @@ import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.util.Map;
 
+
+
 public class DialogRuleEditor extends JDialog {
+
     private final AgentLayer agentLayer;
     private final Project project;
     private JTable movementTable, rasterTable;
@@ -15,6 +18,7 @@ public class DialogRuleEditor extends JDialog {
     private JList<String> ruleList;
     private DefaultListModel<String> ruleListModel;
     private int selectedRuleIndex = 0;
+
 
     public DialogRuleEditor(JFrame parent, AgentLayer layer, Project project) {
         super(parent, "Rule Manager: " + layer.getName(), true);
@@ -29,6 +33,7 @@ public class DialogRuleEditor extends JDialog {
         setSize(750, 550);
         setLocationRelativeTo(parent);
     }
+
 
     private void initComponents() {
         setLayout(new BorderLayout(10, 10));
@@ -48,7 +53,11 @@ public class DialogRuleEditor extends JDialog {
 
         JPanel ruleButtons = new JPanel(new GridLayout(1, 2));
         JButton btnAdd = new JButton("Add"), btnDel = new JButton("Remove");
-        btnAdd.addActionListener(e -> { agentLayer.addRule(new AgentRule()); refreshRuleList(); ruleList.setSelectedIndex(agentLayer.getRules().size()-1); });
+        btnAdd.addActionListener(e -> { 
+          agentLayer.addRule(new AgentRule()); 
+          refreshRuleList(); 
+          ruleList.setSelectedIndex(agentLayer.getRules().size()-1); 
+        });
         btnDel.addActionListener(e -> {
             int idx = ruleList.getSelectedIndex();
             if (idx >= 0 && agentLayer.getRules().size() > 1) {
@@ -64,33 +73,41 @@ public class DialogRuleEditor extends JDialog {
         JPanel centerPanel = new JPanel(new BorderLayout(5, 5));
         JPanel topSettings = new JPanel(new FlowLayout(FlowLayout.LEFT));
         topSettings.add(new JLabel("Base Speed (units/tick):"));
-        speedSpinner = new JSpinner(new SpinnerNumberModel(agentLayer.getBaseSpeed(), 0.0, 1000.0, 0.01));
+        speedSpinner = new JSpinner(new SpinnerNumberModel(agentLayer.getBaseSpeed(), 
+        0.0, 1000.0, 0.01));
         topSettings.add(speedSpinner);
         centerPanel.add(topSettings, BorderLayout.NORTH);
 
         JTabbedPane tabs = new JTabbedPane();
         movementTableModel = new DefaultTableModel(new Object[]{"Terrain Type", "Traversable"}, 0) {
-            @Override public Class<?> getColumnClass(int col) { return col == 1 ? Boolean.class : String.class; }
+            @Override 
+            public Class<?> getColumnClass(int col) { 
+              return col == 1 ? Boolean.class : String.class; 
+            }
         };
         movementTable = new JTable(movementTableModel);
         tabs.addTab("Movement/Terrain", new JScrollPane(movementTable));
 
-        rasterTableModel = new DefaultTableModel(new Object[]{"Raster Layer", "Lethal if Value >"}, 0);
+        rasterTableModel = new DefaultTableModel(new Object[]{"Raster Layer", "Lethal if Value >"},
+        0);
         rasterTable = new JTable(rasterTableModel);
         tabs.addTab("Environmental Risks", new JScrollPane(rasterTable));
         centerPanel.add(tabs, BorderLayout.CENTER);
         add(centerPanel, BorderLayout.CENTER);
-
         JButton btnApply = new JButton("Save & Close");
         btnApply.addActionListener(e -> { saveCurrentToMemory(); dispose(); });
         JPanel bp = new JPanel(new FlowLayout(FlowLayout.RIGHT)); bp.add(btnApply);
         add(bp, BorderLayout.SOUTH);
     }
 
+
     private void refreshRuleList() {
         ruleListModel.clear();
-        for (int i = 0; i < agentLayer.getRules().size(); i++) ruleListModel.addElement("Rule #" + (i + 1));
+        for (int i = 0; i < agentLayer.getRules().size(); i++) {
+          ruleListModel.addElement("Rule #" + (i + 1));
+        }
     }
+    
 
     private void loadRuleData(int index) {
         if (index < 0 || index >= agentLayer.getRules().size()) return;
@@ -105,8 +122,10 @@ public class DialogRuleEditor extends JDialog {
         }
         rasterTableModel.setRowCount(0);
         project.getLayers().stream().filter(l -> l instanceof RasterLayer).forEach(rl -> 
-            rasterTableModel.addRow(new Object[]{rl.getName(), rule.getLethalMaxThresholds().getOrDefault(rl.getName(), 100.0)}));
+            rasterTableModel.addRow(new Object[]{rl.getName(), 
+            rule.getLethalMaxThresholds().getOrDefault(rl.getName(), 100.0)}));
     }
+
 
     private void saveCurrentToMemory() {
         if (selectedRuleIndex < 0 || selectedRuleIndex >= agentLayer.getRules().size()) return;
@@ -117,19 +136,25 @@ public class DialogRuleEditor extends JDialog {
         agentLayer.setBaseSpeed(speed);
 
         for (int i = 0; i < movementTableModel.getRowCount(); i++)
-            rule.setBehavior((String)movementTableModel.getValueAt(i,0), (Boolean)movementTableModel.getValueAt(i,1));
+            rule.setBehavior((String)movementTableModel.getValueAt(i,0), 
+            (Boolean)movementTableModel.getValueAt(i,1));
 
         for (int i = 0; i < rasterTableModel.getRowCount(); i++) {
-            try { rule.getLethalMaxThresholds().put((String)rasterTableModel.getValueAt(i,0), Double.parseDouble(rasterTableModel.getValueAt(i,1).toString())); } 
+            try { rule.getLethalMaxThresholds().put((String)rasterTableModel.getValueAt(i,0), 
+            Double.parseDouble(rasterTableModel.getValueAt(i,1).toString())); } 
             catch (Exception ignored) {}
         }
     }
+
 
     private void stopEditing() {
         try { speedSpinner.commitEdit(); } catch (Exception ignored) {}
         if (movementTable.isEditing()) movementTable.getCellEditor().stopCellEditing();
         if (rasterTable.isEditing()) rasterTable.getCellEditor().stopCellEditing();
     }
+    
 
-    public double getBaseSpeed() { return ((Number) speedSpinner.getValue()).doubleValue(); }
+    public double getBaseSpeed() { 
+      return ((Number) speedSpinner.getValue()).doubleValue(); 
+    }
 }
