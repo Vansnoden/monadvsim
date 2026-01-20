@@ -358,8 +358,45 @@ public class MainController {
     } else cb.run();
   }
   
+  
+  private void manageSimulationMemory() {
+      Runtime runtime = Runtime.getRuntime();
+      long usedMemory = runtime.totalMemory() - runtime.freeMemory();
+      long maxMemory = runtime.maxMemory();
+      
+      // If we're using more than 70% of max memory, trigger GC and slow down
+      if ((double) usedMemory / maxMemory > 0.7) {
+          System.gc();
+          
+          // Slow down simulation if memory is high
+          if (  simTimer != null &&   simTimer.getDelay() < 500) {
+                simTimer.setDelay(500);
+              System.out.println("Memory high, slowing simulation to 2 FPS");
+          }
+      } else if ((double) usedMemory / maxMemory < 0.3) {
+          // Speed up if memory is low
+          if (  simTimer != null &&   simTimer.getDelay() > 100) {
+                simTimer.setDelay(100);
+              System.out.println("Memory good, speeding simulation to 10 FPS");
+          }
+      }
+  }
 
+  
   private void initSimulationClock() {
+      simTimer = new Timer(100, e -> {
+          manageSimulationMemory(); // Add this line
+          for (Layer layer : project.getLayers()) {
+              if (layer instanceof AgentLayer agentLayer && agentLayer.isVisible()) {
+                  agentLayer.updateAll(project);
+              }
+          }
+          view.refreshCanvas();
+      });
+  }
+  
+
+  /*private void initSimulationClock() {
     simTimer = new Timer(16, e -> {
         if (project == null || isBaking) return;
         boolean needsRepaint = false;
@@ -376,7 +413,7 @@ public class MainController {
                 view.getSimulationCanvas().getHeight());
         }
     });
-  }
+  }*/
 
 
   private void handleSaveProject() {

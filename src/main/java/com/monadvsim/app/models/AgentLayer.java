@@ -112,10 +112,35 @@ public class AgentLayer extends Layer {
   }
   
 
-  public void updateAll(Project project) {
+  /*public void updateAll(Project project) {
     Envelope bounds = getSimulationExtent(project);
     agents.parallelStream().forEach(a -> a.step(project, this, bounds));
     agents.removeIf(a -> !a.isAlive());
+  }*/
+  
+  public void updateAll(Project project) {
+    Envelope bounds = getSimulationExtent(project);
+    // Process in batches to reduce memory pressure
+    int batchSize = 1000;
+    int totalAgents = agents.size();
+
+    for (int start = 0; start < totalAgents; start += batchSize) {
+      int end = Math.min(start + batchSize, totalAgents);
+      List<Agent> batch = agents.subList(start, end);
+      
+      // Process batch
+      for (Agent a : batch) {
+        a.step(project, this, bounds);
+      }
+      
+      // Remove dead agents from this batch
+      batch.removeIf(a -> !a.isAlive());
+      
+      // Give GC a chance
+      if (start % (batchSize * 10) == 0) {
+        System.gc();
+      }
+    }
   }
   
 
