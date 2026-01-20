@@ -89,7 +89,8 @@ public class MainController {
           recentService.addProject(file); 
           updateRecentMenu();
           view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
-          refreshUI(); view.setProjectNameInTree(project.getName());
+          refreshUI(); 
+          view.setProjectNameInTree(project.getName());
           view.setTitle("MonadVSIM - " + project.getName());
           view.getSimulationCanvas().zoomToData();
         } catch (Exception ex) { 

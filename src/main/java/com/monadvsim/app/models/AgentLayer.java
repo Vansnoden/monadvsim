@@ -51,11 +51,33 @@ public class AgentLayer extends Layer {
   }
   
   
+  private String detectTerrainAt(double x, double y) {
+    // First check terrain cache
+    if (terrainCache != null && cacheBounds != null) {
+      int col = (int) ((x - cacheBounds.getMinX()) / gridResX);
+      int row = (int) ((y - cacheBounds.getMinY()) / gridResY);
+
+      if (col >= 0 && col < terrainCache.length && 
+        row >= 0 && row < terrainCache[0].length) {
+        byte terrainId = terrainCache[col][row];
+        return terrainLookup.getOrDefault(terrainId, "empty");
+      }
+    }
+    return "empty"; // Default terrain
+  }
+  
+  
   public boolean validateMovement(double x, double y) {
-    // If there are no rules, everything is allowed (Default Wandering)
     if (rules.isEmpty()) return true;
-    String terrainType = fastDetectTerrain(x, y);
-    return rules.stream().allMatch(r -> r.isAllowed(terrainType));
+    // Detect terrain at target location
+    String terrainType = detectTerrainAt(x, y);
+    // Check all rules
+    for (AgentRule rule : rules) {
+      if (!rule.isAllowed(terrainType)) {
+        return false;
+      }
+    }
+    return true;
   }
 
 
@@ -245,9 +267,24 @@ public class AgentLayer extends Layer {
     this.baseSpeed = baseSpeed; 
   }
   
-  
+  @JsonProperty("agents")
+  @JacksonXmlElementWrapper(localName = "agents")
+  @JacksonXmlProperty(localName = "agent")
   public List<Agent> getAgents() { 
     return agents; 
+  }
+  
+  @JsonProperty("agents")
+  public void setAgents(List<Agent> agents) {
+    if (agents != null) {
+      this.agents = new CopyOnWriteArrayList<>(agents);
+      // Reinitialize agent history if needed
+      for (Agent agent : this.agents) {
+        if (agent.getHistory() == null) {
+          agent.getHistory(); // Initialize empty history
+        }
+      }
+    }
   }
   
   
@@ -302,22 +339,28 @@ public class AgentLayer extends Layer {
     return terrainCache; 
   }
   
+  
   @JsonIgnore
   public Map<String, Object> probeEnvironment(double x, double y, Project project) {
-    Map<String, Object> environmentReadings = new HashMap<>();
+    Map<String, Object> environment = new HashMap<>();
     for (Layer l : project.getLayers()) {
-      if (l instanceof RasterLayer rl && rl.isVisible()) {
+        if (!l.isVisible()) continue;
         try {
-          Object value = rl.getValueAt(x, y, project.getProjectFile());
-          if (value != null) {
-            environmentReadings.put(rl.getName(), value);
-          }
+            if (l instanceof RasterLayer rl) {
+                Double value = rl.getValueAt(x, y, project.getProjectFile());
+                if (value != null) {
+                    environment.put(rl.getName(), value);
+                }
+            } 
+            else if (l instanceof VectorLayer vl) {
+                String terrain = EnvironmentService.detectTerrainAt(vl, x, y, 
+                                                                  project.getProjectFile());
+                environment.put(vl.getName(), terrain);
+            }
         } catch (Exception e) {
-          System.err.println("Could not probe layer: " 
-          + rl.getName() + " at " + x + "," + y);
+            System.err.println("Error probing " + l.getName() + ": " + e.getMessage());
         }
-      }
     }
-    return environmentReadings;
+    return environment;
   }
 }
