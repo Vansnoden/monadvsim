@@ -95,6 +95,7 @@ public class MainController {
           view.getSimulationCanvas().zoomToData();
         } catch (Exception ex) { 
           JOptionPane.showMessageDialog(view, "Load failed: " + ex.getMessage()); 
+          ex.printStackTrace();
         }
         finally { 
           loading.dispose(); 
