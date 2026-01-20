@@ -201,7 +201,14 @@
             <version>3.5.0</version>
             <configuration>
                 <mainClass>com.monadvsim.app.App</mainClass> 
-                <commandlineArgs>--add-opens java.base/java.lang=ALL-UNNAMED -Xmx2g -XX:+UseG1GC -XX:+DisableExplicitGC</commandlineArgs>
+                <commandlineArgs>
+                  --add-opens java.base/java.lang=ALL-UNNAMED 
+                  -Xmx4g 
+                  -Xms2g 
+                  -XX:+UseG1GC 
+                  -XX:+UseStringDeduplication 
+                  -XX:MaxGCPauseMillis=200
+                </commandlineArgs>
             </configuration>
         </plugin>
       </plugins>

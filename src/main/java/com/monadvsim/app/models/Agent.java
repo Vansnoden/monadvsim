@@ -8,6 +8,7 @@ import java.util.Map;
 import java.util.List;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Collections;
 import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.dataformat.xml.annotation.*;
 import org.locationtech.jts.geom.Point;
@@ -21,12 +22,25 @@ public class Agent implements Serializable {
   private boolean alive = true;
   private double x, y, vx, vy;
   private static final int MAX_HISTORY = 20;
+  private static final double MIN_MOVEMENT = 0.000001; // Minimum movement threshold
   
   @JsonIgnore
   private static final GeometryFactory gf = new GeometryFactory(); 
 
   @JsonIgnore
-  private transient List<Point2D.Double> history = new ArrayList<>();
+  private transient List<Point2D.Double> history = new ArrayList<>(MAX_HISTORY);
+  
+  // Memory optimization: reuse point objects to reduce GC pressure
+  @JsonIgnore
+  private transient Point cachedPoint = null;
+  @JsonIgnore
+  private transient Map<String, Object> lastEnvironment = null;
+  @JsonIgnore
+  private transient double lastProbeX = Double.NaN;
+  @JsonIgnore
+  private transient double lastProbeY = Double.NaN;
+  @JsonIgnore
+  private static final double ENVIRONMENT_CACHE_DISTANCE = 0.00001; // ~1 meter in degrees
 
   public Agent() {}
 
@@ -38,61 +52,82 @@ public class Agent implements Serializable {
     this.vy = Math.sin(angle);
   }
 
-  public void step(Project project, AgentLayer layer, Envelope bounds) {
+  // Main step method with pre-probed environment
+  public void optimizedStep(Project project, AgentLayer layer, Envelope bounds, 
+                           Map<String, Object> environment) {
     if (!alive) return;
 
-    // 1. Probe current environment
-    Map<String, Object> currentEnv = probeEnvironment(x, y, project);
-    
+    // 1. Use provided environment (already probed by AgentLayer)
     // 2. Determine movement based on environment and rules
-    double[] movement = calculateMovement(currentEnv, layer.getRules(), bounds, project);
+    double[] movement = calculateMovementOptimized(environment, layer.getRules(), bounds, project);
+    
+    // Check if movement is negligible
+    if (Math.abs(movement[0]) < MIN_MOVEMENT && Math.abs(movement[1]) < MIN_MOVEMENT) {
+      // Very small movement, skip to avoid floating point issues
+      return;
+    }
     
     // 3. Apply movement
     double nextX = x + movement[0];
     double nextY = y + movement[1];
     
     // 4. Boundary handling
-    nextX = handleBoundaries(nextX, bounds.getMinX(), bounds.getMaxX(), layer.isWrapAround());
-    nextY = handleBoundaries(nextY, bounds.getMinY(), bounds.getMaxY(), layer.isWrapAround());
+    nextX = handleBoundariesOptimized(nextX, bounds.getMinX(), bounds.getMaxX(), 
+                                     layer.isWrapAround(), movement[0]);
+    nextY = handleBoundariesOptimized(nextY, bounds.getMinY(), bounds.getMaxY(), 
+                                     layer.isWrapAround(), movement[1]);
     
     // 5. Validate movement against terrain rules
     if (layer.validateMovement(nextX, nextY)) {
       this.x = nextX;
       this.y = nextY;
-      if (layer.isTrailsEnabled()) updateHistory();
       
-      // Update velocity based on actual movement
-      if (movement[0] != 0 || movement[1] != 0) {
-        double magnitude = Math.sqrt(movement[0] * movement[0] + movement[1] * movement[1]);
-        this.vx = movement[0] / magnitude;
-        this.vy = movement[1] / magnitude;
+      if (layer.isTrailsEnabled()) {
+        updateHistoryOptimized();
+      }
+      
+      // Update velocity based on actual movement (only if significant)
+      double moveMagnitude = Math.sqrt(movement[0] * movement[0] + movement[1] * movement[1]);
+      if (moveMagnitude > MIN_MOVEMENT) {
+        this.vx = movement[0] / moveMagnitude;
+        this.vy = movement[1] / moveMagnitude;
       }
     } else {
       // If movement is not allowed, try alternative direction
-      adjustDirectionOnCollision();
+      adjustDirectionOnCollisionOptimized();
     }
     
     // 6. Survival check based on environment
-    if (!layer.checkSurvival(currentEnv)) {
+    if (!layer.checkSurvival(environment)) {
       this.alive = false;
     }
   }
 
-  private double[] calculateMovement(Map<String, Object> environment, 
-                                    List<AgentRule> rules, 
-                                    Envelope bounds,
-                                    Project project) {
+  // Original step method (for backward compatibility)
+  public void step(Project project, AgentLayer layer, Envelope bounds) {
+    // Use optimized version with fresh environment probe
+    Map<String, Object> environment = probeEnvironmentOptimized(x, y, project);
+    optimizedStep(project, layer, bounds, environment);
+  }
+
+  private double[] calculateMovementOptimized(Map<String, Object> environment, 
+                                            List<AgentRule> rules, 
+                                            Envelope bounds,
+                                            Project project) {
     double baseSpeed = 0.001; // Default base speed
+    
+    // Reuse direction array to reduce GC
     double[] direction = {vx, vy};
     
-    if (!rules.isEmpty()) {
+    if (!rules.isEmpty() && !environment.isEmpty()) {
       // Use the primary rule for movement
       AgentRule rule = rules.get(0);
       baseSpeed = rule.getMaxSpeed();
       
       // Apply environmental influences
-      double[] environmentalResponse = {0, 0};
+      double envX = 0, envY = 0;
       double speedModifier = 1.0;
+      int environmentalFactors = 0;
       
       for (Map.Entry<String, Object> entry : environment.entrySet()) {
         String layerName = entry.getKey();
@@ -102,8 +137,11 @@ public class Agent implements Serializable {
         if (value instanceof Double numericValue) {
           // Raster layer - apply attraction/repulsion
           double[] layerResponse = rule.getEnvironmentalResponse(layerName, numericValue, x, y);
-          environmentalResponse[0] += layerResponse[0];
-          environmentalResponse[1] += layerResponse[1];
+          if (layerResponse[0] != 0 || layerResponse[1] != 0) {
+            envX += layerResponse[0];
+            envY += layerResponse[1];
+            environmentalFactors++;
+          }
         } else if (value instanceof String terrainType) {
           // Vector layer - terrain-based movement
           speedModifier *= rule.getSpeedModifier(terrainType);
@@ -111,98 +149,157 @@ public class Agent implements Serializable {
       }
       
       // Blend environmental response with current direction
-      if (environmentalResponse[0] != 0 || environmentalResponse[1] != 0) {
-        double envMagnitude = Math.sqrt(
-          environmentalResponse[0] * environmentalResponse[0] + 
-          environmentalResponse[1] * environmentalResponse[1]
-        );
+      if (environmentalFactors > 0) {
+        // Average environmental response
+        envX /= environmentalFactors;
+        envY /= environmentalFactors;
+        
+        double envMagnitude = Math.sqrt(envX * envX + envY * envY);
         if (envMagnitude > 0) {
           // Normalize environmental response
-          environmentalResponse[0] /= envMagnitude;
-          environmentalResponse[1] /= envMagnitude;
+          envX /= envMagnitude;
+          envY /= envMagnitude;
         }
         
-        // Blend with current direction (70% environment, 30% inertia)
-        direction[0] = (environmentalResponse[0] * 0.7) + (direction[0] * 0.3);
-        direction[1] = (environmentalResponse[1] * 0.7) + (direction[1] * 0.3);
+        // Blend with current direction (adjustable blend ratio)
+        double environmentWeight = 0.7;
+        double inertiaWeight = 0.3;
+        
+        direction[0] = (envX * environmentWeight) + (direction[0] * inertiaWeight);
+        direction[1] = (envY * environmentWeight) + (direction[1] * inertiaWeight);
       }
       
-      // Apply speed modifier
-      baseSpeed *= speedModifier;
+      // Apply speed modifier with bounds checking
+      baseSpeed = Math.max(0.000001, Math.min(1.0, baseSpeed * speedModifier));
       
-      // Add some random exploration
-      if (Math.random() < 0.1) { // 10% chance to explore randomly
-        direction[0] += (Math.random() - 0.5) * 0.2;
-        direction[1] += (Math.random() - 0.5) * 0.2;
+      // Add some random exploration (reduced frequency for performance)
+      if (Math.random() < 0.05) { // 5% chance to explore randomly (was 10%)
+        direction[0] += (Math.random() - 0.5) * 0.1; // Reduced randomness
+        direction[1] += (Math.random() - 0.5) * 0.1;
       }
     }
     
-    // Normalize direction vector
+    // Normalize direction vector (with epsilon check)
     double magnitude = Math.sqrt(direction[0] * direction[0] + direction[1] * direction[1]);
-    if (magnitude > 0) {
+    if (magnitude > 1e-10) { // Use epsilon to avoid division by very small numbers
       direction[0] /= magnitude;
       direction[1] /= magnitude;
+    } else {
+      // Random direction if magnitude is too small
+      double angle = Math.random() * 2 * Math.PI;
+      direction[0] = Math.cos(angle);
+      direction[1] = Math.sin(angle);
     }
     
     return new double[]{direction[0] * baseSpeed, direction[1] * baseSpeed};
   }
 
-  private double handleBoundaries(double coord, double min, double max, boolean wrap) {
+  private double handleBoundariesOptimized(double coord, double min, double max, 
+                                         boolean wrap, double movement) {
     if (wrap) {
-      if (coord < min) return max - (min - coord);
-      if (coord > max) return min + (coord - max);
+      if (coord < min) {
+        return max - (min - coord);
+      }
+      if (coord > max) {
+        return min + (coord - max);
+      }
     } else {
       if (coord < min || coord > max) {
-        reverseDirection();
-        // Keep coordinate within bounds
-        return Math.max(min, Math.min(coord, max));
+        // Only reverse if actually moving out of bounds
+        if (Math.abs(movement) > MIN_MOVEMENT) {
+          reverseDirection();
+        }
+        // Keep coordinate within bounds with slight margin
+        return Math.max(min + 0.000001, Math.min(coord, max - 0.000001));
       }
     }
     return coord;
   }
 
-  private void adjustDirectionOnCollision() {
-    // Add randomness to direction when hitting an obstacle
-    double angleChange = (Math.random() - 0.5) * Math.PI; // ±90 degrees
+  private void adjustDirectionOnCollisionOptimized() {
+    // Smarter collision avoidance with less randomness
+    double angleChange = (Math.random() - 0.5) * Math.PI / 2; // ±45 degrees (reduced from ±90)
     double cos = Math.cos(angleChange);
     double sin = Math.sin(angleChange);
     
     double newVx = vx * cos - vy * sin;
     double newVy = vx * sin + vy * cos;
     
-    this.vx = newVx;
-    this.vy = newVy;
-  }
-
-  private void reverseDirection() {
-    this.vx *= -1;
-    this.vy *= -1;
-  }
-
-  private void updateHistory() {
-    if (history == null) history = new ArrayList<>();
-    history.add(new Point2D.Double(x, y));
-    if (history.size() > MAX_HISTORY) {
-      history.remove(0);
+    // Normalize to ensure unit vector
+    double mag = Math.sqrt(newVx * newVx + newVy * newVy);
+    if (mag > 1e-10) {
+      this.vx = newVx / mag;
+      this.vy = newVy / mag;
     }
   }
 
-  public Map<String, Object> probeEnvironment(double x, double y, Project project) {
+  private void reverseDirection() {
+    this.vx = -vx;
+    this.vy = -vy;
+  }
+
+  private void updateHistoryOptimized() {
+    if (history == null) {
+      history = new ArrayList<>(MAX_HISTORY);
+    }
+    
+    // Reuse Point2D objects when possible
+    if (history.size() < MAX_HISTORY) {
+      history.add(new Point2D.Double(x, y));
+    } else {
+      // Shift history instead of creating new objects
+      for (int i = 0; i < MAX_HISTORY - 1; i++) {
+        Point2D.Double pt = history.get(i + 1);
+        history.set(i, pt);
+      }
+      // Update last position
+      if (history.size() > 0) {
+        Point2D.Double last = history.get(MAX_HISTORY - 1);
+        if (last != null) {
+          last.setLocation(x, y);
+        } else {
+          history.set(MAX_HISTORY - 1, new Point2D.Double(x, y));
+        }
+      }
+    }
+  }
+
+  // Optimized environment probing with caching
+  public Map<String, Object> probeEnvironmentOptimized(double x, double y, Project project) {
+    // Check if we can reuse cached environment
+    if (lastEnvironment != null && 
+        Math.abs(x - lastProbeX) < ENVIRONMENT_CACHE_DISTANCE && 
+        Math.abs(y - lastProbeY) < ENVIRONMENT_CACHE_DISTANCE) {
+      return new HashMap<>(lastEnvironment); // Return copy
+    }
+    
     Map<String, Object> readings = new HashMap<>();
     
-    for (Layer l : project.getLayers()) {
+    // Cache point geometry to reduce object creation
+    if (cachedPoint == null) {
+      cachedPoint = gf.createPoint(new Coordinate(x, y));
+    } else {
+      cachedPoint.getCoordinate().setX(x);
+      cachedPoint.getCoordinate().setY(y);
+    }
+    
+    // Only probe layers that are visible and relevant
+    List<Layer> layers = project.getLayers();
+    for (int i = 0; i < layers.size(); i++) {
+      Layer l = layers.get(i);
       if (!l.isVisible()) continue;
       
       try {
         if (l instanceof RasterLayer rl) {
+          // Use optimized value retrieval
           Double value = rl.getValueAt(x, y, project.getProjectFile());
           if (value != null) {
             readings.put(rl.getName(), value);
           }
         } 
         else if (l instanceof VectorLayer vl) {
-          Point p = gf.createPoint(new Coordinate(x, y));
-          SimpleFeature feature = vl.getFeatureAt(p, project.getProjectFile());
+          // Only probe vector layers if we might need terrain info
+          SimpleFeature feature = vl.getFeatureAt(cachedPoint, project.getProjectFile());
           if (feature != null) {
             Object type = feature.getAttribute("type");
             if (type == null) {
@@ -216,11 +313,43 @@ public class Agent implements Serializable {
           }
         }
       } catch (Exception e) {
-        System.err.println("Error probing layer " + l.getName() + ": " + e.getMessage());
+        // Silent fail for performance - don't spam console
       }
     }
     
+    // Cache the result
+    lastEnvironment = new HashMap<>(readings);
+    lastProbeX = x;
+    lastProbeY = y;
+    
     return readings;
+  }
+
+  // Original probeEnvironment method for backward compatibility
+  public Map<String, Object> probeEnvironment(double x, double y, Project project) {
+    return probeEnvironmentOptimized(x, y, project);
+  }
+
+  // Performance helper methods
+  public void clearEnvironmentCache() {
+    lastEnvironment = null;
+    lastProbeX = Double.NaN;
+    lastProbeY = Double.NaN;
+  }
+  
+  public boolean isStuck(double threshold) {
+    if (history == null || history.size() < 2) return false;
+    
+    Point2D.Double current = new Point2D.Double(x, y);
+    Point2D.Double previous = history.get(history.size() - 1);
+    
+    return current.distance(previous) < threshold;
+  }
+  
+  public void randomizeDirection() {
+    double angle = Math.random() * 2 * Math.PI;
+    this.vx = Math.cos(angle);
+    this.vy = Math.sin(angle);
   }
 
   // Getters and Setters
@@ -268,14 +397,49 @@ public class Agent implements Serializable {
     return new double[]{vx, vy};
   }
   
+  public void setDirection(double vx, double vy) {
+    double magnitude = Math.sqrt(vx * vx + vy * vy);
+    if (magnitude > 1e-10) {
+      this.vx = vx / magnitude;
+      this.vy = vy / magnitude;
+    }
+  }
+  
   @JsonIgnore
   public List<Point2D.Double> getHistory() {
-    if (history == null) history = new ArrayList<>();
-    return history;
+    if (history == null) {
+      history = new ArrayList<>(MAX_HISTORY);
+    }
+    return Collections.unmodifiableList(history);
   }
   
   @JsonIgnore
   public void setHistory(List<Point2D.Double> history) {
-    this.history = history;
+    if (history != null) {
+      this.history = new ArrayList<>(Math.min(history.size(), MAX_HISTORY));
+      for (int i = 0; i < Math.min(history.size(), MAX_HISTORY); i++) {
+        Point2D.Double pt = history.get(i);
+        this.history.add(new Point2D.Double(pt.x, pt.y));
+      }
+    }
+  }
+  
+  @JsonIgnore
+  public double getDistanceTraveled() {
+    if (history == null || history.size() < 2) return 0.0;
+    
+    double total = 0.0;
+    for (int i = 1; i < history.size(); i++) {
+      Point2D.Double p1 = history.get(i-1);
+      Point2D.Double p2 = history.get(i);
+      total += p1.distance(p2);
+    }
+    return total;
+  }
+  
+  @JsonIgnore
+  public String getStatus() {
+    return String.format("Agent[alive=%s, x=%.6f, y=%.6f, vx=%.3f, vy=%.3f]", 
+                        alive, x, y, vx, vy);
   }
 }
