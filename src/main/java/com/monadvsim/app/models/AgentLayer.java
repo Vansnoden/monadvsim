@@ -273,8 +273,6 @@ public class AgentLayer extends Layer {
   public List<Agent> getAgents() { 
     return agents; 
   }
-  
-  @JsonProperty("agents")
   public void setAgents(List<Agent> agents) {
     if (agents != null) {
       this.agents = new CopyOnWriteArrayList<>(agents);
