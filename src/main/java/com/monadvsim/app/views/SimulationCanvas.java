@@ -204,4 +204,21 @@ public class SimulationCanvas extends JMapPane {
   public void setActiveTool(CursorTool tool) {
     super.setCursorTool(tool);
   }
+  
+  public void forceRefresh() {
+    // This ensures a complete repaint of the canvas
+    repaint();
+    
+    // Also ensure the MapContent knows it needs redrawing
+    if (getMapContent() != null) {
+        getMapContent().dispose(); // Force GeoTools to refresh
+        // Recreate MapContent if needed
+    }
+  }
+  
+  public void refreshAgentDisplay() {
+    // This is lighter weight - just repaint the agents
+    repaint();
+  }
+
 }

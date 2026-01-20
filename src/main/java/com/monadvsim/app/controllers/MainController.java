@@ -384,15 +384,30 @@ public class MainController {
 
   
   private void initSimulationClock() {
-      simTimer = new Timer(100, e -> {
-          manageSimulationMemory(); // Add this line
+    simTimer = new Timer(100, e -> {
+      // Run simulation logic in background thread
+      SwingWorker<Void, Void> worker = new SwingWorker<Void, Void>() {
+        @Override
+        protected Void doInBackground() throws Exception {
+          manageSimulationMemory();
+          
+          // Update all agent layers
           for (Layer layer : project.getLayers()) {
-              if (layer instanceof AgentLayer agentLayer && agentLayer.isVisible()) {
-                  agentLayer.updateAll(project);
-              }
+            if (layer instanceof AgentLayer agentLayer && agentLayer.isVisible()) {
+              agentLayer.updateAll(project);
+            }
           }
+          return null;
+        }
+        
+        @Override
+        protected void done() {
+          // Repaint on EDT after simulation updates
           view.refreshCanvas();
-      });
+        }
+      };
+      worker.execute();
+    });
   }
   
 

@@ -56,10 +56,11 @@ public class Agent implements Serializable {
   public void optimizedStep(Project project, AgentLayer layer, Envelope bounds, 
                            Map<String, Object> environment) {
     if (!alive) return;
-
+    double layerBaseSpeed = layer.getBaseSpeed();
     // 1. Use provided environment (already probed by AgentLayer)
     // 2. Determine movement based on environment and rules
-    double[] movement = calculateMovementOptimized(environment, layer.getRules(), bounds, project);
+    double[] movement = calculateMovementOptimized(environment, layer.getRules(), bounds, 
+      project, layerBaseSpeed);
     
     // Check if movement is negligible
     if (Math.abs(movement[0]) < MIN_MOVEMENT && Math.abs(movement[1]) < MIN_MOVEMENT) {
@@ -102,19 +103,20 @@ public class Agent implements Serializable {
       this.alive = false;
     }
   }
-
-  // Original step method (for backward compatibility)
+  
   public void step(Project project, AgentLayer layer, Envelope bounds) {
-    // Use optimized version with fresh environment probe
-    Map<String, Object> environment = probeEnvironmentOptimized(x, y, project);
-    optimizedStep(project, layer, bounds, environment);
+      // Use optimized version with fresh environment probe
+      Map<String, Object> environment = probeEnvironmentOptimized(x, y, project);
+      optimizedStep(project, layer, bounds, environment);
+      // System.out.println("Agent Steping : "+x+" ---- "+y);
   }
 
   private double[] calculateMovementOptimized(Map<String, Object> environment, 
                                             List<AgentRule> rules, 
                                             Envelope bounds,
-                                            Project project) {
-    double baseSpeed = 0.001; // Default base speed
+                                            Project project,
+                                            double layerBaseSpeed) {
+    double baseSpeed = layerBaseSpeed; // Default base speed
     
     // Reuse direction array to reduce GC
     double[] direction = {vx, vy};

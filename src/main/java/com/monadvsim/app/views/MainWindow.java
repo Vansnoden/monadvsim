@@ -218,11 +218,13 @@ public class MainWindow extends JFrame{
     if (this.simCanvas != null && project != null) {
       this.simCanvas.updateLayers(project.getLayers(), project.getProjectFile());
     }
+    this.simCanvas.repaint();
   }
   
   
   private void setupShortcuts() {
-    KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
+    KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S, 
+    Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
     this.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(saveShortcut, "saveAction");
     this.getRootPane().getActionMap().put("saveAction", new AbstractAction() {
       @Override public void actionPerformed(ActionEvent e) { btnSaveProject.doClick(); }

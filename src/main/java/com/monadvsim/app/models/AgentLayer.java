@@ -24,7 +24,7 @@ public class AgentLayer extends Layer {
 
   private List<Agent> agents = new CopyOnWriteArrayList<>();
   @JsonProperty("baseSpeed")
-  private double baseSpeed = 0.001;
+  private double baseSpeed = 0.01;
   @JacksonXmlElementWrapper(localName = "rules")
   @JacksonXmlProperty(localName = "rule")
   @JsonProperty("rules")
