@@ -6,75 +6,65 @@ import java.util.List;
 import com.fasterxml.jackson.annotation.*;
 import com.fasterxml.jackson.dataformat.xml.annotation.*;
 
-
-
 @JacksonXmlRootElement(localName = "monadProject")
 @JsonIgnoreProperties(ignoreUnknown = true)
-public class Project{
+public class Project {
 
-  @JacksonXmlProperty(isAttribute = true)
-  private String name = "New Project";
-  @JacksonXmlProperty
-  private String crs = "EPSG:4326";
-  @JacksonXmlElementWrapper(localName = "layers")
-  @JacksonXmlProperty(localName = "layer")
-  private List<Layer> layers = new ArrayList<>();
-  @JsonIgnore
-  private transient File projectFile = null;
-  
-  
-  public Project(){}
-  
-  
-  public String getName(){ 
-    return this.name; 
-  }
-  
-  
-  public void setName(String name){ 
-    this.name=name; 
-  }
-  
-  
-  @JsonIgnore
-  public void setProjectFile(File newFile){
-    this.projectFile = newFile;
-  }
+    @JacksonXmlProperty(isAttribute = true)
+    private String name = "New Project";
+    @JacksonXmlProperty
+    private String crs = "EPSG:4326";
+    @JacksonXmlElementWrapper(localName = "layers")
+    @JacksonXmlProperty(localName = "layer")
+    private List<Layer> layers = new ArrayList<>();
+    @JsonIgnore
+    private transient File projectFile = null;
 
-
-  public String getCrs(){
-    return crs; 
-  }
-  
-  
-  public String getCrsCode(){
-    return crs; 
-  }
-  
-  
-  public void setCrs(String crs){ 
-    this.crs=crs;
-  }
-  
-  
-  public void setCrsCode(String crs){ 
-    this.crs=crs;
-  }
-
-
-  @JsonIgnore
-  public File getProjectFile() { return projectFile; }
-  
-  
-  public List<Layer> getLayers() { 
-    if (layers == null) {
-      layers = new ArrayList<>();
+    public Project() {
     }
-    return layers; 
-  }
-  
-  
-  public void setLayers(List<Layer> layers) { 
-    this.layers = layers; 
-  } 
+
+    public String getName() {
+        return this.name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    @JsonIgnore
+    public void setProjectFile(File newFile) {
+        this.projectFile = newFile;
+    }
+
+    public String getCrs() {
+        return crs;
+    }
+
+    public String getCrsCode() {
+        return crs;
+    }
+
+    public void setCrs(String crs) {
+        this.crs = crs;
+    }
+
+    public void setCrsCode(String crs) {
+        this.crs = crs;
+    }
+
+    @JsonIgnore
+    public File getProjectFile() {
+        return projectFile;
+    }
+
+    public List<Layer> getLayers() {
+        if (layers == null) {
+            layers = new ArrayList<>();
+        }
+        return layers;
+    }
+
+    public void setLayers(List<Layer> layers) {
+        this.layers = layers;
+    }
 }
