@@ -10,6 +10,7 @@ import javax.swing.BorderFactory;
 import javax.swing.SwingConstants;
 
 public class DialogLoading extends JDialog {
+
   public DialogLoading(Frame parent, String message) {
     super(parent, "Please Wait", true);
     setLayout(new BorderLayout());
@@ -26,4 +27,5 @@ public class DialogLoading extends JDialog {
     setLocationRelativeTo(parent);
     setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
   }
+  
 }

@@ -21,52 +21,56 @@ import java.io.Serializable;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public abstract class Layer implements Serializable {
   
-  protected String name;
-  protected boolean visible = true;
-  protected String relativePath;
-  protected String crsCode = "EPSG:4326";
-  protected float opacity = 1.0f;
+    protected String name;
+    protected boolean visible = true;
+    protected String relativePath;
+    protected String crsCode = "EPSG:4326";
+    protected float opacity = 1.0f;
 
-  public Layer(){}
-  
-  public Layer(String name, String relativePath) {
-    this.name = name;
-    this.relativePath = relativePath;
-  }
-  
-  @JsonIgnore
-  public CoordinateReferenceSystem getCoordinateReferenceSystem() {
-  try {
-      if (crsCode == null || crsCode.isEmpty()) {
-        return DefaultGeographicCRS.WGS84;
-      }
-      return CRS.decode(crsCode);
-    } catch (Exception e) {
-      return DefaultGeographicCRS.WGS84;
+
+    public Layer(){}
+    
+    
+    public Layer(String name, String relativePath) {
+        this.name = name;
+        this.relativePath = relativePath;
     }
-  }
-  
-  @JsonIgnore
-  public abstract org.geotools.map.Layer getGeoToolsLayer(File projectFile);
-  
-  public String getName() { return name; }
-  
-  public void setName(String name) { this.name = name; }
+    
+    
+    @JsonIgnore
+    public CoordinateReferenceSystem getCoordinateReferenceSystem() {
+        try {
+            if (crsCode == null || crsCode.isEmpty()) {
+              return DefaultGeographicCRS.WGS84;
+            }
+            return CRS.decode(crsCode);
+        } catch (Exception e) {
+            return DefaultGeographicCRS.WGS84;
+        }
+    }
+    
+    
+    @JsonIgnore
+    public abstract org.geotools.map.Layer getGeoToolsLayer(File projectFile);
+    
+    public String getName() { return name; }
+    
+    public void setName(String name) { this.name = name; }
 
-  public boolean isVisible() { return visible; }
-  
-  public void setVisible(boolean visible) { this.visible = visible; }
+    public boolean isVisible() { return visible; }
+    
+    public void setVisible(boolean visible) { this.visible = visible; }
 
-  public String getRelativePath() { return relativePath; }
-  
-  public void setRelativePath(String relativePath) { this.relativePath = relativePath; }
+    public String getRelativePath() { return relativePath; }
+    
+    public void setRelativePath(String relativePath) { this.relativePath = relativePath; }
 
-  public String getCrsCode() { return crsCode; }
-  
-  public void setCrsCode(String crsCode) { this.crsCode = crsCode; }
+    public String getCrsCode() { return crsCode; }
+    
+    public void setCrsCode(String crsCode) { this.crsCode = crsCode; }
 
-  public float getOpacity() { return opacity; }
-  
-  public void setOpacity(float opacity) { this.opacity = opacity; }
+    public float getOpacity() { return opacity; }
+    
+    public void setOpacity(float opacity) { this.opacity = opacity; }
 
 }

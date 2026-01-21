@@ -14,10 +14,13 @@ import javax.swing.BorderFactory;
 import javax.swing.JOptionPane;
 
 
+
 public class DialogProjectProperties extends JDialog {
+
   private JTextField nameField;
   private JComboBox<String> crsComboBox;
   private JButton btnApply;
+
 
   public DialogProjectProperties(Frame parent, String currentName, String currentCrs) {
     super(parent, "Project Properties", true);
@@ -38,9 +41,13 @@ public class DialogProjectProperties extends JDialog {
     setLocationRelativeTo(parent);
   }
 
+
   public String getProjectName() { return nameField.getText(); }
+  
   
   public String getSelectedCrs() { return (String) crsComboBox.getSelectedItem(); }
   
+  
   public JButton getBtnApply() { return btnApply; }
+  
 }

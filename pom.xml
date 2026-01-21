@@ -169,6 +169,9 @@
             <compilerArgs>
               <arg>-Xlint:-deprecation</arg>
             </compilerArgs>
+            <fork>true</fork>
+            <meminitial>1024m</meminitial>
+            <maxmem>2048m</maxmem>
           </configuration>
         </plugin>
         <plugin>
@@ -198,7 +201,14 @@
             <version>3.5.0</version>
             <configuration>
                 <mainClass>com.monadvsim.app.App</mainClass> 
-                <commandlineArgs>--add-opens java.base/java.lang=ALL-UNNAMED</commandlineArgs>
+                <commandlineArgs>
+                  --add-opens java.base/java.lang=ALL-UNNAMED 
+                  -Xmx4g 
+                  -Xms2g 
+                  -XX:+UseG1GC 
+                  -XX:+UseStringDeduplication 
+                  -XX:MaxGCPauseMillis=200
+                </commandlineArgs>
             </configuration>
         </plugin>
       </plugins>

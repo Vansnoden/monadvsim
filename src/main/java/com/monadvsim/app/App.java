@@ -9,8 +9,8 @@ import com.monadvsim.app.controllers.MainController;
  */
 public class App {
     public static void main(String[] args) {
-      Project project = new Project();
-      MainWindow view = new MainWindow();
-      MainController controller = new MainController(project, view);
+        Project project = new Project();
+        MainWindow view = new MainWindow();
+        MainController controller = new MainController(project, view);
     }
 }

@@ -4,9 +4,13 @@ import java.util.prefs.Preferences;
 import java.util.*;
 import java.io.File;
 
+
+
 public class RecentProjectsService {
+
     private static final int MAX_RECENT = 5;
     private final Preferences prefs = Preferences.userNodeForPackage(RecentProjectsService.class);
+
 
     public void addProject(File file) {
         if (file == null) return;
@@ -24,6 +28,7 @@ public class RecentProjectsService {
         prefs.put("recent_list", String.join("|", recent));
     }
 
+
     public List<String> getRecentProjects() {
         String list = prefs.get("recent_list", "");
         if (list.isEmpty()) return new ArrayList<>();
@@ -34,6 +39,7 @@ public class RecentProjectsService {
         
         return paths;
     }
+    
     
     public void clearHistory() {
         prefs.remove("recent_list");

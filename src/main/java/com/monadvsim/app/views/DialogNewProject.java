@@ -15,12 +15,14 @@ import java.awt.FlowLayout;
 import java.awt.Color;
 
 
+
 public class DialogNewProject extends JDialog{
   
   private JPanel content=null;
   private JButton btnSelectFolder=null, btnSave=null;
   private JTextField projectNameField=null;
   private JLabel selectFolderLabel=null;
+
 
   public DialogNewProject(){
     this.setTitle("New Project");
@@ -31,21 +33,26 @@ public class DialogNewProject extends JDialog{
     this.setVisible(true);
   }
   
+  
   public JButton getBtnSelectFolder(){
     return this.btnSelectFolder;
   }
+  
   
   public JButton getBtnSave(){
     return this.btnSave;
   }
   
+  
   public JTextField getProjectNameField(){
     return this.projectNameField;
   }
   
+  
   public JLabel getSelectFolderLabel(){
     return this.selectFolderLabel;
   }
+  
   
   private void initComponents() {
     this.content = new JPanel(new BorderLayout(10, 10)); // Added gaps between border areas
@@ -79,12 +86,15 @@ public class DialogNewProject extends JDialog{
     gbc.weightx = 1.0;
     formFieldsPanel.add(folderPickerPanel, gbc);
     // --- BOTTOM BUTTONS ---
-    JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); // Align save to right
+    JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); 
+    // Align save to right
     formButtonsPanel.add(this.btnSave);
-    this.content.add(formFieldsPanel, BorderLayout.NORTH); // Use North so it doesn't stretch vertically
+    this.content.add(formFieldsPanel, BorderLayout.NORTH); 
+    // Use North so it doesn't stretch vertically
     this.content.add(formButtonsPanel, BorderLayout.SOUTH);
     this.add(content);
   }
+  
 }
 
 
