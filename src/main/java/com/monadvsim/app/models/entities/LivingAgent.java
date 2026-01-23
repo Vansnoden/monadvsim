@@ -16,6 +16,14 @@ public class LivingAgent extends Agent {
     public void update(Project project, TimeManager tm) {
         if (!alive) return;
         age++;
+        
+        // 1. Basic Daily Mortality (e.g., ~10% chance to die per day)
+        // Since a tick is 15 mins, there are 96 ticks in a day.
+        // Probability of dying per tick ≈ 0.001
+        if (Math.random() < 0.001) {
+            this.alive = false;
+            return;
+        }
 
         RasterLayer tempLayer = project.getRasterByName("Temperature");
         double tempC = (tempLayer != null) ? tempLayer.getValueAt(x, y) - 273.15 : 25.0;
@@ -31,6 +39,7 @@ public class LivingAgent extends Agent {
         // Tweak: Lower death probability so agents survive the first few days
         double deathProb = 0.001; 
         if (tempC > 40 || tempC < 10 || age > 2000) deathProb = 0.1;
+        
 
         if (Math.random() < deathProb) {
             alive = false;

@@ -9,7 +9,6 @@ public class SimulationEngine implements Runnable {
     private final TimeManager timeManager;
     private final SpatialRegistry spatialRegistry;
     private boolean running = false;
-    private long tickLimit = Long.MAX_VALUE;
 
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
         this.project = project;
@@ -18,28 +17,23 @@ public class SimulationEngine implements Runnable {
         this.project.setSpatialRegistry(spatialRegistry);
     }
 
-    public void setTickLimit(long limit) { this.tickLimit = limit; }
-
     @Override
     public void run() {
         running = true;
-        System.out.println("Starting Headless Engine: " + project.getName());
-
-        while (running && timeManager.getTickCount() < tickLimit) {
+        while (running) {
             if (!timeManager.tick()) break;
 
             project.updateEnvironment(timeManager.getCurrentFrameIndex());
             
-            // Rebuild spatial index
             List<Agent> allAgents = project.getAgentLayers().stream()
                 .flatMap(l -> l.getAgents().stream()).collect(Collectors.toList());
             spatialRegistry.update(allAgents);
 
-            // Find the dedicated layer for Adults
             AgentLayer mosquitoLayer = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
 
             for (AgentLayer layer : project.getAgentLayers()) {
+                // FIX: Use a Synchronized List for newborns
                 List<Agent> newborns = Collections.synchronizedList(new ArrayList<>());
 
                 layer.getAgents().parallelStream().forEach(agent -> {
@@ -53,22 +47,16 @@ public class SimulationEngine implements Runnable {
                     }
                 });
 
-                // Add newborns to the Adult layer (mosquitoLayer)
-                if (mosquitoLayer != null) {
+                if (mosquitoLayer != null && !newborns.isEmpty()) {
                     mosquitoLayer.getAgents().addAll(newborns);
                 }
-                
-                // Remove dead agents
                 layer.update(timeManager.getTickCount(), 1.0);
             }
 
-            if (timeManager.getTickCount() % 100 == 0) {
-                long totalAdults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-                System.out.println("Tick: " + timeManager.getTickCount() + 
-                                   " | Time: " + timeManager.getCurrentDateTime() + 
-                                   " | Adults: " + totalAdults);
+            if (timeManager.getTickCount() % 10 == 0) {
+                long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
+                System.out.println("Tick: " + timeManager.getTickCount() + " | Adults: " + adults);
             }
         }
-        System.out.println("✅ Engine Loop Finished.");
     }
 }

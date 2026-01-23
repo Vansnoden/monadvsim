@@ -3,7 +3,7 @@ package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.engine.TimeManager;
 
 public class InertAgent extends Agent {
-    private double waterVolume = 50.0; // 0 to 100%
+    private double waterVolume = 50.0; // percentage 0-100
     private int larvalCount = 0;
     private final double capacity = 2000.0;
 
@@ -15,22 +15,16 @@ public class InertAgent extends Agent {
         RasterLayer rain = project.getRasterByName("Rainfall");
         RasterLayer temp = project.getRasterByName("Temperature");
 
+        // Logic: Rain fills the tank, evaporation empties it
         double currentRain = (rain != null) ? rain.getValueAt(x, y) : 0.0;
         double currentTempC = (temp != null) ? temp.getValueAt(x, y) - 273.15 : 25.0;
 
-        // 1. Hydrology: Rain adds water, heat evaporates it
         waterVolume += (currentRain * 5000) - (currentTempC * 0.01);
         waterVolume = Math.max(0, Math.min(100, waterVolume));
 
-        // 2. Mortality: If tank is dry (<5%), larvae die
-        if (waterVolume < 5.0) {
-            larvalCount = 0;
-            return 0;
-        }
-
-        // 3. Hatching: Dependent on temperature
-        if (larvalCount > 0 && currentTempC > 18.0) {
-            int hatch = (int) (larvalCount * 0.01); 
+        // Hatching only occurs if there's water and it's warm enough (>18C)
+        if (waterVolume > 5.0 && currentTempC > 18.0 && larvalCount > 0) {
+            int hatch = (int) (larvalCount * 0.02);
             larvalCount -= hatch;
             return hatch;
         }
@@ -43,6 +37,6 @@ public class InertAgent extends Agent {
 
     @Override
     public void update(Project project, TimeManager tm) {
-        // Handled by calculateHatching for thread safety
+        // Updated via the Engine's parallel loop for performance
     }
 }
