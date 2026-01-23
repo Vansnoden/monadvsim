@@ -8,7 +8,6 @@ import com.monadvsim.app.controllers.MainController;
  * Entry point
  */
 public class App {
-
     public static void main(String[] args) {
         Project project = new Project();
         MainWindow view = new MainWindow();
