@@ -1,0 +1,2390 @@
+package com.monadvsim.app.views;
+
+import com.monadvsim.app.models.*;
+import java.awt.Color;
+import java.awt.Graphics;
+import java.awt.Graphics2D;
+import org.geotools.swing.JMapPane;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.NoninvertibleTransformException;
+import java.awt.geom.Point2D;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+public class SimulationCanvas extends JMapPane {
+    private List<Layer> layers;
+
+    public void setLayers(List<Layer> layers) {
+        this.layers = layers;
+    }
+
+    @Override
+    protected void paintComponent(Graphics g) {
+        super.paintComponent(g); // Draws GeoTools Rasters/Vectors
+        Graphics2D g2d = (Graphics2D) g;
+        
+        if (layers == null) return;
+
+        // Decoupled Rendering: Draw Agents on top of GIS layers
+        AffineTransform worldToScreen = null;
+        try {
+            worldToScreen = getScreenToWorldTransform().createInverse();
+        } catch (NoninvertibleTransformException ex) {
+            Logger.getLogger(SimulationCanvas.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        
+        for (Layer layer : layers) {
+            if (layer instanceof AgentLayer al && al.isVisible()) {
+                g2d.setColor(Color.RED);
+                for (Agent a : al.getAgents()) {
+                    Point2D dest = new Point2D.Double();
+                    worldToScreen.transform(new Point2D.Double(a.getX(), a.getY()), dest);
+                    g2d.fillOval((int)dest.getX()-2, (int)dest.getY()-2, 4, 4);
+                }
+            }
+        }
+    }
+    
+    
+}package com.monadvsim.app.views;
+
+import javax.swing.JDialog;
+import javax.swing.JComboBox;
+import javax.swing.JPanel;
+import javax.swing.JTextField;
+import javax.swing.JLabel;
+import javax.swing.BorderFactory;
+import java.awt.BorderLayout;
+import java.awt.GridBagConstraints;
+import java.awt.GridBagLayout;
+import java.awt.FlowLayout;
+import javax.swing.JButton;
+import javax.swing.JFrame;
+import javax.swing.JSpinner;
+import javax.swing.JCheckBox;
+import java.awt.Insets;
+import javax.swing.SpinnerNumberModel;
+import java.awt.Frame;
+import javax.swing.JOptionPane;
+
+public class DialogNewLayer extends JDialog {
+
+    private JPanel content = null;
+    private JComboBox layerTypeField = null;
+    private JTextField layerNameField = null;
+    private JSpinner populationSpinner = null;
+    private JCheckBox wrapAroundCheck = null;
+    private JButton btnSave = null;
+    private boolean succeeded = false;
+    private String[] layerOptions = {"Vector Layer", "Raster Layer", "Agent Layer"};
+
+    public DialogNewLayer(Frame parent) {
+        super(parent, "Add New Layer", true);
+        this.setTitle("Add Layer");
+        this.setSize(350, 300);
+        this.initComponents();
+        this.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        this.setLocationRelativeTo(parent);
+        this.setVisible(true);
+    }
+
+    public JComboBox getLayerTypeField() {
+        return this.layerTypeField;
+    }
+
+    public boolean isSucceeded() {
+        return succeeded;
+    }
+
+    public String getLayerType() {
+        return (String) this.layerTypeField.getSelectedItem();
+    }
+
+    public String getLayerName() {
+        return this.layerNameField.getText().trim();
+    }
+
+    public int getPopulation() {
+        return (int) populationSpinner.getValue();
+    }
+
+    public boolean isWrapAround() {
+        return wrapAroundCheck.isSelected();
+    }
+
+    public JButton getBtnSave() {
+        return this.btnSave;
+    }
+
+    public JTextField getLayerNameField() {
+        return this.layerNameField;
+    }
+
+    private void initComponents() {
+        this.content = new JPanel(new BorderLayout(10, 10));
+        this.content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        this.populationSpinner = new JSpinner(new SpinnerNumberModel(1000, 0, 10000000, 1000));
+        this.layerTypeField = new JComboBox<>(this.layerOptions);
+        this.wrapAroundCheck = new JCheckBox("Enabled");
+        this.layerTypeField.addActionListener(e -> {
+            boolean isAgent = layerTypeField.getSelectedItem().equals("Agent Layer");
+            populationSpinner.setEnabled(isAgent);
+            wrapAroundCheck.setEnabled(isAgent);
+        });
+        // Initialize state
+        boolean isAgent = this.layerTypeField.getSelectedItem().equals("Agent Layer");
+        this.populationSpinner.setEnabled(isAgent);
+        this.wrapAroundCheck.setEnabled(isAgent);
+        this.layerNameField = new JTextField(30);
+        this.btnSave = new JButton("Add New Layer");
+        this.btnSave.addActionListener(e -> {
+            // Validation: Ensure name is not empty
+            if (layerNameField.getText().trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Please enter a layer name.");
+                return;
+            }
+            succeeded = true;
+            dispose();
+        });
+
+        JPanel formFieldsPanel = new JPanel(new GridBagLayout());
+        formFieldsPanel.setBorder(BorderFactory.createTitledBorder("Layer Information"));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8); // Consistent padding between elements
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 0; // Label doesn't need extra space
+        formFieldsPanel.add(new JLabel("Layer Type:"), gbc);
+        gbc.gridx = 1;
+        gbc.gridy = 0;
+        gbc.weightx = 1.0; // Field takes up all available horizontal space
+        formFieldsPanel.add(this.layerTypeField, gbc);
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.weightx = 0;
+        formFieldsPanel.add(new JLabel("Layer Name:"), gbc);
+        gbc.gridx = 1;
+        gbc.gridy = 1;
+        gbc.weightx = 1.0;
+        formFieldsPanel.add(this.layerNameField, gbc);
+
+        JPanel agentLayerSettings = new JPanel(new GridBagLayout());
+        agentLayerSettings.setBorder(BorderFactory.createTitledBorder("Agent Layer Details"));
+        GridBagConstraints gbc2 = new GridBagConstraints();
+        gbc2.insets = new Insets(8, 8, 8, 8); // Consistent padding between elements
+        gbc2.fill = GridBagConstraints.HORIZONTAL;
+        gbc2.gridx = 0;
+        gbc2.gridy = 0;
+        gbc2.weightx = 0; // Label doesn't need extra space
+        agentLayerSettings.add(new JLabel("Population (Agents):"), gbc2);
+        gbc2.gridx = 1;
+        gbc2.gridy = 0;
+        gbc2.weightx = 0;
+        agentLayerSettings.add(populationSpinner, gbc2);
+        gbc2.gridx = 0;
+        gbc2.gridy = 1;
+        gbc2.weightx = 0;
+        agentLayerSettings.add(new JLabel("World Wrap:"), gbc2);
+        gbc2.gridx = 1;
+        gbc2.gridy = 1;
+        gbc2.weightx = 0;
+        agentLayerSettings.add(wrapAroundCheck, gbc2);
+
+        JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT)); // Align save to right     
+        formButtonsPanel.add(this.btnSave);
+        this.content.add(formFieldsPanel, BorderLayout.NORTH);
+        this.content.add(agentLayerSettings, BorderLayout.CENTER);// Use North so it doesn't stretch vertically
+        this.content.add(formButtonsPanel, BorderLayout.SOUTH);
+        this.add(content);
+    }
+}
+package com.monadvsim.app.views;
+
+import javax.swing.JDialog;
+import javax.swing.JPanel;
+import javax.swing.JLabel;
+import javax.swing.JProgressBar;
+import java.awt.Frame;
+import java.awt.BorderLayout;
+import javax.swing.BorderFactory;
+import javax.swing.SwingConstants;
+
+public class DialogLoading extends JDialog {
+
+    public DialogLoading(Frame parent, String message) {
+        super(parent, "Please Wait", true);
+        setLayout(new BorderLayout());
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(20, 20, 20, 20));
+        JLabel label = new JLabel(message);
+        label.setHorizontalAlignment(SwingConstants.CENTER);
+        JProgressBar pb = new JProgressBar();
+        pb.setIndeterminate(true);
+        panel.add(label, BorderLayout.NORTH);
+        panel.add(pb, BorderLayout.CENTER);
+        add(panel);
+        pack();
+        setLocationRelativeTo(parent);
+        setDefaultCloseOperation(DO_NOTHING_ON_CLOSE);
+    }
+
+}
+package com.monadvsim.app.views;
+
+import java.awt.Frame;
+import java.awt.FlowLayout;
+import java.awt.GridLayout;
+import javax.swing.JDialog;
+import javax.swing.JTextField;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JButton;
+import javax.swing.JComboBox;
+import javax.swing.JPanel;
+import javax.swing.BorderFactory;
+import javax.swing.JOptionPane;
+
+public class DialogProjectProperties extends JDialog {
+
+    private JTextField nameField;
+    private JComboBox<String> crsComboBox;
+    private JButton btnApply;
+
+    public DialogProjectProperties(Frame parent, String currentName, String currentCrs) {
+        super(parent, "Project Properties", true);
+        setLayout(new GridLayout(3, 2, 10, 10));
+        add(new JLabel("Project Name:"));
+        nameField = new JTextField(currentName);
+        add(nameField);
+        add(new JLabel("Coordinate System (CRS):"));
+        // Example list of common EPSG codes
+        String[] crsOptions = {"EPSG:4326", "EPSG:3857", "EPSG:32633"};
+        crsComboBox = new JComboBox<>(crsOptions);
+        crsComboBox.setSelectedItem(currentCrs);
+        add(crsComboBox);
+        btnApply = new JButton("Apply Changes");
+        add(new JLabel("")); // Empty cell
+        add(btnApply);
+        pack();
+        setLocationRelativeTo(parent);
+    }
+
+    public String getProjectName() {
+        return nameField.getText();
+    }
+
+    public String getSelectedCrs() {
+        return (String) crsComboBox.getSelectedItem();
+    }
+
+    public JButton getBtnApply() {
+        return btnApply;
+    }
+
+}
+package com.monadvsim.app.views;
+
+import com.monadvsim.app.models.VectorLayer;
+import com.monadvsim.app.models.RasterLayer;
+import com.monadvsim.app.models.AgentLayer;
+import javax.swing.tree.TreeCellRenderer;
+import javax.swing.JCheckBox;
+import java.awt.BorderLayout;
+import javax.swing.ImageIcon;
+import java.net.URL;
+import javax.swing.UIManager;
+import javax.swing.JPanel;
+import javax.swing.JLabel;
+import com.monadvsim.app.models.Layer;
+import java.awt.Font;
+import javax.swing.tree.DefaultMutableTreeNode;
+import java.awt.Component;
+import javax.swing.JTree;
+
+public class LayerTreeRenderer extends JPanel implements TreeCellRenderer {
+
+    private final JCheckBox checkBox = new JCheckBox();
+    private final JLabel label = new JLabel();
+
+    public LayerTreeRenderer() {
+        setLayout(new BorderLayout());
+        setOpaque(false);
+        checkBox.setOpaque(false);
+        add(checkBox, BorderLayout.WEST);
+        add(label, BorderLayout.CENTER);
+    }
+
+    @Override
+    public Component getTreeCellRendererComponent(JTree tree, Object value, boolean selected,
+            boolean expanded, boolean leaf, int row, boolean hasFocus) {
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) value;
+        Object userObject = node.getUserObject();
+        // 1. Logic for Layers
+        if (userObject instanceof Layer layer) {
+            checkBox.setVisible(true);
+            checkBox.setSelected(layer.isVisible());
+            label.setText(layer.getName());
+            label.setFont(tree.getFont());
+            // Optional: Assign icons based on layer type for better User Experience
+            if (layer instanceof VectorLayer) {
+                label.setIcon(loadIcon("vector_layer"));
+            } else if (layer instanceof RasterLayer) {
+                label.setIcon(loadIcon("raster_layer"));
+            } else if (layer instanceof AgentLayer) {
+                label.setIcon(loadIcon("agent_layer"));
+            }
+
+        } else {
+            // 2. Logic for the Root Node (Project Name)
+            checkBox.setVisible(false);
+            label.setIcon(loadIcon("folder"));
+            label.setText(userObject != null ? userObject.toString() : "Project");
+            label.setFont(tree.getFont().deriveFont(Font.BOLD));
+        }
+        // 3. Handle Selection Colors
+        if (selected) {
+            label.setForeground(tree.getSelectionModel().getSelectionPath() != null
+                    ? UIManager.getColor("Tree.selectionForeground") : tree.getForeground());
+            this.setBackground(UIManager.getColor("Tree.selectionBackground"));
+            this.setOpaque(true);
+        } else {
+            label.setForeground(tree.getForeground());
+            this.setOpaque(false);
+        }
+        return this;
+    }
+
+    private ImageIcon loadIcon(String name) {
+        URL imageURL = getClass().getResource("/icons/" + name + ".png");
+        return (imageURL != null) ? new ImageIcon(imageURL) : null;
+    }
+
+}
+package com.monadvsim.app.views;
+
+import javax.swing.JDialog;
+import javax.swing.JPanel;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.border.TitledBorder;
+import javax.swing.JTextField;
+import java.awt.BorderLayout;
+import javax.swing.BorderFactory;
+import java.awt.GridBagLayout;
+import java.awt.GridBagConstraints;
+import java.awt.Insets;
+import java.awt.FlowLayout;
+import java.awt.Color;
+
+public class DialogNewProject extends JDialog {
+
+    private JPanel content = null;
+    private JButton btnSelectFolder = null, btnSave = null;
+    private JTextField projectNameField = null;
+    private JLabel selectFolderLabel = null;
+
+    public DialogNewProject() {
+        this.setTitle("New Project");
+        this.setSize(350, 200);
+        this.initComponents();
+        this.setDefaultCloseOperation(DISPOSE_ON_CLOSE);
+        this.setLocationRelativeTo(null);
+        this.setVisible(true);
+    }
+
+    public JButton getBtnSelectFolder() {
+        return this.btnSelectFolder;
+    }
+
+    public JButton getBtnSave() {
+        return this.btnSave;
+    }
+
+    public JTextField getProjectNameField() {
+        return this.projectNameField;
+    }
+
+    public JLabel getSelectFolderLabel() {
+        return this.selectFolderLabel;
+    }
+
+    private void initComponents() {
+        this.content = new JPanel(new BorderLayout(10, 10)); // Added gaps between border areas
+        this.content.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10)); // Window padding
+        this.btnSelectFolder = new JButton("Browse...");
+        this.btnSave = new JButton("Save Project");
+        this.projectNameField = new JTextField(20);
+        this.selectFolderLabel = new JLabel("No folder selected");
+        this.selectFolderLabel.setForeground(Color.GRAY);
+        JPanel formFieldsPanel = new JPanel(new GridBagLayout());
+        formFieldsPanel.setBorder(BorderFactory.createTitledBorder("Project Information"));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(8, 8, 8, 8); // Consistent padding between elements
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        // --- ROW 0: Project Name ---
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.weightx = 0; // Label doesn't need extra space
+        formFieldsPanel.add(new JLabel("Project Name:"), gbc);
+        gbc.gridx = 1;
+        gbc.gridy = 0;
+        gbc.weightx = 1.0; // Field takes up all available horizontal space
+        formFieldsPanel.add(this.projectNameField, gbc);
+        // --- ROW 1: Folder Selection ---
+        gbc.gridx = 0;
+        gbc.gridy = 1;
+        gbc.weightx = 0;
+        formFieldsPanel.add(new JLabel("Location:"), gbc);
+        // Nested panel to keep label and button on the same line in the right column
+        JPanel folderPickerPanel = new JPanel(new BorderLayout(5, 0));
+        folderPickerPanel.add(this.selectFolderLabel, BorderLayout.CENTER);
+        folderPickerPanel.add(this.btnSelectFolder, BorderLayout.EAST);
+        gbc.gridx = 1;
+        gbc.gridy = 1;
+        gbc.weightx = 1.0;
+        formFieldsPanel.add(folderPickerPanel, gbc);
+        // --- BOTTOM BUTTONS ---
+        JPanel formButtonsPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        // Align save to right
+        formButtonsPanel.add(this.btnSave);
+        this.content.add(formFieldsPanel, BorderLayout.NORTH);
+        // Use North so it doesn't stretch vertically
+        this.content.add(formButtonsPanel, BorderLayout.SOUTH);
+        this.add(content);
+    }
+
+}
+package com.monadvsim.app.views;
+
+import javax.swing.JFrame;
+import javax.swing.JPanel;
+import javax.swing.JSplitPane;
+import javax.swing.JButton;
+import javax.swing.JLabel;
+import javax.swing.JToolBar;
+import javax.swing.JMenuBar;
+import javax.swing.JMenu;
+import javax.swing.BorderFactory;
+import javax.swing.JMenuItem;
+import javax.swing.ImageIcon;
+import java.net.URL;
+import java.awt.BorderLayout;
+import java.awt.FlowLayout;
+import java.awt.Dimension;
+import com.monadvsim.app.models.Project;
+import com.monadvsim.app.models.Layer;
+import javax.swing.JTree;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.DefaultTreeModel;
+import javax.swing.JScrollPane;
+import javax.swing.KeyStroke;
+import javax.swing.JProgressBar;
+import javax.swing.JComponent;
+import java.util.List;
+import java.awt.event.KeyEvent;
+import java.awt.Toolkit;
+import javax.swing.AbstractAction;
+import java.awt.event.ActionEvent;
+import java.awt.Color;
+import java.util.Collections;
+import javax.swing.DropMode;
+
+public class MainWindow extends JFrame {
+
+    private Project project = null;
+    private JSplitPane splitPane = null;
+    private JPanel content = null, optionsPanel = null, canvasPanel = null, statusBar = null;
+    private SimulationCanvas simCanvas = null;
+    private JToolBar toolbar = null;
+    private JButton btnNewProject = null, btnOpenProject = null, btnSaveProject = null;
+    private JButton btnAddLayer = null, btnPanview = null, btnZoomIn = null;
+    private JButton btnZoomOut = null, btnFullview = null, btnRun = null, btnPause = null;
+    private JMenuBar menuBar = null;
+    private JMenu projectMenu = null, recentProjectsMenu = null, layerMenu = null, helpMenu = null;
+    private JMenuItem newProjectMenuItem = null, saveProjectMenuItem = null, saveAsProjectMenuItem = null;
+    private JMenuItem projectPropertiesMenuItem = null, projectExportMenuItem = null, exportProjectMenuItem = null;
+    private JMenuItem quitMenuItem = null, addLayerMenuItem = null, removeLayerMenuItem = null;
+    private JMenuItem documentationMenuItem = null, donationMenuItem = null;
+    private JTree layerTree = null;
+    private DefaultMutableTreeNode treeRoot = null;
+    private JProgressBar progressBar = null;
+    private JLabel lblCoordinates;
+    private JLabel lblCRS;
+
+    public MainWindow() {
+        this.setTitle("MonadVSIM");
+        this.initComponents();
+        this.pack();
+        this.setResizable(true);
+        this.setLocationRelativeTo(null);
+        this.setVisible(true);
+        this.setDefaultCloseOperation(EXIT_ON_CLOSE);
+    }
+
+    public void setProjectModel(Project project) {
+        this.project = project;
+    }
+
+    public JSplitPane getSplitPane() {
+        return this.splitPane;
+    }
+
+    public JPanel getContentPanel() {
+        return this.content;
+    }
+
+    public JPanel getOptionsPanel() {
+        return this.optionsPanel;
+    }
+
+    public JPanel getCanvasPanel() {
+        return this.canvasPanel;
+    }
+
+    public JPanel getStatusBar() {
+        return this.statusBar;
+    }
+
+    public JToolBar getToolbar() {
+        return this.toolbar;
+    }
+
+    public JButton getBtnNewProject() {
+        return this.btnNewProject;
+    }
+
+    public JButton getBtnOpenProject() {
+        return this.btnOpenProject;
+    }
+
+    public JButton getBtnSaveProject() {
+        return this.btnSaveProject;
+    }
+
+    public JButton getBtnAddLayer() {
+        return this.btnAddLayer;
+    }
+
+    public JButton getBtnPanview() {
+        return this.btnPanview;
+    }
+
+    public JButton getBtnZoomIn() {
+        return this.btnZoomIn;
+    }
+
+    public JButton getBtnZoomOut() {
+        return this.btnZoomOut;
+    }
+
+    public JButton getBtnFullview() {
+        return this.btnFullview;
+    }
+
+    public JButton getBtnRunSim() {
+        return this.btnRun;
+    }
+
+    public JButton getBtnPauseSim() {
+        return this.btnPause;
+    }
+
+    public JMenuBar getJMenuBar() {
+        return this.menuBar;
+    }
+
+    public JMenu getProjectMenu() {
+        return this.projectMenu;
+    }
+
+    public JMenu getLayerMenu() {
+        return this.layerMenu;
+    }
+
+    public JMenu getHelpMenu() {
+        return this.helpMenu;
+    }
+
+    public JMenuItem getNewProjectMenuItem() {
+        return this.newProjectMenuItem;
+    }
+
+    public JMenuItem getSaveProjectMenuItem() {
+        return this.saveProjectMenuItem;
+    }
+
+    public JMenuItem getSaveAsProjectMenuItem() {
+        return this.saveAsProjectMenuItem;
+    }
+
+    public JMenuItem getProjectPropertiesMenuItem() {
+        return this.projectPropertiesMenuItem;
+    }
+
+    public JMenuItem getProjectExportMenuItem() {
+        return this.projectExportMenuItem;
+    }
+
+    public JMenuItem getExportProjectMenuItem() {
+        return this.exportProjectMenuItem;
+    }
+
+    public JMenuItem getQuitMenuItem() {
+        return this.quitMenuItem;
+    }
+
+    public JMenuItem getAddLayerMenuItem() {
+        return this.addLayerMenuItem;
+    }
+
+    public JMenuItem getRemoveLayerMenuItem() {
+        return this.removeLayerMenuItem;
+    }
+
+    public JMenuItem getDocumentationMenuItem() {
+        return this.documentationMenuItem;
+    }
+
+    public JMenuItem getDonationMenuItem() {
+        return this.donationMenuItem;
+    }
+
+    public JMenu getRecentProjectsMenu() {
+        return this.recentProjectsMenu;
+    }
+
+    public JTree getLayerTree() {
+        return layerTree;
+    }
+
+    public SimulationCanvas getSimulationCanvas() {
+        return this.simCanvas;
+    }
+
+    public JProgressBar getProgressBar() {
+        return this.progressBar;
+    }
+
+    public JLabel getLblCoordinates() {
+        return lblCoordinates;
+    }
+
+    public JLabel getLblCRS() {
+        return lblCRS;
+    }
+
+    public void setStatusBarCRS(String crs) {
+        if (lblCRS != null) {
+            lblCRS.setText("System: " + crs);
+        }
+    }
+
+    public void setProjectNameInTree(String name) {
+        if (treeRoot != null && layerTree != null) {
+            treeRoot.setUserObject(name);
+            ((DefaultTreeModel) layerTree.getModel()).nodeChanged(treeRoot);
+        }
+    }
+
+    public void updateLayerTree(List<Layer> layers) {
+        treeRoot.removeAllChildren();
+        if (layers != null) {
+            for (Layer layer : layers) {
+                treeRoot.add(new DefaultMutableTreeNode(layer));
+            }
+        }
+        DefaultTreeModel model = (DefaultTreeModel) layerTree.getModel();
+        model.nodeStructureChanged(treeRoot);
+        for (int i = 0; i < layerTree.getRowCount(); i++) {
+            layerTree.expandRow(i);
+        }
+    }
+
+    public void refreshCanvas() {
+//        if (this.simCanvas != null && project != null) {
+//            this.simCanvas.updateLayers(project.getLayers(), project.getProjectFile());
+//        }
+        this.simCanvas.repaint();
+    }
+
+    private void setupShortcuts() {
+        KeyStroke saveShortcut = KeyStroke.getKeyStroke(KeyEvent.VK_S,
+                Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx());
+        this.getRootPane().getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(saveShortcut, "saveAction");
+        this.getRootPane().getActionMap().put("saveAction", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                btnSaveProject.doClick();
+            }
+        });
+    }
+
+    private void initComponents() {
+        this.initMenu();
+        this.initContentPanel();
+    }
+
+    private void initMenu() {
+        this.menuBar = new JMenuBar();
+        this.initProjectMenu();
+        this.initLayerMenu();
+        this.initHelpMenu();
+        this.setJMenuBar(menuBar);
+    }
+
+    private void initProjectMenu() {
+        this.projectMenu = new JMenu("Project");
+        this.recentProjectsMenu = new JMenu("Recent Projects");
+        this.initProjectMenuItems();
+        this.addProjectMenuItems();
+        this.menuBar.add(this.projectMenu);
+    }
+
+    private void initProjectMenuItems() {
+        this.newProjectMenuItem = new JMenuItem("New");
+        this.saveProjectMenuItem = new JMenuItem("Save");
+        this.saveAsProjectMenuItem = new JMenuItem("Save As");
+        this.projectPropertiesMenuItem = new JMenuItem("Properties");
+        this.exportProjectMenuItem = new JMenuItem("Export");
+        this.quitMenuItem = new JMenuItem("Quit");
+    }
+
+    private void addProjectMenuItems() {
+        this.projectMenu.add(this.newProjectMenuItem);
+        this.projectMenu.add(this.projectMenu);
+        this.projectMenu.addSeparator();
+        this.projectMenu.add(this.saveProjectMenuItem);
+        this.projectMenu.add(this.saveAsProjectMenuItem);
+        this.projectMenu.addSeparator();
+        this.projectMenu.add(this.projectPropertiesMenuItem);
+        this.projectMenu.add(this.exportProjectMenuItem);
+        this.projectMenu.addSeparator();
+        this.projectMenu.add(this.quitMenuItem);
+    }
+
+    private void initLayerMenu() {
+        this.layerMenu = new JMenu("Layer");
+        this.initLayerMenuItems();
+        this.addLayerMenuItems();
+        this.menuBar.add(this.layerMenu);
+    }
+
+    private void initLayerMenuItems() {
+        this.addLayerMenuItem = new JMenuItem("Add Layer");
+        this.removeLayerMenuItem = new JMenuItem("Remove Layer");
+    }
+
+    private void addLayerMenuItems() {
+        this.layerMenu.add(this.addLayerMenuItem);
+        this.layerMenu.add(this.removeLayerMenuItem);
+    }
+
+    private void initHelpMenu() {
+        this.helpMenu = new JMenu("Help");
+        this.initHelpMenuItems();
+        this.addHelpMenuItem();
+        this.menuBar.add(this.helpMenu);
+    }
+
+    private void initHelpMenuItems() {
+        this.documentationMenuItem = new JMenuItem("Documentation");
+        this.donationMenuItem = new JMenuItem("Donate!");
+    }
+
+    private void addHelpMenuItem() {
+        this.helpMenu.add(this.documentationMenuItem);
+        this.helpMenu.add(this.donationMenuItem);
+    }
+
+    private ImageIcon loadIcon(String name) {
+        URL imageURL = getClass().getResource("/icons/" + name + ".png");
+        return (imageURL != null) ? new ImageIcon(imageURL) : null;
+    }
+
+    private void initContentPanel() {
+        this.content = new JPanel();
+        this.content.setPreferredSize(new Dimension(900, 650));
+        this.content.setLayout(new BorderLayout());
+        this.initToolbar();
+        this.initOptionsPanel();
+        this.initCanvasPanel();
+        this.splitPane = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, this.optionsPanel, this.canvasPanel);
+        this.optionsPanel.setMinimumSize(new Dimension(200, 0));
+        this.canvasPanel.setMinimumSize(new Dimension(700, 0));
+        this.splitPane.setDividerLocation(250);
+        this.content.add(this.splitPane, BorderLayout.CENTER);
+        this.initStatusBar();
+        this.add(this.content);
+    }
+
+    private void initToolbar() {
+        this.toolbar = new JToolBar();
+        this.initToolButtons();
+        this.addToolButtonsToToolbar();
+        this.toolbar.setFloatable(false);
+        this.content.add(this.toolbar, BorderLayout.NORTH);
+    }
+
+    private void initToolButtons() {
+        this.btnNewProject = new JButton(loadIcon("new"));
+        this.btnOpenProject = new JButton(loadIcon("open_project"));
+        this.btnSaveProject = new JButton(loadIcon("save_project"));
+        this.btnAddLayer = new JButton(loadIcon("add_layer"));
+        this.btnPanview = new JButton(loadIcon("hand_pan"));
+        this.btnZoomIn = new JButton(loadIcon("zoom_in"));
+        this.btnZoomOut = new JButton(loadIcon("zoom_out"));
+        this.btnFullview = new JButton(loadIcon("full_view"));
+        this.btnRun = new JButton(loadIcon("run_sim"));
+        this.btnPause = new JButton(loadIcon("pause_sim"));
+        this.initToolButtonsTooltipText();
+    }
+
+    private void initToolButtonsTooltipText() {
+        this.btnNewProject.setToolTipText("New Project");
+        this.btnOpenProject.setToolTipText("Open Project");
+        this.btnSaveProject.setToolTipText("Save Project");
+        this.btnAddLayer.setToolTipText("Add Layer");
+        this.btnPanview.setToolTipText("Pan View");
+        this.btnZoomIn.setToolTipText("Zoom In");
+        this.btnZoomOut.setToolTipText("Zoom Out");
+        this.btnFullview.setToolTipText("Full view");
+        this.btnRun.setToolTipText("Run Simulation");
+        this.btnPause.setToolTipText("Pause Simulation");
+    }
+
+    private void addToolButtonsToToolbar() {
+        this.toolbar.add(this.btnNewProject);
+        this.toolbar.add(this.btnOpenProject);
+        this.toolbar.add(this.btnSaveProject);
+        this.toolbar.add(this.btnAddLayer);
+        this.toolbar.addSeparator();
+        this.toolbar.add(this.btnPanview);
+        this.toolbar.add(this.btnZoomIn);
+        this.toolbar.add(this.btnZoomOut);
+        this.toolbar.add(this.btnFullview);
+        this.toolbar.addSeparator();
+        this.toolbar.add(this.btnRun);
+        this.toolbar.add(this.btnPause);
+    }
+
+    private void initOptionsPanel() {
+        this.optionsPanel = new JPanel(new BorderLayout());
+        this.optionsPanel.setPreferredSize(new Dimension(200, 0));
+        this.initProjectExplorer();
+    }
+
+    private void initProjectExplorer() {
+        this.treeRoot = new DefaultMutableTreeNode("Layers");
+        this.layerTree = new JTree(treeRoot);
+        this.layerTree.setCellRenderer(new LayerTreeRenderer());
+        JPanel treePanel = new JPanel(new BorderLayout());
+        treePanel.add(new JLabel("Project Explorer"), BorderLayout.NORTH);
+        treePanel.add(new JScrollPane(layerTree), BorderLayout.CENTER);
+        this.optionsPanel.add(treePanel, BorderLayout.CENTER);
+    }
+
+    private void initCanvasPanel() {
+        this.canvasPanel = new JPanel(new BorderLayout());
+        this.canvasPanel.setPreferredSize(new Dimension(700, 0));
+        this.initSimCanvas();
+        this.canvasPanel.add(this.simCanvas, BorderLayout.CENTER);
+    }
+
+    private void initSimCanvas() {
+        this.simCanvas = new SimulationCanvas();
+    }
+
+    private void initStatusBar() {
+        this.statusBar = new JPanel(new BorderLayout());
+        this.statusBar.setBorder(BorderFactory.createMatteBorder(1, 0, 0, 0, Color.LIGHT_GRAY));
+        // West side: Mouse Coordinates
+        this.lblCoordinates = new JLabel("X: 0.00, Y: 0.00");
+        this.lblCoordinates.setPreferredSize(new Dimension(200, 20));
+        // Center side: CRS display
+        this.lblCRS = new JLabel("System: EPSG:4326");
+        this.lblCRS.setHorizontalAlignment(JLabel.CENTER);
+        // East side: Progress and Branding
+        this.progressBar = new JProgressBar();
+        this.progressBar.setPreferredSize(new Dimension(150, 18));
+        this.progressBar.setVisible(false); // Hide by default
+        JPanel eastPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
+        eastPanel.add(this.progressBar);
+        eastPanel.add(new JLabel("monadvsim@2026"));
+        this.statusBar.add(lblCoordinates, BorderLayout.WEST);
+        this.statusBar.add(lblCRS, BorderLayout.CENTER);
+        this.statusBar.add(eastPanel, BorderLayout.EAST);
+        this.content.add(this.statusBar, BorderLayout.SOUTH);
+    }
+
+}
+package com.monadvsim.app.views;
+
+import com.monadvsim.app.models.AgentRule;
+import javax.swing.*;
+import java.awt.*;
+import java.util.List;
+
+public class DialogRuleEditor extends JDialog {
+    private DefaultListModel<AgentRule> listModel = new DefaultListModel<>();
+    private JList<AgentRule> ruleList = new JList<>(listModel);
+
+    public DialogRuleEditor(Frame parent, List<AgentRule> existingRules) {
+        super(parent, "Rule-Based Logic Editor", true);
+        setLayout(new BorderLayout());
+        
+        existingRules.forEach(listModel::addElement);
+        add(new JScrollPane(ruleList), BorderLayout.CENTER);
+
+        JButton btnAdd = new JButton("Add Bio-Rule");
+        btnAdd.addActionListener(e -> {
+            AgentRule newRule = new AgentRule("HeatResponse", "Temperature > 32", "SeekShade");
+            listModel.addElement(newRule);
+            existingRules.add(newRule);
+        });
+        
+        add(btnAdd, BorderLayout.SOUTH);
+        setSize(400, 300);
+    }
+
+    public DefaultListModel<AgentRule> getListModel() {
+        return listModel;
+    }
+
+    public void setListModel(DefaultListModel<AgentRule> listModel) {
+        this.listModel = listModel;
+    }
+
+    public JList<AgentRule> getRuleList() {
+        return ruleList;
+    }
+
+    public void setRuleList(JList<AgentRule> ruleList) {
+        this.ruleList = ruleList;
+    }
+    
+}package com.monadvsim.app.views;
+
+import com.monadvsim.app.models.Layer;
+import com.monadvsim.app.models.Project;
+import javax.swing.*;
+import javax.swing.tree.*;
+import java.awt.datatransfer.*;
+import java.util.List;
+import java.util.function.Supplier;
+
+public class LayerTransferHandler extends TransferHandler {
+
+    private final Runnable refreshCallback;
+    private DefaultMutableTreeNode draggedNode;
+    private final Supplier<Project> projectSupplier;
+
+    public LayerTransferHandler(Supplier<Project> projectSupplier, Runnable refreshCallback) {
+        this.projectSupplier = projectSupplier;
+        this.refreshCallback = refreshCallback;
+    }
+
+    @Override
+    public int getSourceActions(JComponent c) {
+        return MOVE;
+    }
+
+    @Override
+    protected Transferable createTransferable(JComponent c) {
+        JTree tree = (JTree) c;
+        draggedNode = (DefaultMutableTreeNode) tree.getLastSelectedPathComponent();
+        // Ensure we are dragging a Layer, not the Root
+        if (draggedNode == null || !(draggedNode.getUserObject() instanceof Layer)) {
+            return null;
+        }
+        return new StringSelection(draggedNode.toString());
+    }
+
+    @Override
+    public boolean canImport(TransferSupport support) {
+        return support.isDataFlavorSupported(DataFlavor.stringFlavor);
+    }
+
+    @Override
+    public boolean importData(TransferSupport support) {
+        Project currentProject = projectSupplier.get();
+
+        if (!canImport(support)) {
+            return false;
+        }
+
+        JTree tree = (JTree) support.getComponent();
+        JTree.DropLocation dl = (JTree.DropLocation) support.getDropLocation();
+        int targetIndex = dl.getChildIndex();
+
+        List<Layer> layers = currentProject.getLayers();
+        if (targetIndex < 0) {
+            targetIndex = layers.size();
+        }
+
+        if (draggedNode != null) {
+            DefaultMutableTreeNode parent = (DefaultMutableTreeNode) draggedNode.getParent();
+            int sourceIndex = parent.getIndex(draggedNode);
+
+            if (sourceIndex == targetIndex || sourceIndex == targetIndex - 1) {
+                draggedNode = null;
+                return true;
+            }
+
+            Layer movedLayer = layers.remove(sourceIndex);
+
+            if (targetIndex > sourceIndex) {
+                targetIndex--;
+            }
+
+            if (targetIndex < 0) {
+                targetIndex = 0;
+            }
+            if (targetIndex > layers.size()) {
+                targetIndex = layers.size();
+            }
+
+            layers.add(targetIndex, movedLayer);
+
+            tree.clearSelection();
+            draggedNode = null;
+
+            SwingUtilities.invokeLater(() -> {
+                refreshCallback.run();
+            });
+            return true;
+        }
+        return false;
+    }
+
+}
+package com.monadvsim.app.views;
+
+import com.monadvsim.app.models.*;
+import javax.swing.*;
+import java.awt.*;
+import java.util.Objects;
+
+public class DialogLayerProperties extends JDialog {
+
+    private final Layer layer;
+    private boolean confirmed = false;
+    private boolean deleteRequested = false;
+    private JTextField nameField;
+    private JCheckBox visibleCheck;
+    private JSlider opacitySlider;
+    private JComboBox<String> crsBox;
+    private JButton colorBtn;
+    private JSpinner popSpinner;
+    private JSpinner speedSpinner;
+    private JCheckBox wrapCheck;
+    private JCheckBox heatCheck;
+    private JCheckBox trailCheck;
+
+    public DialogLayerProperties(Frame owner, Layer layer) {
+        super(owner, "Properties: " + layer.getName(), true);
+        this.layer = layer;
+        initUI();
+    }
+
+    private void initUI() {
+        setLayout(new BorderLayout());
+        JPanel mainPanel = new JPanel(new GridBagLayout());
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(15, 15, 15, 15));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        // --- 1. Common Properties ---
+        mainPanel.add(new JLabel("Name:"), gbc);
+        gbc.gridx = 1;
+        nameField = new JTextField(layer.getName(), 15);
+        mainPanel.add(nameField, gbc);
+
+        gbc.gridx = 0;
+        gbc.gridy++;
+        JLabel opacityValLabel = new JLabel((int) (layer.getOpacity() * 100) + "%");
+        mainPanel.add(opacityValLabel, gbc);
+        gbc.gridx = 1;
+        opacitySlider = new JSlider(0, 100, (int) (layer.getOpacity() * 100));
+        mainPanel.add(opacitySlider, gbc);
+
+        gbc.gridx = 0;
+        gbc.gridy++;
+        mainPanel.add(new JLabel("Visible:"), gbc);
+        gbc.gridx = 1;
+        visibleCheck = new JCheckBox("", layer.isVisible());
+        mainPanel.add(visibleCheck, gbc);
+
+//        gbc.gridx = 0;
+//        gbc.gridy++;
+//        mainPanel.add(new JLabel("CRS:"), gbc);
+//        gbc.gridx = 1;
+//        crsBox = new JComboBox<>(new String[]{"EPSG:4326", "EPSG:3857"});
+//        crsBox.setSelectedItem(layer.getCrsCode());
+//        mainPanel.add(crsBox, gbc);
+
+        opacitySlider.addChangeListener(e -> {
+            opacityValLabel.setText(opacitySlider.getValue() + "%");
+        });
+
+        // --- 2. Vector Specific properties ---
+        if (layer instanceof VectorLayer vl) {
+            gbc.gridx = 0;
+            gbc.gridy++;
+            mainPanel.add(new JLabel("Polygon Color:"), gbc);
+            gbc.gridx = 1;
+            colorBtn = createColorButton(vl.getColorHex());
+            mainPanel.add(colorBtn, gbc);
+        }
+
+        // --- 3. Agent Specific Properties ---
+        if (layer instanceof AgentLayer al) {
+            gbc.gridx = 0;
+            gbc.gridy++;
+            mainPanel.add(new JLabel("Agent Color:"), gbc);
+            gbc.gridx = 1;
+            colorBtn = createColorButton(al.getColorHex());
+            mainPanel.add(colorBtn, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy++;
+            mainPanel.add(new JLabel("Population:"), gbc);
+            gbc.gridx = 1;
+            popSpinner = new JSpinner(new SpinnerNumberModel(al.getAgentsCount(), 0, 10000000, 100));
+            mainPanel.add(popSpinner, gbc);
+
+            // Base Speed Field (Crucial for fixing MainController.java:[212,32])
+            gbc.gridx = 0;
+            gbc.gridy++;
+            mainPanel.add(new JLabel("Base Speed:"), gbc);
+            gbc.gridx = 1;
+//            speedSpinner = new JSpinner(new SpinnerNumberModel(al.getBaseSpeed(), 0.0, 10.0, 0.01));
+//            mainPanel.add(speedSpinner, gbc);
+
+            gbc.gridx = 0;
+            gbc.gridy++;
+            mainPanel.add(new JLabel("Sim Options:"), gbc);
+            gbc.gridx = 1;
+//            wrapCheck = new JCheckBox("Wrap", al.isWrapAround());
+//            heatCheck = new JCheckBox("Heatmap", al.isHeatmapEnabled());
+//            trailCheck = new JCheckBox("Trails", al.isTrailsEnabled());
+
+//            JPanel sub = new JPanel(new FlowLayout(FlowLayout.LEFT));
+//            sub.add(wrapCheck);
+//            sub.add(heatCheck);
+//            sub.add(trailCheck);
+//            mainPanel.add(sub, gbc);
+        }
+
+        // --- 4. Action Buttons ---
+        JPanel btnPanel = new JPanel(new BorderLayout());
+        btnPanel.setBorder(BorderFactory.createEmptyBorder(0, 10, 10, 10));
+
+        JButton deleteBtn = new JButton("Remove Layer");
+        deleteBtn.setForeground(Color.RED);
+        deleteBtn.addActionListener(e -> {
+            if (JOptionPane.showConfirmDialog(this, "Delete this layer?", "Confirm",
+                    JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
+                deleteRequested = true;
+                confirmed = true;
+                dispose();
+            }
+        });
+
+        JPanel rightBtns = new JPanel();
+        JButton okBtn = new JButton("Apply Changes");
+        okBtn.addActionListener(e -> {
+            if (nameField.getText().trim().isEmpty()) {
+                JOptionPane.showMessageDialog(this, "Name cannot be empty");
+                return;
+            }
+            confirmed = true;
+            dispose();
+        });
+        JButton cancelBtn = new JButton("Cancel");
+        cancelBtn.addActionListener(e -> dispose());
+
+        rightBtns.add(cancelBtn);
+        rightBtns.add(okBtn);
+
+        btnPanel.add(deleteBtn, BorderLayout.WEST);
+        btnPanel.add(rightBtns, BorderLayout.EAST);
+
+        add(mainPanel, BorderLayout.CENTER);
+        add(btnPanel, BorderLayout.SOUTH);
+
+        pack();
+        setLocationRelativeTo(getOwner());
+    }
+
+    private JButton createColorButton(String hex) {
+        JButton btn = new JButton(" ");
+        try {
+            btn.setBackground(Color.decode(hex));
+        } catch (Exception e) {
+            btn.setBackground(Color.GREEN);
+        }
+        btn.addActionListener(e -> {
+            Color c = JColorChooser.showDialog(this, "Select Color", btn.getBackground());
+            if (c != null) {
+                btn.setBackground(c);
+            }
+        });
+        return btn;
+    }
+
+    // --- Data Accessors ---
+    public boolean isConfirmed() {
+        return confirmed;
+    }
+
+    public boolean isDeleteRequested() {
+        return deleteRequested;
+    }
+
+    public String getLayerName() {
+        return nameField.getText().trim();
+    }
+
+    public float getOpacity() {
+        return opacitySlider.getValue() / 100.0f;
+    }
+
+    public boolean isVisible() {
+        return visibleCheck.isSelected();
+    }
+
+    public String getSelectedCrs() {
+        return (String) crsBox.getSelectedItem();
+    }
+
+    public int getPopulation() {
+        return (popSpinner != null) ? (int) popSpinner.getValue() : 0;
+    }
+
+    public double getBaseSpeed() {
+        return (speedSpinner != null) ? (double) speedSpinner.getValue() : 0.05;
+    }
+
+    public boolean isWrap() {
+        return wrapCheck != null && wrapCheck.isSelected();
+    }
+
+    public boolean isHeatmapEnabled() {
+        return heatCheck != null && heatCheck.isSelected();
+    }
+
+    public boolean isTrailsEnabled() {
+        return trailCheck != null && trailCheck.isSelected();
+    }
+
+    public String getColorHex() {
+        if (colorBtn == null) {
+            return "#00FF00";
+        }
+        Color c = colorBtn.getBackground();
+        return String.format("#%02x%02x%02x", c.getRed(), c.getGreen(), c.getBlue());
+    }
+
+}
+package com.monadvsim.app.models;
+
+
+import java.awt.Graphics2D;
+import java.awt.geom.AffineTransform;
+import java.awt.geom.Rectangle2D;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
+
+public class AgentLayer extends Layer {
+    private List<Agent> agents = new CopyOnWriteArrayList<>();
+    private QuadTree spatialIndex;
+    private Rectangle2D worldBounds;
+    private String colorHex = "0000FF";
+
+    public AgentLayer(String name, Rectangle2D worldBounds) {
+        super(name);
+        this.worldBounds = worldBounds;
+        this.spatialIndex = new QuadTree(worldBounds);
+    }
+
+    public void addAgent(Agent a) {
+        agents.add(a);
+    }
+
+    /**
+     * Called by the SimulationEngine at the start of every tick.
+     * Rebuilding the tree is faster than checking every agent pair.
+     */
+    public void rebuildIndex() {
+        spatialIndex = new QuadTree(worldBounds);
+        for (Agent a : agents) {
+            if (a.isActive()) spatialIndex.insert(a);
+        }
+    }
+
+    /**
+     * Optimized Query for PhD Objectives 2 & 4.
+     * Instead of checking 100,000 agents, we check ~20 in a leaf node.
+     */
+    public List<Agent> getAgentsInRange(double x, double y, double radius) {
+        List<Agent> found = new ArrayList<>();
+        Rectangle2D searchArea = new Rectangle2D.Double(x - radius, y - radius, radius * 2, radius * 2);
+        spatialIndex.query(searchArea, found);
+        return found;
+    }
+
+    public List<Agent> getAgents() {
+        return agents;
+    }
+
+    @Override
+    public void update(double deltaT, SimulationState state) {
+        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    }
+
+    @Override
+    public void draw(Graphics2D g2d, AffineTransform worldToScreen) {
+        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    }
+    
+    public String getColorHex(){return colorHex;}
+    public void setColorHex(String newColor){ this.colorHex = newColor;}
+    public int getAgentsCount(){ return this.agents.size(); }
+}package com.monadvsim.app.models;
+
+
+import java.awt.Graphics2D;
+import java.awt.geom.AffineTransform;
+import java.io.Serializable;
+
+/**
+ * Base abstract class for all simulation layers.
+ * Revised to support decoupled simulation logic and generic rendering.
+ */
+public abstract class Layer implements Serializable {
+    protected String name;
+    protected boolean visible = true;
+    protected float opacity = 1.0f;
+    protected String filePath;
+
+    public Layer(String name) {
+        this.name = name;
+    }
+
+    /**
+     * Objective 3: The Simulation Engine calls this every "tick".
+     * This allows layers to update themselves (e.g., a rainfall raster 
+     * changing over time or an agent layer rebuilding its spatial index).
+     */
+    public abstract void update(double deltaT, SimulationState state);
+
+    /**
+     * Decoupled Rendering: The SimulationCanvas calls this to draw the layer.
+     * @param g2d The graphics context
+     * @param worldToScreen The transform to convert GIS coordinates to pixels
+     */
+    public abstract void draw(Graphics2D g2d, AffineTransform worldToScreen);
+
+    // Getters and Setters
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
+    public boolean isVisible() { return visible; }
+    public void setVisible(boolean visible) { this.visible = visible; }
+    public float getOpacity() { return opacity; }
+    public void setOpacity(float opacity) { this.opacity = opacity; }
+    public String getFilePath() { return filePath; }
+    public void setFilePath(String path) { this.filePath = path; }
+}package com.monadvsim.app.models;
+
+import org.locationtech.jts.geom.Geometry;
+import java.io.Serializable;
+
+public class CachedFeature implements Serializable {
+
+    private final Geometry geometry;
+    private final String terrainLabel;
+    private final double value;
+
+    public CachedFeature(Geometry geometry, String terrainLabel, double value) {
+        this.geometry = geometry;
+        this.terrainLabel = terrainLabel;
+        this.value = value;
+    }
+
+    public Geometry getGeometry() {
+        return geometry;
+    }
+
+    public String getTerrainLabel() {
+        return terrainLabel;
+    }
+
+    public double getValue() {
+        return value;
+    }
+}
+package com.monadvsim.app.models;
+
+import java.util.Map;
+import java.util.HashMap;
+
+public class CRSService {
+
+    public static final String DEFAULT_CRS = "EPSG:4326"; // WGS84
+    public static final String MERCATOR_CRS = "EPSG:3857";
+
+    public static boolean isGeographic(String epsgCode) {
+        return epsgCode.equals(DEFAULT_CRS)
+                || epsgCode.contains("4326")
+                || epsgCode.toLowerCase().contains("wgs84");
+    }
+
+    public static boolean isProjected(String epsgCode) {
+        return epsgCode.equals(MERCATOR_CRS)
+                || epsgCode.contains("3857")
+                || epsgCode.toLowerCase().contains("mercator");
+    }
+
+    public static String getHumanReadableName(String epsgCode) {
+        switch (epsgCode) {
+            case DEFAULT_CRS:
+                return "WGS84 (Lat/Lon)";
+            case MERCATOR_CRS:
+                return "Web Mercator";
+            case "EPSG:32633":
+                return "UTM Zone 33N";
+            default:
+                return epsgCode;
+        }
+    }
+}
+package com.monadvsim.app.models;
+import java.util.List;
+
+
+public class SimulationEngine implements Runnable {
+    private final List<Layer> layers;
+    private boolean running = false;
+    private double timeStep = 1.0; // 1 unit = 1 hour in simulation time
+    private long tickCount = 0;
+
+    public SimulationEngine(List<Layer> layers) {
+        this.layers = layers;
+    }
+
+    public void setRunning(boolean running) {
+        this.running = running;
+    }
+
+    @Override
+    public void run() {
+        while (true) {
+            if (running) {
+                SimulationState state = new SimulationState(layers, tickCount * timeStep);
+                
+                // Update all Layers
+                for (Layer layer : layers) {
+                    if (layer instanceof RasterLayer rl) {
+                        // Potential: update rasters if they are dynamic (e.g., daily rain)
+                    }
+                    if (layer instanceof AgentLayer al) {
+                        al.rebuildIndex(); // 1. Refresh spatial math
+                        for (Agent a : al.getAgents()) {
+                            a.step(timeStep, state); // 2. Rules use getAgentsInRange()
+                        }
+                    }
+                }
+                tickCount++;
+            }
+            
+            try {
+                // Control simulation speed
+                Thread.sleep(10); 
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
+    }
+}
+package com.monadvsim.app.models;
+
+
+import org.geotools.coverage.grid.GridCoverage2D;
+import java.awt.Graphics2D;
+import java.awt.geom.AffineTransform;
+import org.geotools.api.geometry.Position;
+import org.geotools.geometry.GeneralDirectPosition;
+import org.opengis.geometry.DirectPosition;
+import org.opengis.referencing.crs.CoordinateReferenceSystem;
+
+public class RasterLayer extends Layer {
+    private GridCoverage2D coverage;
+    private CoordinateReferenceSystem crs;
+
+    public RasterLayer(String name, GridCoverage2D coverage) {
+        super(name);
+        this.coverage = coverage;
+        this.crs = (CoordinateReferenceSystem) coverage.getCoordinateReferenceSystem();
+    }
+
+    /**
+     * Samples the value of a raster cell at a specific GIS coordinate.
+     * Essential for Objective 3 (Thermodynamics) to get local temperature/rainfall.
+     */
+    public double getValueAt(double x, double y) {
+        try {
+            // GeneralDirectPosition is the most stable way to sample in 34.1
+            GeneralDirectPosition pos = new GeneralDirectPosition(crs);
+            pos.setOrdinate(0, x);
+            pos.setOrdinate(1, y);
+
+            // evaluate returns an array (for multi-band rasters)
+            Object result = coverage.evaluate((Position) (DirectPosition) pos);
+            
+            if (result instanceof float[] values) {
+                return values[0];
+            } else if (result instanceof double[] values) {
+                return values[0];
+            } else if (result instanceof int[] values) {
+                return values[0];
+            }
+        } catch (Exception e) {
+            // Silently fail or return a nodata value if out of bounds
+        }
+        return 0.0;
+    }
+
+    @Override
+    public void update(double deltaT, SimulationState state) {
+        // Future: Logic to swap GeoTIFFs for time-series data
+    }
+
+    @Override
+    public void draw(Graphics2D g2d, AffineTransform worldToScreen) {
+        // Rendering logic is handled by the StreamingRenderer in the View
+    }
+    
+}/*
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Enum.java to edit this template
+ */
+package com.monadvsim.app.models;
+
+/**
+ *
+ * @author void
+ */
+public enum LifePhase {
+    LARVA, 
+    PUPA,
+    ADULT,
+    CHILD
+}
+package com.monadvsim.app.models;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+import com.fasterxml.jackson.annotation.*;
+import com.fasterxml.jackson.dataformat.xml.annotation.*;
+
+@JacksonXmlRootElement(localName = "monadProject")
+@JsonIgnoreProperties(ignoreUnknown = true)
+public class Project {
+
+    @JacksonXmlProperty(isAttribute = true)
+    private String name = "New Project";
+    @JacksonXmlProperty
+    private String crs = "EPSG:4326";
+    @JacksonXmlElementWrapper(localName = "layers")
+    @JacksonXmlProperty(localName = "layer")
+    private List<Layer> layers = new ArrayList<>();
+    @JsonIgnore
+    private transient File projectFile = null;
+
+    public Project() {
+    }
+
+    Project(String name) {
+        this.name = name;
+    }
+
+    public String getName() {
+        return this.name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    @JsonIgnore
+    public void setProjectFile(File newFile) {
+        this.projectFile = newFile;
+    }
+
+    public String getCrs() {
+        return crs;
+    }
+
+    public String getCrsCode() {
+        return crs;
+    }
+
+    public void setCrs(String crs) {
+        this.crs = crs;
+    }
+
+    public void setCrsCode(String crs) {
+        this.crs = crs;
+    }
+
+    @JsonIgnore
+    public File getProjectFile() {
+        return projectFile;
+    }
+
+    public List<Layer> getLayers() {
+        if (layers == null) {
+            layers = new ArrayList<>();
+        }
+        return layers;
+    }
+
+    public void setLayers(List<Layer> layers) {
+        this.layers = layers;
+    }
+}
+package com.monadvsim.app.models;
+
+
+public abstract class Agent {
+    protected String id;
+    protected double x, y;
+    protected boolean active = true;
+
+    public Agent(String id, double x, double y) {
+        this.id = id;
+        this.x = x;
+        this.y = y;
+    }
+
+    public abstract void step(double deltaT, SimulationState state);
+    
+    public double getX(){ return x;}
+    public double getY(){ return y;}
+    public boolean isActive() { return active == true;}
+}/*
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
+ */
+package com.monadvsim.app.models;
+
+import java.util.List;
+import java.util.stream.Collectors;
+
+/**
+ *
+ * @author void
+ */
+
+/**
+ * The "Bridge" class. 
+ * Allows agents to perceive their environment (Rasters and other Agents).
+ */
+public class SimulationState {
+    private final List<Layer> allLayers;
+    private final double currentTime;
+
+    public SimulationState(List<Layer> allLayers, double currentTime) {
+        this.allLayers = allLayers;
+        this.currentTime = currentTime;
+    }
+
+    // Objective 3: Thermodynamic rules. Agents use this to "sense" temperature.
+    public double getRasterValue(String layerName, double x, double y) {
+        return allLayers.stream()
+                .filter(l -> l instanceof RasterLayer && l.getName().equalsIgnoreCase(layerName))
+                .map(l -> ((RasterLayer) l).getValueAt(x, y)) // You'll need to implement getValueAt in RasterLayer
+                .findFirst()
+                .orElse(0.0);
+    }
+
+    // Objective 2 & 4: Find nearby "InertAgents" (like Water Tanks)
+    public List<Agent> getNearbyInertAgents(double x, double y, double radius) {
+        return allLayers.stream()
+                .filter(l -> l instanceof AgentLayer)
+                .flatMap(l -> ((AgentLayer) l).getAgents().stream())
+                .filter(a -> !(a instanceof LivingAgent)) // Only look for static objects
+                .filter(a -> calculateDistance(x, y, a.getX(), a.getY()) <= radius)
+                .collect(Collectors.toList());
+    }
+
+    private double calculateDistance(double x1, double y1, double x2, double y2) {
+        return Math.sqrt(Math.pow(x2 - x1, 2) + Math.pow(y2 - y1, 2));
+    }
+    
+    public boolean isInsideFeature(String layerName, double x, double y) {
+        for (Layer l : allLayers) {
+            if (l instanceof VectorLayer vl && l.getName().equals(layerName)) {
+                return vl.containsPoint(x, y);
+            }
+        }
+        return false;
+    }
+}/*
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
+ */
+package com.monadvsim.app.models;
+
+import java.util.ArrayList;
+import java.util.List;
+import java.awt.geom.Rectangle2D;
+
+
+public class QuadTree {
+    private final int CAPACITY = 10; // Max agents per node before splitting
+    private Rectangle2D boundary;
+    private List<Agent> agents;
+    private QuadTree nw, ne, sw, se;
+    private boolean divided = false;
+
+    public QuadTree(Rectangle2D boundary) {
+        this.boundary = boundary;
+        this.agents = new ArrayList<>();
+    }
+
+    private void subdivide() {
+        double x = boundary.getX();
+        double y = boundary.getY();
+        double w = boundary.getWidth() / 2;
+        double h = boundary.getHeight() / 2;
+
+        nw = new QuadTree(new Rectangle2D.Double(x, y, w, h));
+        ne = new QuadTree(new Rectangle2D.Double(x + w, y, w, h));
+        sw = new QuadTree(new Rectangle2D.Double(x, y + h, w, h));
+        se = new QuadTree(new Rectangle2D.Double(x + w, y + h, w, h));
+        divided = true;
+    }
+
+    public boolean insert(Agent agent) {
+        if (!boundary.contains(agent.getX(), agent.getY())) return false;
+
+        if (agents.size() < CAPACITY && !divided) {
+            agents.add(agent);
+            return true;
+        }
+
+        if (!divided) subdivide();
+
+        return (nw.insert(agent) || ne.insert(agent) || 
+                sw.insert(agent) || se.insert(agent));
+    }
+
+    public void query(Rectangle2D range, List<Agent> found) {
+        if (!boundary.intersects(range)) return;
+
+        for (Agent a : agents) {
+            if (range.contains(a.getX(), a.getY())) found.add(a);
+        }
+
+        if (divided) {
+            nw.query(range, found);
+            ne.query(range, found);
+            sw.query(range, found);
+            se.query(range, found);
+        }
+    }
+}package com.monadvsim.app.models;
+
+import java.io.Serializable;
+import java.util.List;
+
+public class AgentRule implements Serializable {
+    private String name;
+    private String triggerCondition; // e.g., "Temperature > 30"
+    private String action;           // e.g., "MoveRandom"
+
+    public AgentRule(String name, String triggerCondition, String action) {
+        this.name = name;
+        this.triggerCondition = triggerCondition;
+        this.action = action;
+    }
+
+    public void evaluate(Agent agent, SimulationState state) {
+        // Objective 3: Thermodynamic Rules
+        if (triggerCondition.contains("Temperature")) {
+            double localTemp = state.getRasterValue("Temperature", agent.getX(), agent.getY());
+            if (localTemp > 30.0 && action.equals("MetabolicBoost")) {
+                // Logic to increase agent speed
+            }
+        }
+        
+        // Objective 4: Intervention Rules
+        if (triggerCondition.equals("NearWater") && agent instanceof LivingAgent la) {
+            List<Agent> tanks = state.getNearbyInertAgents(agent.getX(), agent.getY(), 5.0);
+            if (!tanks.isEmpty()) {
+                la.setEnergy(100); // Reset energy at water tank
+            }
+        }
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getTriggerCondition() {
+        return triggerCondition;
+    }
+
+    public void setTriggerCondition(String triggerCondition) {
+        this.triggerCondition = triggerCondition;
+    }
+
+    public String getAction() {
+        return action;
+    }
+
+    public void setAction(String action) {
+        this.action = action;
+    }
+    
+    
+}package com.monadvsim.app.models;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import com.monadvsim.app.models.*;
+import org.geotools.gce.geotiff.GeoTiffReader;
+import org.geotools.data.shapefile.ShapefileDataStore;
+import org.geotools.api.data.SimpleFeatureSource;
+import org.geotools.styling.SLD;
+import org.geotools.api.style.Style;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+public class ProjectPersistenceService {
+    private static final ObjectMapper mapper = new ObjectMapper()
+            .registerModule(new JavaTimeModule());
+
+    public static void saveProject(Project project, File file) throws Exception {
+        ProjectData data = new ProjectData();
+        data.name = project.getName();
+        data.crsCode = project.getCrsCode();
+        
+        for (Layer layer : project.getLayers()) {
+            LayerData ld = new LayerData();
+            ld.name = layer.getName();
+            ld.type = layer.getClass().getSimpleName();
+            ld.visible = layer.isVisible();
+            ld.path = layer.getFilePath(); // Base Layer now stores path
+            data.layers.add(ld);
+        }
+        mapper.writeValue(file, data);
+    }
+
+    public static Project loadProject(File file) throws Exception {
+        ProjectData data = mapper.readValue(file, ProjectData.class);
+        Project project = new Project(data.name);
+
+        for (LayerData ld : data.layers) {
+            Layer layer = null;
+            File layerFile = new File(ld.path);
+
+            if (!layerFile.exists()) {
+                System.err.println("Warning: Layer file not found: " + ld.path);
+                continue;
+            }
+
+            try {
+                if (ld.type.equals("RasterLayer")) {
+                    GeoTiffReader reader = new GeoTiffReader(layerFile);
+                    layer = new RasterLayer(ld.name, reader.read(null), ld.path);
+                } 
+                else if (ld.type.equals("VectorLayer")) {
+                    ShapefileDataStore dataStore = new ShapefileDataStore(layerFile.toURI().toURL());
+                    SimpleFeatureSource source = dataStore.getFeatureSource();
+                    // Create a default style for the loaded shapefile
+                    Style style = SLD.createSimpleStyle(source.getSchema());
+                    layer = new VectorLayer(ld.name, source.getFeatures(), style, ld.path);
+                } 
+                else if (ld.type.equals("AgentLayer")) {
+                    layer = new AgentLayer(ld.name);
+                }
+
+                if (layer != null) {
+                    layer.setVisible(ld.visible);
+                    project.getLayers().add(layer);
+                }
+            } catch (Exception e) {
+                System.err.println("Failed to load layer: " + ld.name + " - " + e.getMessage());
+            }
+        }
+        return project;
+    }
+
+    public static class ProjectData {
+        public String name;
+        public String crsCode;
+        public List<LayerData> layers = new ArrayList<>();
+    }
+
+    public static class LayerData {
+        public String name;
+        public String type;
+        public String path;
+        public boolean visible;
+    }
+}/*
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Licenses/license-default.txt to change this license
+ * Click nbfs://nbhost/SystemFileSystem/Templates/Classes/Class.java to edit this template
+ */
+package com.monadvsim.app.models;
+
+/**
+ *
+ * @author void
+ */
+public class InertAgent extends Agent {
+    private double capacity;
+    private double currentVolume;
+
+    public InertAgent(String id, double x, double y, double capacity) {
+        super(id, x, y);
+        this.capacity = capacity;
+        this.currentVolume = capacity;
+    }
+
+    @Override
+    public void step(double deltaT, SimulationState state) {
+        // Logic: Evaporate based on temperature from Raster
+        double temp = state.getRasterValue("temperature", x, y);
+        this.currentVolume -= (temp * 0.01); 
+        
+        if (currentVolume < 0) currentVolume = 0;
+    }
+}package com.monadvsim.app.models;
+
+import org.geotools.api.feature.simple.SimpleFeature;
+import org.geotools.api.feature.simple.SimpleFeatureType;
+import org.geotools.data.simple.SimpleFeatureCollection;
+import org.geotools.map.FeatureLayer;
+import java.awt.Graphics2D;
+import java.awt.geom.AffineTransform;
+import org.geotools.api.style.Style;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.util.GeometricShapeFactory;
+
+public class VectorLayer extends Layer {
+    private SimpleFeatureCollection features;
+    private FeatureLayer gtLayer; 
+    private String colorHex = "00FF00";
+
+    public VectorLayer(String name, SimpleFeatureCollection features, Style style) {
+        super(name);
+        this.features = features;
+        this.gtLayer = new FeatureLayer(features, style);
+    }
+
+    VectorLayer(String name, SimpleFeatureCollection features, Style style, String path) {
+        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    }
+
+    /**
+     * Checks if a point (agent location) is inside any geometry in this layer.
+     * Use case: Is the mosquito inside a "Building" polygon?
+     */
+    public boolean containsPoint(double x, double y) {
+        Coordinate coord = new Coordinate(x, y);
+        org.locationtech.jts.geom.GeometryFactory gf = new org.locationtech.jts.geom.GeometryFactory();
+        Point point = gf.createPoint(coord);
+
+        try (org.geotools.data.simple.SimpleFeatureIterator it = features.features()) {
+            while (it.hasNext()) {
+                SimpleFeature feature = it.next();
+                Geometry geom = (Geometry) feature.getDefaultGeometry();
+                if (geom != null && geom.contains(point)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    @Override
+    public void update(double deltaT, SimulationState state) {
+        // Usually, vectors like buildings don't move.
+        // However, for Objective 4 (Intervention), you could change 
+        // the "State" of a feature (e.g., marking a house as "Sprayed").
+    }
+
+    @Override
+    public void draw(Graphics2D g2d, AffineTransform worldToScreen) {
+        // Rendering is handled by the StreamingRenderer in SimulationCanvas
+    }
+
+    public FeatureLayer getGtLayer() {
+        return gtLayer;
+    }
+    
+    public String getColorHex(){return colorHex;}
+    public void setColorHex(String newColor){ this.colorHex = newColor;}
+}package com.monadvsim.app.models;
+
+import java.util.List;
+
+/**
+ *
+ * @author void
+ */
+public abstract class LivingAgent extends Agent {
+    protected double health = 100.0;
+    protected double energy = 100.0;
+    protected double speed;
+    protected LifePhase phase; // e.g., LARVA, ADULT
+
+    public LivingAgent(String id, double x, double y) {
+        super(id, x, y);
+    }
+
+    // Logic for finding resources (like WaterTanks or Humans)
+    protected abstract void perceiveAndAct(SimulationState state);
+
+    public double getHealth() {
+        return health;
+    }
+
+    public void setHealth(double health) {
+        this.health = health;
+    }
+
+    public double getEnergy() {
+        return energy;
+    }
+
+    public void setEnergy(double energy) {
+        this.energy = energy;
+    }
+
+    public double getSpeed() {
+        return speed;
+    }
+
+    public void setSpeed(double speed) {
+        this.speed = speed;
+    }
+
+    public LifePhase getPhase() {
+        return phase;
+    }
+
+    public void setPhase(LifePhase phase) {
+        this.phase = phase;
+    }
+
+    public String getId() {
+        return id;
+    }
+
+    public void setId(String id) {
+        this.id = id;
+    }
+
+    public double getX() {
+        return x;
+    }
+
+    public void setX(double x) {
+        this.x = x;
+    }
+
+    public double getY() {
+        return y;
+    }
+
+    public void setY(double y) {
+        this.y = y;
+    }
+
+    public boolean isActive() {
+        return active;
+    }
+
+    public void setActive(boolean active) {
+        this.active = active;
+    }
+    
+    
+}package com.monadvsim.app.models;
+
+import java.util.prefs.Preferences;
+import java.util.*;
+import java.io.File;
+
+public class RecentProjectsService {
+
+    private static final int MAX_RECENT = 5;
+    private final Preferences prefs = Preferences.userNodeForPackage(RecentProjectsService.class);
+
+    public void addProject(File file) {
+        if (file == null) {
+            return;
+        }
+
+        List<String> recent = getRecentProjects();
+        String path = file.getAbsolutePath();
+
+        recent.remove(path);
+        recent.add(0, path);
+
+        if (recent.size() > MAX_RECENT) {
+            recent = recent.subList(0, MAX_RECENT);
+        }
+
+        prefs.put("recent_list", String.join("|", recent));
+    }
+
+    public List<String> getRecentProjects() {
+        String list = prefs.get("recent_list", "");
+        if (list.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // Convert to a mutable list and filter out non-existent files
+        List<String> paths = new ArrayList<>(Arrays.asList(list.split("\\|")));
+        paths.removeIf(p -> !new File(p).exists());
+
+        return paths;
+    }
+
+    public void clearHistory() {
+        prefs.remove("recent_list");
+    }
+}
+package com.monadvsim.app;
+
+import com.monadvsim.app.models.Project;
+import com.monadvsim.app.views.MainWindow;
+import com.monadvsim.app.controllers.MainController;
+
+/**
+ * Entry point
+ */
+public class App {
+
+    public static void main(String[] args) {
+        Project project = new Project();
+        MainWindow view = new MainWindow();
+        MainController controller = new MainController(project, view);
+    }
+}
+package com.monadvsim.app.controllers;
+
+import com.monadvsim.app.models.*;
+import com.monadvsim.app.views.*;
+import java.io.File;
+import java.util.Collections;
+import java.util.List;
+import javax.swing.*;
+import javax.swing.tree.DefaultMutableTreeNode;
+import javax.swing.tree.TreePath;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
+
+public class MainController {
+    private MainWindow view;
+    private Project project;
+    private SimulationEngine engine;
+    private Thread simThread;
+
+    public MainController(MainWindow view, Project project) {
+        this.view = view;
+        this.project = project;
+        // Initialize the engine with the project's layers
+        this.engine = new SimulationEngine(project.getLayers());
+        initController();
+    }
+
+    private void initController() {
+        // --- Simulation Run/Pause ---
+        view.getBtnRunSim().addActionListener(e -> startSimulation());
+        view.getBtnPauseSim().addActionListener(e -> engine.setRunning(false));
+
+        // --- Layer Management Buttons ---
+        view.getBtnAddLayer().addActionListener(e -> handleAddLayer());
+//        view.getBtnRemoveLayer().addActionListener(e -> handleRemoveLayer());
+//        view.getBtnMoveUp().addActionListener(e -> moveLayerUp());
+//        view.getBtnMoveDown().addActionListener(e -> moveLayerDown());
+
+        // --- Rules and Properties ---
+//        view.getBtnRules().addActionListener(e -> {
+//            DialogRuleEditor d = new DialogRuleEditor(view, project.getRules());
+//            d.setVisible(true);
+//        });
+
+        // --- Menu Items (Persistence) ---
+        view.getBtnSaveProject().addActionListener(e -> handleSave());
+        view.getBtnOpenProject().addActionListener(e -> handleOpen());
+
+        // --- Tree Interaction (Your Original Mouse Logic) ---
+        view.getLayerTree().addMouseListener(new MouseAdapter() {
+            @Override
+            public void mousePressed(MouseEvent e) {
+                if (SwingUtilities.isRightMouseButton(e)) {
+                    showContextMenu(e);
+                }
+            }
+        });
+
+        // --- The High-Frequency UI Refresh (Decoupled from Simulation) ---
+        new Timer(33, e -> view.getSimulationCanvas().repaint()).start();
+    }
+
+    private void startSimulation() {
+        engine.setRunning(true);
+        if (simThread == null || !simThread.isAlive()) {
+            simThread = new Thread(engine);
+            simThread.setDaemon(true); // Ensures simulation stops if app closes
+            simThread.start();
+        }
+    }
+
+    // --- YOUR ORIGINAL METHODS RE-INTEGRATED ---
+
+    private void showContextMenu(MouseEvent e) {
+        TreePath path = view.getLayerTree().getPathForLocation(e.getX(), e.getY());
+        if (path == null) return;
+        
+        view.getLayerTree().setSelectionPath(path);
+        JPopupMenu m = new JPopupMenu();
+        JMenuItem p = new JMenuItem("Properties");
+        p.addActionListener(al -> handleProjectProperties());
+        m.add(p);
+        m.show(e.getComponent(), e.getX(), e.getY());
+    }
+
+    private void handleProjectProperties() {
+        DialogProjectProperties d = new DialogProjectProperties(view,
+                project.getName(),
+                project.getCrsCode());
+        d.getBtnApply().addActionListener(e -> {
+            project.setName(d.getProjectName());
+            project.setCrsCode(d.getSelectedCrs());
+//            view.getSimulationCanvas().updateViewportCRS(project.getCrsCode());
+            refreshUI();
+            d.dispose();
+        });
+        d.setVisible(true);
+    }
+
+    public void moveLayerUp() {
+        TreePath path = view.getLayerTree().getSelectionPath();
+        if (path == null) return;
+        
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+        if (node.getUserObject() instanceof Layer) {
+            DefaultMutableTreeNode parent = (DefaultMutableTreeNode) node.getParent();
+            int idx = parent.getIndex(node);
+            if (idx > 0) {
+                Collections.swap(project.getLayers(), idx, idx - 1);
+                refreshUI();
+            }
+        }
+    }
+
+    public void moveLayerDown() {
+        TreePath path = view.getLayerTree().getSelectionPath();
+        if (path == null) return;
+        
+        DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+        if (node.getUserObject() instanceof Layer) {
+            DefaultMutableTreeNode parent = (DefaultMutableTreeNode) node.getParent();
+            int idx = parent.getIndex(node);
+            if (idx < project.getLayers().size() - 1) {
+                Collections.swap(project.getLayers(), idx, idx + 1);
+                refreshUI();
+            }
+        }
+    }
+
+    private void handleAddLayer() {
+        // ... Your existing JFileChooser logic ...
+        // Ensure you call refreshUI() after adding
+    }
+
+    private void handleRemoveLayer() {
+        TreePath path = view.getLayerTree().getSelectionPath();
+        if (path != null) {
+            DefaultMutableTreeNode node = (DefaultMutableTreeNode) path.getLastPathComponent();
+            if (node.getUserObject() instanceof Layer l) {
+                project.getLayers().remove(l);
+                refreshUI();
+            }
+        }
+    }
+
+    private void handleSave() {
+        JFileChooser fc = new JFileChooser();
+        if (fc.showSaveDialog(view) == JFileChooser.APPROVE_OPTION) {
+            try {
+                ProjectPersistenceService.saveProject(project, fc.getSelectedFile());
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    private void handleOpen() {
+        JFileChooser fc = new JFileChooser();
+        if (fc.showOpenDialog(view) == JFileChooser.APPROVE_OPTION) {
+            try {
+                this.project = ProjectPersistenceService.loadProject(fc.getSelectedFile());
+                this.engine = new SimulationEngine(project.getLayers()); // Reset engine
+                refreshUI();
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
+        }
+    }
+
+    private void refreshUI() {
+        view.updateLayerTree(project.getLayers());
+        view.getSimulationCanvas().setInternalLayers(project.getLayers());
+        // Expand tree rows as in your original refreshTree()
+        for (int i = 0; i < view.getLayerTree().getRowCount(); i++) {
+            view.getLayerTree().expandRow(i);
+        }
+    }
+}package com.monadvsim.app;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import org.junit.jupiter.api.Test;
+
+/**
+ * Unit test for simple App.
+ */
+public class AppTest {
+
+    /**
+     * Rigorous Test :-)
+     */
+    @Test
+    public void shouldAnswerWithTrue() {
+        assertTrue(true);
+    }
+}
