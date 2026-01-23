@@ -20,24 +20,18 @@ public class InertAgent extends Agent {
      */
     @Override
     public void update(Project project, TimeManager timeManager) {
-        if (larvalCount <= 0) return;
-
-        // 1. Get current temperature from the environment
+        // Larval development logic: Temperature speeds up maturation
         RasterLayer tempLayer = project.getRasterByName("Temperature");
-        if (tempLayer != null) {
-            double temp = tempLayer.getValueAt(x, y);
-            
-            // 2. Accumulate 'Degree-Days' (simplistic maturation rule)
-            // If temp is above a base (e.g., 10°C), larvae grow.
-            if (temp > 10.0) {
-                degreeDaySum += (temp - 10.0) * (1.0 / (24 * 4)); // Adjusted for 15-min ticks
-            }
-        }
+        double tempC = (tempLayer != null) ? (tempLayer.getValueAt(x, y) - 273.15) : 25.0;
 
-        // 3. Maturation: Spawn new LivingAgents if threshold reached
-        if (degreeDaySum >= MATURATION_THRESHOLD) {
-            spawnAdults(project);
-            degreeDaySum = 0; // Reset cycle
+        if (larvalCount > 0 && tempC > 20.0) {
+            // Every hour, some larvae mature into adults
+            int hatching = (int)(larvalCount * 0.05); 
+            for (int i = 0; i < hatching; i++) {
+                // Add new LivingAgent to the project's AgentLayer
+                project.getAgentLayers().get(0).addAgent(new LivingAgent(this.x, this.y));
+            }
+            larvalCount -= hatching;
         }
     }
 

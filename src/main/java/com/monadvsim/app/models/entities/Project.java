@@ -1,5 +1,6 @@
 package com.monadvsim.app.models.entities;
 
+import com.monadvsim.app.models.engine.SpatialRegistry;
 import com.monadvsim.app.models.engine.TimeManager;
 import java.util.ArrayList;
 import java.util.List;
@@ -11,6 +12,8 @@ public class Project implements Serializable {
     
     // The Environment
     private List<Layer> layers;
+    
+    private transient SpatialRegistry spatialRegistry;
     
     public Project(String name, String crsCode) {
         this.name = name;
@@ -61,4 +64,11 @@ public class Project implements Serializable {
     public String getCrsCode() { return crsCode; }
     public void setName(String name) { this.name = name; }
     public void setCrsCode(String crsCode) { this.crsCode = crsCode; }
+    public void setSpatialRegistry(SpatialRegistry spatialRegistry) {
+        this.spatialRegistry = spatialRegistry;
+    }
+
+    public SpatialRegistry getSpatialRegistry() {
+        return spatialRegistry;
+    }
 }

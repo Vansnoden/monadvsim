@@ -41,7 +41,7 @@ public class App {
             popLayer.setBounds(minLon, maxLon, minLat, maxLat);
             tempLayer.setBounds(minLon, maxLon, minLat, maxLat);
 
-            persistence.loadPopulationToLayer(popLayer, "prepared_data/pop_addis.tif");
+            persistence.loadPopulationToLayer(popLayer, "prepared_data/pop_addis.tiff");
             persistence.loadClimateToLayer(tempLayer, "prepared_data/climate_2026_1.nc");
 
             project.addLayer(popLayer);

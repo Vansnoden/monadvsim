@@ -16,33 +16,31 @@ public class LivingAgent extends Agent {
         super(x, y, "Adult");
     }
 
+    
     @Override
     public void update(Project project, TimeManager timeManager) {
         if (!alive) return;
 
-        // 1. Metabolic Cost: Age the mosquito
-        ageInTicks++;
-        if (ageInTicks > 2880) { // Approx 30 days at 15-min ticks
+        // 1. Get Environmental Context
+        RasterLayer tempLayer = project.getRasterByName("Temperature");
+        double tempK = (tempLayer != null) ? tempLayer.getValueAt(x, y) : 293.15; // ERA5 is often in Kelvin
+        double tempC = tempK - 273.15;
+
+        // 2. Daily Mortality Rule (An. stephensi logic)
+        // If it's too hot (>35°C) or too cold (<15°C), increase death probability
+        double deathProb = 0.01; // Base probability per tick
+        if (tempC > 35.0 || tempC < 15.0) deathProb = 0.05; 
+
+        if (Math.random() < deathProb) {
             this.alive = false;
             return;
         }
 
-        // 2. Sensing: Read Population Density (Humans)
-        RasterLayer popLayer = project.getRasterByName("Population");
-        double humanDensity = (popLayer != null) ? popLayer.getValueAt(x, y) : 0;
-
-        // 3. Movement Logic: Biased Random Walk
-        if (!isGravid) {
-            // Seek Humans: Move toward higher density or just wander
-            moveWithBias(humanDensity);
-            
-            // Interaction: If human density is high, "feed" and become gravid
-            if (humanDensity > 0.5 && random.nextDouble() < 0.1) {
-                isGravid = true;
-            }
+        // 3. Reproduction Rule (The "Birth" Bridge)
+        if (isGravid) {
+            seekAndLayEggs(project);
         } else {
-            // Seek Water: Look for an InertAgent (Water Tank) nearby
-            findWaterAndLayEggs(project);
+            seekBloodMeal(project);
         }
     }
 
@@ -54,6 +52,42 @@ public class LivingAgent extends Agent {
         // In a more complex version, we'd compare suitability of target vs current
         this.x += dx;
         this.y += dy;
+    }
+    
+    private void seekBloodMeal(Project project) {
+        RasterLayer pop = project.getRasterByName("Population");
+        double currentDensity = pop.getValueAt(x, y);
+
+        // Simple Chemotaxis: Move toward higher human density
+        // (In a 48-hr MVS, we use a simple random walk biased by the gradient)
+        this.x += (Math.random() - 0.5) * FLY_SPEED + (currentDensity * 0.01);
+        this.y += (Math.random() - 0.5) * FLY_SPEED + (currentDensity * 0.01);
+
+        if (currentDensity > 0.8 && Math.random() < 0.2) {
+            this.isGravid = true; // Blood meal successful
+        }
+    }
+    
+    private void seekAndLayEggs(Project project) {
+        // 1. Use the SpatialRegistry to find nearby Water Tanks
+        List<Agent> nearby = project.getSpatialRegistry().getNearbyAgents(x, y, SEARCH_RADIUS);
+
+        InertAgent targetTank = null;
+        for (Agent a : nearby) {
+            if (a instanceof InertAgent tank) {
+                targetTank = tank;
+                break; 
+            }
+        }
+
+        if (targetTank != null) {
+            targetTank.addEggs(50); // Deposit eggs
+            this.isGravid = false;  // Reset cycle
+        } else {
+            // Continue searching (Random Walk)
+            this.x += (Math.random() - 0.5) * FLY_SPEED;
+            this.y += (Math.random() - 0.5) * FLY_SPEED;
+        }
     }
 
     private void findWaterAndLayEggs(Project project) {
