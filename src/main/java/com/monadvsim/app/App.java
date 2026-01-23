@@ -14,7 +14,7 @@ public class App {
             
             // FIX: Use LocalDateTime to match new TimeManager
             LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-            TimeManager timeManager = new TimeManager(simStart, 3000, 15); 
+            TimeManager timeManager = new TimeManager(simStart, 500, 15); 
             
             ProjectPersistenceService persistence = new ProjectPersistenceService();
 
