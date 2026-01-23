@@ -8,16 +8,15 @@ import java.io.Serializable;
 
 public class Project implements Serializable {
     private String name;
-    private String crsCode; // e.g., "EPSG:4326"
+    private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
     
     // The Environment
     private List<Layer> layers;
     
     private transient SpatialRegistry spatialRegistry;
     
-    public Project(String name, String crsCode) {
+    public Project(String name) {
         this.name = name;
-        this.crsCode = crsCode;
         this.layers = new ArrayList<>();
     }
 

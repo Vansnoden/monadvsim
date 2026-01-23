@@ -3,6 +3,7 @@ package com.monadvsim.app.models.entities;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.stream.Collectors;
 
 public class AgentLayer extends Layer {
@@ -10,7 +11,7 @@ public class AgentLayer extends Layer {
 
     public AgentLayer(String name) {
         super(name);
-        this.agents = new ArrayList<>();
+        this.agents = new CopyOnWriteArrayList<>();
     }
 
     public List<Agent> getAgents() {

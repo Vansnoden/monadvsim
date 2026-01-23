@@ -1,14 +1,13 @@
 package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.*;
-import java.util.List;
-
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class SimulationEngine implements Runnable {
     private final Project project;
     private final TimeManager timeManager;
     private final SpatialRegistry spatialRegistry;
-    
     private boolean running = false;
     private long tickLimit = Long.MAX_VALUE;
 
@@ -19,54 +18,57 @@ public class SimulationEngine implements Runnable {
         this.project.setSpatialRegistry(spatialRegistry);
     }
 
+    public void setTickLimit(long limit) { this.tickLimit = limit; }
+
     @Override
     public void run() {
         running = true;
         System.out.println("Starting Headless Engine: " + project.getName());
 
         while (running && timeManager.getTickCount() < tickLimit) {
-            // 1. Advance Time
-            if (!timeManager.tick()) {
-                running = false;
-                break;
-            }
+            if (!timeManager.tick()) break;
 
-            // 2. Synchronize Environment (Update Raster frames)
             project.updateEnvironment(timeManager.getCurrentFrameIndex());
+            
+            // Rebuild spatial index
+            List<Agent> allAgents = project.getAgentLayers().stream()
+                .flatMap(l -> l.getAgents().stream()).collect(Collectors.toList());
+            spatialRegistry.update(allAgents);
 
-            // 3. Synchronize Spatial Registry (Rebuild QuadTree)
-            // We only need to re-index the LivingAgents (mosquitoes)
-            List<AgentLayer> agentLayers = project.getAgentLayers();
-            spatialRegistry.update(agentLayers.stream()
-                .flatMap(layer -> layer.getAgents().stream())
-                .toList());
+            // Find the dedicated layer for Adults
+            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+                .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
 
-            // 4. Update Agents in Parallel (The "Massive" part)
-            for (AgentLayer layer : agentLayers) {
-                // parallelStream() utilizes all CPU cores for the biology math
+            for (AgentLayer layer : project.getAgentLayers()) {
+                List<Agent> newborns = Collections.synchronizedList(new ArrayList<>());
+
                 layer.getAgents().parallelStream().forEach(agent -> {
-                    agent.update(project, timeManager);
+                    if (agent instanceof InertAgent tank) {
+                        int hatch = tank.calculateHatching(project);
+                        for (int i = 0; i < hatch; i++) {
+                            newborns.add(new LivingAgent(tank.getX(), tank.getY()));
+                        }
+                    } else {
+                        agent.update(project, timeManager);
+                    }
                 });
+
+                // Add newborns to the Adult layer (mosquitoLayer)
+                if (mosquitoLayer != null) {
+                    mosquitoLayer.getAgents().addAll(newborns);
+                }
                 
-                // Cleanup dead agents after the parallel loop
+                // Remove dead agents
                 layer.update(timeManager.getTickCount(), 1.0);
             }
 
-            // 5. Headless Feedback
             if (timeManager.getTickCount() % 100 == 0) {
+                long totalAdults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
                 System.out.println("Tick: " + timeManager.getTickCount() + 
-                                   " | Date: " + timeManager.getTimestampString() +
-                                   " | Agents: " + getTotalAgentCount());
+                                   " | Time: " + timeManager.getCurrentDateTime() + 
+                                   " | Adults: " + totalAdults);
             }
         }
-        System.out.println("Simulation Finished.");
+        System.out.println("✅ Engine Loop Finished.");
     }
-
-    private int getTotalAgentCount() {
-        return project.getAgentLayers().stream()
-                .mapToInt(l -> l.getAgents().size()).sum();
-    }
-
-    public void stop() { this.running = false; }
-    public void setTickLimit(long limit) { this.tickLimit = limit; }
 }

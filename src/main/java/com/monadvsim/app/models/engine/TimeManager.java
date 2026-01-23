@@ -1,32 +1,35 @@
 package com.monadvsim.app.models.engine;
 
-
 import java.time.LocalDateTime;
 import java.time.Duration;
-import java.time.temporal.ChronoUnit;
 
 public class TimeManager {
-    private LocalDateTime startDateTime;
+    private final LocalDateTime startDateTime;
     private LocalDateTime currentDateTime;
-    private LocalDateTime endDateTime;
+    private final LocalDateTime endDateTime;
     
     private long tickCount = 0;
-    private final Duration tickDuration; // e.g., Duration.ofMinutes(15)
-    
-    // For Time-Series Mapping
-    private final Duration dataStepDuration; // e.g., Duration.ofHours(1) for ERA5 data
+    private final Duration tickDuration;      // Usually 15 minutes
+    private final Duration dataStepDuration;  // Usually 1 hour (for ERA5)
 
-    public TimeManager(LocalDateTime start, LocalDateTime end, Duration tickSize, Duration dataStep) {
+    /**
+     * @param start The start date of the simulation
+     * @param totalTicks Total number of ticks to run
+     * @param tickMinutes Length of each tick in minutes (e.g., 15)
+     */
+    public TimeManager(LocalDateTime start, int totalTicks, int tickMinutes) {
         this.startDateTime = start;
         this.currentDateTime = start;
-        this.endDateTime = end;
-        this.tickDuration = tickSize;
-        this.dataStepDuration = dataStep;
+        this.tickDuration = Duration.ofMinutes(tickMinutes);
+        this.dataStepDuration = Duration.ofHours(1); // Standard for ERA5-Land
+        
+        // Calculate end date based on total ticks
+        this.endDateTime = start.plus(tickDuration.multipliedBy(totalTicks));
     }
 
     /**
      * Advances the simulation by one tick.
-     * @return true if the simulation is still within the end date.
+     * @return true if the simulation is still within the time bounds.
      */
     public boolean tick() {
         currentDateTime = currentDateTime.plus(tickDuration);
@@ -35,27 +38,28 @@ public class TimeManager {
     }
 
     /**
-     * Calculates which frame of a Time Series the simulation is currently in.
-     * Useful for fetching the correct 'band' in a multi-temporal Raster.
+     * Maps the current simulation time to the index of the NetCDF climate frame.
+     * If sim is at 45 mins and data is hourly, this returns index 0.
+     * If sim is at 75 mins, this returns index 1.
      */
     public int getCurrentFrameIndex() {
-        long minutesElapsed = Duration.between(startDateTime, currentDateTime).toMinutes();
-        long stepMinutes = dataStepDuration.toMinutes();
-        return (int) (minutesElapsed / stepMinutes);
+        Duration elapsed = Duration.between(startDateTime, currentDateTime);
+        return (int) (elapsed.toHours()); // Simple mapping for hourly data
     }
 
     /**
-     * Theoretical Interpolation Weight: 
-     * Returns a value 0.0 to 1.0 representing how far we are between two data steps.
-     * Used for smoothing temperature transitions.
+     * PhD Level Smoothing: 
+     * Returns how far (0.0 to 1.0) we are between two hourly climate data points.
+     * Useful if you want to interpolate temperature between two hours.
      */
     public double getInterpolationFactor() {
-        long minutesSinceLastStep = Duration.between(startDateTime, currentDateTime).toMinutes() % dataStepDuration.toMinutes();
-        return (double) minutesSinceLastStep / dataStepDuration.toMinutes();
+        long minutesIntoHour = currentDateTime.getMinute();
+        return (double) minutesIntoHour / 60.0;
     }
 
     // Getters
     public LocalDateTime getCurrentDateTime() { return currentDateTime; }
     public long getTickCount() { return tickCount; }
-    public String getTimestampString() { return currentDateTime.toString(); }
+    public LocalDateTime getStartDateTime() { return startDateTime; }
+    public LocalDateTime getEndDateTime() { return endDateTime; }
 }

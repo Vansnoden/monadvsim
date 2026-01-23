@@ -1,65 +1,60 @@
 package com.monadvsim.app.models.entities;
 
-
 import java.io.Serializable;
 
 public class RasterLayer extends Layer implements Serializable {
-    // The data grid: [time_frame][x_coordinate][y_coordinate]
-    private double[][][] dataGrid;
-    private int currentFrame = 0;
-    
-    // Geographical bounds for coordinate mapping
-    private double minX, maxX, minY, maxY;
-    private int width, height;
+    private double[][][] dataGrid; // [frame][x][y]
+    private int width, height, frames;
+    private int activeFrame = 0;
+    private double minLon, maxLon, minLat, maxLat;
 
-    public RasterLayer(String name, int width, int height, int timeFrames) {
+    public RasterLayer(String name, int width, int height, int frames) {
         super(name);
         this.width = width;
         this.height = height;
-        this.dataGrid = new double[timeFrames][width][height];
+        this.frames = frames;
+        this.dataGrid = new double[frames][width][height];
+    }
+
+    public void setBounds(double minLon, double maxLon, double minLat, double maxLat) {
+        this.minLon = minLon;
+        this.maxLon = maxLon;
+        this.minLat = minLat;
+        this.maxLat = maxLat;
     }
 
     /**
-     * Samples the value at a world coordinate.
-     * This is the "Sensing" mechanism for mosquitoes.
+     * Maps geographic Lon/Lat to the internal grid index.
      */
-    public double getValueAt(double worldX, double worldY) {
-        int gridX = worldToGridX(worldX);
-        int gridY = worldToGridY(worldY);
+    public double getValueAt(double lon, double lat) {
+        if (maxLon == minLon || maxLat == minLat) return 0.0;
 
-        if (gridX >= 0 && gridX < width && gridY >= 0 && gridY < height) {
-            return dataGrid[currentFrame][gridX][gridY];
-        }
-        return 0.0;
-    }
+        // Transform Lon/Lat to 0.0 - 1.0 range
+        double xFrac = (lon - minLon) / (maxLon - minLon);
+        double yFrac = (lat - minLat) / (maxLat - minLat);
 
-    private int worldToGridX(double x) {
-        return (int) ((x - minX) / (maxX - minX) * width);
-    }
+        // Map to array indices
+        int x = (int) (xFrac * (width - 1));
+        int y = (int) (yFrac * (height - 1));
 
-    private int worldToGridY(double y) {
-        return (int) ((y - minY) / (maxY - minY) * height);
-    }
-
-    public void setActiveFrame(int frameIndex) {
-        if (frameIndex >= 0 && frameIndex < dataGrid.length) {
-            this.currentFrame = frameIndex;
-        }
+        // Boundary safety
+        if (x < 0 || x >= width || y < 0 || y >= height) return 0.0;
+        
+        return dataGrid[activeFrame][x][y];
     }
 
     public void setData(int frame, int x, int y, double value) {
-        this.dataGrid[frame][x][y] = value;
+        if (frame < frames && x < width && y < height) {
+            dataGrid[frame][x][y] = value;
+        }
     }
 
-    public void setBounds(double minX, double maxX, double minY, double maxY) {
-        this.minX = minX;
-        this.maxX = maxX;
-        this.minY = minY;
-        this.maxY = maxY;
+    public void setActiveFrame(int index) {
+        this.activeFrame = Math.min(index, frames - 1);
     }
 
     @Override
     public void update(long tick, double deltaT) {
-        // TimeManager usually calls setActiveFrame, but logic can be added here
+        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
     }
 }
