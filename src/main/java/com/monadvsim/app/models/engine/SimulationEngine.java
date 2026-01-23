@@ -20,43 +20,58 @@ public class SimulationEngine implements Runnable {
     @Override
     public void run() {
         running = true;
-        while (running) {
-            if (!timeManager.tick()) break;
+        System.out.println("🚀-> Simulation Engine Started...");
 
+        while (running) {
+            // Advance Time
+            if (!timeManager.tick()) {
+                running = false;
+                break;
+            }
+
+            // Synchronize Environmental Context
+            // Loads the correct Raster frame (Temp/Rain) for the current tick
             project.updateEnvironment(timeManager.getCurrentFrameIndex());
             
+            // Update Spatial Registry (QuadTree)
+            // Agents must be indexed BEFORE Layer updates so they can find each other
             List<Agent> allAgents = project.getAgentLayers().stream()
-                .flatMap(l -> l.getAgents().stream()).collect(Collectors.toList());
+                .flatMap(l -> l.getAgents().stream())
+                .collect(Collectors.toList());
             spatialRegistry.update(allAgents);
 
-            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
-                .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
-
+            // Process Agent Layers in ORDER
+            // This triggers the RuleEngine evaluation for every agent in every layer
             for (AgentLayer layer : project.getAgentLayers()) {
-                // FIX: Use a Synchronized List for newborns
-                List<Agent> newborns = Collections.synchronizedList(new ArrayList<>());
-
-                layer.getAgents().parallelStream().forEach(agent -> {
-                    if (agent instanceof InertAgent tank) {
-                        int hatch = tank.calculateHatching(project);
-                        for (int i = 0; i < hatch; i++) {
-                            newborns.add(new LivingAgent(tank.getX(), tank.getY()));
-                        }
-                    } else {
-                        agent.update(project, timeManager);
-                    }
-                });
-
-                if (mosquitoLayer != null && !newborns.isEmpty()) {
-                    mosquitoLayer.getAgents().addAll(newborns);
-                }
-                layer.update(timeManager.getTickCount(), 1.0);
+                layer.update(project);
             }
 
+            // Console Reporting
             if (timeManager.getTickCount() % 10 == 0) {
-                long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-                System.out.println("Tick: " + timeManager.getTickCount() + " | Adults: " + adults);
+                reportProgress();
             }
         }
+    }
+
+    private void reportProgress() {
+        AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+            .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+            .findFirst().orElse(null);
+
+        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
+        
+        // Optional: Sum up all larvae across all tanks (inert agents) for habitat monitoring
+        long totalLarvae = project.getAgentLayers().stream()
+            .flatMap(l -> l.getAgents().stream())
+            .filter(a -> a instanceof InertAgent)
+            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
+            .sum();
+
+        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d", 
+            timeManager.getTickCount(), adults, totalLarvae));
+    }
+
+    public void stop() {
+        this.running = false;
     }
 }

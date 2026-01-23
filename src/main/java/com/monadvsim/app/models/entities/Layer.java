@@ -33,7 +33,7 @@ public abstract class Layer implements Serializable {
      * RasterLayers might use this to swap time-series frames.
      * AgentLayers use this to iterate through mosquito logic.
      */
-    public abstract void update(long tick, double deltaT);
+    public abstract void update(Project project);
 
     @Override
     public String toString() {

@@ -35,7 +35,16 @@ public class VectorLayer extends Layer {
     }
 
     @Override
-    public void update(long tick, double deltaT) {
+    public void update(Project project) {
         // Usually static, but can be used for "moving" boundaries if needed.
     }
+
+    public String getFilePath() {
+        return filePath;
+    }
+
+    public void setFilePath(String filePath) {
+        this.filePath = filePath;
+    }
+    
 }

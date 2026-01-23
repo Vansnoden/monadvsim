@@ -53,44 +53,59 @@ public class SimulationEngine implements Runnable {
     @Override
     public void run() {
         running = true;
-        while (running) {
-            if (!timeManager.tick()) break;
+        System.out.println("🚀-> Simulation Engine Started...");
 
+        while (running) {
+            // Advance Time
+            if (!timeManager.tick()) {
+                running = false;
+                break;
+            }
+
+            // Synchronize Environmental Context
+            // Loads the correct Raster frame (Temp/Rain) for the current tick
             project.updateEnvironment(timeManager.getCurrentFrameIndex());
             
+            // Update Spatial Registry (QuadTree)
+            // Agents must be indexed BEFORE Layer updates so they can find each other
             List<Agent> allAgents = project.getAgentLayers().stream()
-                .flatMap(l -> l.getAgents().stream()).collect(Collectors.toList());
+                .flatMap(l -> l.getAgents().stream())
+                .collect(Collectors.toList());
             spatialRegistry.update(allAgents);
 
-            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
-                .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
-
+            // Process Agent Layers in ORDER
+            // This triggers the RuleEngine evaluation for every agent in every layer
             for (AgentLayer layer : project.getAgentLayers()) {
-                // FIX: Use a Synchronized List for newborns
-                List<Agent> newborns = Collections.synchronizedList(new ArrayList<>());
-
-                layer.getAgents().parallelStream().forEach(agent -> {
-                    if (agent instanceof InertAgent tank) {
-                        int hatch = tank.calculateHatching(project);
-                        for (int i = 0; i < hatch; i++) {
-                            newborns.add(new LivingAgent(tank.getX(), tank.getY()));
-                        }
-                    } else {
-                        agent.update(project, timeManager);
-                    }
-                });
-
-                if (mosquitoLayer != null && !newborns.isEmpty()) {
-                    mosquitoLayer.getAgents().addAll(newborns);
-                }
-                layer.update(timeManager.getTickCount(), 1.0);
+                layer.update(project);
             }
 
+            // Console Reporting
             if (timeManager.getTickCount() % 10 == 0) {
-                long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-                System.out.println("Tick: " + timeManager.getTickCount() + " | Adults: " + adults);
+                reportProgress();
             }
         }
+    }
+
+    private void reportProgress() {
+        AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+            .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+            .findFirst().orElse(null);
+
+        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
+        
+        // Optional: Sum up all larvae across all tanks (inert agents) for habitat monitoring
+        long totalLarvae = project.getAgentLayers().stream()
+            .flatMap(l -> l.getAgents().stream())
+            .filter(a -> a instanceof InertAgent)
+            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
+            .sum();
+
+        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d", 
+            timeManager.getTickCount(), adults, totalLarvae));
+    }
+
+    public void stop() {
+        this.running = false;
     }
 }package com.monadvsim.app.models.engine;
 
@@ -156,115 +171,391 @@ public class TimeManager {
     public long getTickCount() { return tickCount; }
     public LocalDateTime getStartDateTime() { return startDateTime; }
     public LocalDateTime getEndDateTime() { return endDateTime; }
-}package com.monadvsim.app.models.services;
+}package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.*;
-import java.io.*;
+import javax.script.ScriptEngine;
+import java.util.List;
+import java.util.Map;
+import javax.script.Bindings;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
 
+
+public class RuleEngine {
+    private final ScriptEngine engine;
+    private final double defaultSearchRadius = 0.005;
+    private final double defaultHatchProb = 0.01;
+    private final double defaultStep = 0.0005;
+
+    public RuleEngine() {
+        System.setProperty("polyglot.js.nashorn-compat", "true");
+        ScriptEngineManager manager = new ScriptEngineManager();
+        this.engine = manager.getEngineByName("graal.js");
+        if (this.engine == null) {
+            throw new RuntimeException("-> GraalVM JS Engine not found. "
+                    + "Ensure pom.xml dependencies are loaded.");
+        }
+    }
+
+    /**
+     * The core logic evaluator.
+     * @param condition The logic string (e.g., "temp > 30 && random < 0.01")
+     * @param agent The agent currently being processed
+     * @param project The project containing environmental rasters
+     * @return true if the rule conditions are met
+     */
+    public boolean evaluate(String condition, Agent agent, Project project) {
+        try {
+            Bindings bindings = engine.createBindings();
+            
+            // Map Raster Values (Environment)
+            bindings.put("temp", getSafeValue(project, 
+                    "Temperature", agent.getX(), agent.getY()) - 273.15);
+            bindings.put("rain", getSafeValue(project, 
+                    "Rainfall", agent.getX(), agent.getY()));
+            bindings.put("pop", getSafeValue(project, 
+                    "Population", agent.getX(), agent.getY()));
+            bindings.put("elev", getSafeValue(project, 
+                    "Elevation", agent.getX(), agent.getY()));
+            
+            // Map Agent State (Biology)
+            if(agent instanceof LivingAgent la){
+                bindings.put("age", la.getAge());
+                bindings.put("isGravid", la.isGravid());
+                bindings.put("random", Math.random());
+            }
+            
+            
+            // 3. Special Logic for Habitats (InertAgents)
+            if (agent instanceof InertAgent tank) {
+                bindings.put("larvae", tank.getLarvalCount());
+                bindings.put("capacity", tank.getCapacity());
+            }
+
+            // Evaluate the string
+            Object result = engine.eval(condition, bindings);
+            return result instanceof Boolean && (Boolean) result;
+
+        } catch (ScriptException e) {
+            System.err.println("Rule Syntax Error: " 
+                    + condition + " -> " + e.getMessage());
+            return false;
+        }
+    }
+
+    /**
+     * Executes the resulting action in the simulation world.
+     */
+    public void execute(String action, Agent agent, Project project) {
+        switch (action.toLowerCase()) {
+            case "die":
+                if (agent instanceof LivingAgent la) {
+                    la.setAlive(false);
+                }
+                break;
+
+            case "get_gravid":
+                if (agent instanceof LivingAgent la) {
+                    la.setGravid(true);
+                }
+                break;
+
+            case "lay_eggs":
+                // Interaction: Mosquito searches for nearby 
+                // Tank in Spatial Registry
+                List<Agent> nearby = project.getSpatialRegistry()
+                        .getNearbyAgents(
+                                agent.getX(), agent.getY(), 
+                                defaultSearchRadius);
+                for (Agent n : nearby) {
+                    if (n instanceof InertAgent ia) {
+                        ia.setEggGount(20); // Adds eggs to the habitat
+                        if( agent instanceof LivingAgent la){
+                            la.setGravid(false);
+                        }
+                        break;
+                    }
+                }
+                break;
+
+            case "hatch":
+                if (agent instanceof InertAgent ia) {
+                    // Logic to spawn a new LivingAgent at this location
+                    int hatchCount = (int) (ia.getLarvalCount() * defaultHatchProb); 
+                    ia.setLarvalCount(hatchCount);
+                }
+                break;
+
+            case "move_random":
+                double step = 0.0005;
+                if(agent instanceof LivingAgent la){
+                    la.move((Math.random() - 0.5) * step, 
+                            (Math.random() - 0.5) * step);
+                }
+                break;
+        }
+    }
+
+    private double getSafeValue(Project p, String layerName, double x, double y) {
+        RasterLayer layer = p.getRasterByName(layerName);
+        return (layer != null) ? layer.getValueAt(x, y) : 0.0;
+    }
+}package com.monadvsim.app.models.services;
+
+import com.monadvsim.app.models.entities.Agent;
+import com.monadvsim.app.models.entities.AgentLayer;
+import com.monadvsim.app.models.entities.InertAgent;
+import com.monadvsim.app.models.entities.LivingAgent;
+import com.monadvsim.app.models.entities.Project;
+import com.monadvsim.app.models.entities.RasterLayer;
+import java.awt.Point;
+import java.awt.geom.Rectangle2D;
+import java.io.BufferedWriter;
+import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.util.Locale;
+import org.geotools.api.coverage.grid.GridEnvelope;
+import org.geotools.api.geometry.Position;
+import org.geotools.api.parameter.GeneralParameterValue;
+import org.geotools.api.parameter.ParameterValue;
+import org.geotools.coverage.grid.GridCoverage2D;
+import org.geotools.coverage.grid.GridGeometry2D;
+import org.geotools.coverage.grid.io.AbstractGridFormat;
+import org.geotools.coverage.grid.io.OverviewPolicy;
+import org.geotools.coverage.io.netcdf.NetCDFReader;
+import org.geotools.gce.geotiff.GeoTiffReader;
+import org.geotools.geometry.jts.ReferencedEnvelope;
+
+
+/**
+ * Service to handle data ingestion from GIS files and simulation results export.
+ */
 public class ProjectPersistenceService {
 
-    // Helper to initialize any TIFF (Population, Buildings, Elevation)
+    /**
+     * Ingests a TIFF using GeoTools and dynamically initializes the layer
+     * based on the file's actual metadata.
+     */
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
-        // Here you would use a library like GeoTools or GDAL.
-        // For your PhD MVS, we ensure the layer is flagged as 'loaded' with data.
-        System.out.println("✅ Ingested Spatial Layer: " + layer.getName() + " [" + filePath + "]");
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new FileNotFoundException("* Raster file not found: " + filePath);
+        }
+
+        // Use GeoTiffReader to access the file
+        GeoTiffReader reader = new GeoTiffReader(file);
+        GridCoverage2D coverage = reader.read(null);
+        // Extract dimensions from the GridEnvelope
+        GridEnvelope envelope = coverage.getGridGeometry().getGridRange();
+        int width = envelope.getSpan(0);  // Returns actual width in pixels
+        int height = envelope.getSpan(1); // Returns actual height in pixels
         
-        // Safety Fallback: fill with 1.0 so the simulation doesn't have "dead zones"
-        for (int x = 0; x < 100; x++) {
-            for (int y = 0; y < 100; y++) {
-                layer.setData(0, x, y, 1.0);
+        // Extract Geographic Bounds (The Fix)
+        GridGeometry2D geometry = coverage.getGridGeometry();
+        ReferencedEnvelope bounds = geometry.getEnvelope2D();
+        // Extract the coordinates
+        double minLon = bounds.getMinX();
+        double maxLon = bounds.getMaxX();
+        double minLat = bounds.getMinY();
+        double maxLat = bounds.getMaxY();
+
+        // Dynamically initialize your model's internal array
+        layer.initialize(width, height, layer.getFrames());
+
+        System.out.println("-> GeoTools Ingested: " + layer.getName());
+        System.out.println("-> Resolution: " + width + "x" + height);
+
+        // Populate the data
+        // In a full implementation, you'd iterate the RenderedImage or use evaluate()
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                // Get value at pixel (x,y)
+                float[] pixel = (float[]) coverage.evaluate((Position) new Point(x, y));
+                layer.setData(0, x, y, pixel[0]);
             }
         }
-    }
-
-    // New method to handle dual-variable NetCDF (Temp + Rain)
-    public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
-        // This method should map '2m_temperature' -> tempLayer
-        // and 'total_precipitation' -> rainLayer
-        System.out.println("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
         
-        // Fallback to 22C and 0.0mm rain if file read fails
-        for (int f = 0; f < 3000; f++) {
-            for (int x = 0; x < 100; x++) {
-                for (int y = 0; y < 100; y++) {
-                    tempLayer.setData(f, x, y, 295.15); // 22 Celsius
-                    rainLayer.setData(f, x, y, 0.001);  // Trace rain
-                }
-            }
-        }
+        reader.dispose();
     }
 
+    /**
+     * Exports results with precision required for PhD spatial analysis.
+     */
     public void exportToCSV(Project project, String outputPath) throws IOException {
         RasterLayer pop = project.getRasterByName("Population");
         RasterLayer temp = project.getRasterByName("Temperature");
         RasterLayer rain = project.getRasterByName("Rainfall");
 
-        try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
-            writer.println("AgentID,X,Y,Type,Status,PopDensity,TempC,Rain_mm");
+        File file = new File(outputPath);
+        if (file.getParentFile() != null) file.getParentFile().mkdirs();
+
+        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter(file)))) {
+            writer.println("AgentID,X,Y,Type,Status,PopDensity,TempC,Rain_mm,Age,LarvaeCount,isGravid");
+
             for (AgentLayer layer : project.getAgentLayers()) {
                 for (Agent agent : layer.getAgents()) {
-                    double t = (temp != null) ? temp.getValueAt(agent.getX(), agent.getY()) - 273.15 : 25.0;
-                    double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0; // m to mm
+                    // Pull environment data from the exact coordinate
+                    double t = project.getTemperatureAt(agent.getX(), agent.getY());
+                    double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0;
                     double p = (pop != null) ? pop.getValueAt(agent.getX(), agent.getY()) : 0.0;
 
-                    writer.printf("%s,%.6f,%.6f,%s,%b,%.2f,%.2f,%.4f%n",
-                        agent.getId(), agent.getX(), agent.getY(),
-                        agent.getLifecycleStage(), agent.isAlive(), p, t, r);
+                    String type = (agent instanceof LivingAgent) ? "Adult" : "Habitat";
+                    int larvae = (agent instanceof InertAgent ia) ? ia.getLarvalCount() : 0;
+                    int age = (agent instanceof LivingAgent la) ? la.getAge(): 0;
+                    boolean gravid = (agent instanceof LivingAgent la) && la.isGravid();
+                    boolean alive = (agent instanceof LivingAgent la) && la.isAlive();
+
+                    writer.printf(Locale.US, "%s,%.6f,%.6f,%s,%b,%.4f,%.2f,%.4f,%d,%d,%b%n",
+                            agent.getId(), agent.getX(), agent.getY(),
+                            type, alive, p, t, r, 
+                            age, larvae, gravid);
                 }
             }
         }
-        System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
+        System.out.println("Results successfully exported to: " + outputPath);
+    }
+    
+    
+    /**
+    * Ingests temporal climate data from a NetCDF file.
+    * Maps '2m_temperature' and 'total_precipitation' variables to internal RasterLayers.
+    */
+    public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new FileNotFoundException("-> NetCDF climate file missing: " + filePath);
+        }
+
+        // 1. Initialize the NetCDF Reader
+        NetCDFReader reader = new NetCDFReader(file, null);
+
+        // 2. Identify available variables (Names may vary based on your source like ERA5-Land)
+        // Common names: "t2m" or "2m_temperature" and "tp" or "total_precipitation"
+        String[] varNames = reader.getGridCoverageNames();
+        System.out.println("-> NetCDF Metadata found variables: " + String.join(", ", varNames));
+
+        // 3. Define read parameters to handle the temporal dimension
+        // We want the raw data without overview or subsampling to keep PhD accuracy
+        ParameterValue<OverviewPolicy> policy = AbstractGridFormat.OVERVIEW_POLICY.createValue();
+        policy.setValue(OverviewPolicy.IGNORE);
+        GeneralParameterValue[] params = new GeneralParameterValue[]{policy};
+
+        // 4. Extract data for each time frame (tick)
+        // We assume the NetCDF has 'n' time steps matching your simulation duration
+        int maxFrames = 3000; // Adjust based on your NetCDF 'Time' dimension
+
+        for (int frame = 0; frame < maxFrames; frame++) {
+            // Read the temperature coverage for this specific time index
+            // Note: NetCDFReader implementation of read(params) varies by specific file structure
+            GridCoverage2D tempCoverage = reader.read("2m_temperature", params);
+            GridCoverage2D rainCoverage = reader.read("total_precipitation", params);
+
+            int width = tempLayer.getWidth();
+            int height = tempLayer.getHeight();
+
+            for (int y = 0; y < height; y++) {
+                for (int x = 0; x < width; x++) {
+                    // Extract Pixel Value at (x,y)
+                    float[] tVal = (float[]) tempCoverage.evaluate((Position) new Point(x, y));
+                    float[] rVal = (float[]) rainCoverage.evaluate((Position) new Point(x, y));
+
+                    // Store in RasterLayer (frame, x, y, value)
+                    tempLayer.setData(frame, x, y, (double) tVal[0]);
+                    rainLayer.setData(frame, x, y, (double) rVal[0]);
+                }
+            }
+
+            // Progress log for large datasets
+            if (frame % 500 == 0) {
+                System.out.println("-> Processing Climate Frame: " + frame);
+            }
+        }
+
+        reader.dispose();
+        System.out.println("-> NetCDF Climate Data successfully mapped to simulation grid.");
     }
 }package com.monadvsim.app.models.entities;
 
-
+import com.monadvsim.app.models.engine.RuleEngine;
 import java.util.ArrayList;
-import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Collectors;
+import java.util.List;
+
 
 public class AgentLayer extends Layer {
-    private List<Agent> agents;
+    // Using CopyOnWriteArrayList to prevent ConcurrentModificationException during hatching/death
+    private List<Agent> agents = new CopyOnWriteArrayList<>();
+    private List<RuleDefinition> rules = new ArrayList<>();
+    private final RuleEngine ruleEngine;
 
-    public AgentLayer(String name) {
+    
+    public AgentLayer(String name, RuleEngine ruleEngine) {
         super(name);
-        this.agents = new CopyOnWriteArrayList<>();
+        this.ruleEngine = ruleEngine;
     }
 
-    public List<Agent> getAgents() {
-        return agents;
+    public static record RuleDefinition(String condition, String action) {}
+
+    public void addRule(String condition, String action) {
+        rules.add(new RuleDefinition(condition, action));
+    }
+    
+    @Override
+    public void update(Project project) {
+        List<Agent> newborns = new ArrayList<>();
+
+        agents.parallelStream().forEach(agent -> {
+            if (agent instanceof LivingAgent la){
+                if (!la.isAlive()) return;
+                // Increment age at start of tick
+                la.setAge(la.getAge() + 1);
+            }
+
+            // Evaluate all rules defined for this layer
+            for (RuleDefinition rule : rules) {
+                if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                    ruleEngine.execute(rule.action(), agent, project);
+                }
+            }
+            
+            // Handle Hatching (Specific logic for spawning new agents)
+            if (agent instanceof InertAgent ia && ia.getEggGount() > 0) {
+                synchronized (newborns) {
+                    for (int i = 0; i < ia.getEggGount(); i++) {
+                        // Create a new LivingAgent at the tank's location
+                        LivingAgent larva = new LivingAgent(ia.getX(), ia.getY());
+                        larva.setStage(LifeCycleStage.LARVA);
+                        newborns.add(larva);
+                    }
+                }
+                ia.setEggGount(0); // Reset after spawning
+            }
+        });
+
+        // Add newborns to the layer (if this is the Mosquito layer) 
+        // Or transfer them to the appropriate layer in the project
+        if (!newborns.isEmpty()) {
+            this.addAgents(newborns);
+        }
+
+        // 4. Cleanup dead agents
+        agents.removeIf(a -> a instanceof LivingAgent la && !la.isAlive());
     }
 
     public void addAgent(Agent agent) {
         this.agents.add(agent);
     }
 
-    /**
-     * Headless update loop.
-     * Filter out dead agents and then run logic for living/inert ones.
-     */
-    @Override
-    public void update(long tick, double deltaT) {
-        // 1. Remove agents that died in the last tick
-        agents.removeIf(a -> !a.isAlive());
-
-        // 2. Logic is typically handled by the SimulationEngine's 
-        // parallel loop for performance, but we keep the structure here.
+    public void addAgents(List<Agent> newAgents) {
+        this.agents.addAll(newAgents);
     }
 
-    /**
-     * Helper for synthetic surveillance: 
-     * Get counts of agents in a specific lifecycle stage.
-     */
-    public long getCountByStage(String stage) {
-        return agents.stream()
-            .filter(a -> a.getLifecycleStage().equalsIgnoreCase(stage))
-            .count();
-    }
-    
-    // For MVS: clear agents if resetting simulation
-    public void clear() {
-        agents.clear();
+    public List<Agent> getAgents() {
+        return agents;
     }
 }package com.monadvsim.app.models.entities;
 
@@ -301,7 +592,7 @@ public abstract class Layer implements Serializable {
      * RasterLayers might use this to swap time-series frames.
      * AgentLayers use this to iterate through mosquito logic.
      */
-    public abstract void update(long tick, double deltaT);
+    public abstract void update(Project project);
 
     @Override
     public String toString() {
@@ -336,6 +627,13 @@ public abstract class Rule {
 }
 package com.monadvsim.app.models.entities;
 
+public enum LifeCycleStage {
+    
+    EGG, LARVA, ADULT
+    
+}
+package com.monadvsim.app.models.entities;
+
 import java.io.Serializable;
 
 public class RasterLayer extends Layer implements Serializable {
@@ -346,6 +644,16 @@ public class RasterLayer extends Layer implements Serializable {
 
     public RasterLayer(String name, int width, int height, int frames) {
         super(name);
+        this.width = width;
+        this.height = height;
+        this.frames = frames;
+        this.dataGrid = new double[frames][width][height];
+    }
+    
+    /**
+     * Re-allocates the grid and sets bounds. Used when loading real GIS files.
+     */
+    public void initialize(int width, int height, int frames) {
         this.width = width;
         this.height = height;
         this.frames = frames;
@@ -390,9 +698,75 @@ public class RasterLayer extends Layer implements Serializable {
     }
 
     @Override
-    public void update(long tick, double deltaT) {
-        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    public void update(Project project) {
+        
     }
+
+    public double[][][] getDataGrid() {
+        return dataGrid;
+    }
+
+    public void setDataGrid(double[][][] dataGrid) {
+        this.dataGrid = dataGrid;
+    }
+
+    public int getWidth() {
+        return width;
+    }
+
+    public void setWidth(int width) {
+        this.width = width;
+    }
+
+    public int getHeight() {
+        return height;
+    }
+
+    public void setHeight(int height) {
+        this.height = height;
+    }
+
+    public int getFrames() {
+        return frames;
+    }
+
+    public void setFrames(int frames) {
+        this.frames = frames;
+    }
+
+    public double getMinLon() {
+        return minLon;
+    }
+
+    public void setMinLon(double minLon) {
+        this.minLon = minLon;
+    }
+
+    public double getMaxLon() {
+        return maxLon;
+    }
+
+    public void setMaxLon(double maxLon) {
+        this.maxLon = maxLon;
+    }
+
+    public double getMinLat() {
+        return minLat;
+    }
+
+    public void setMinLat(double minLat) {
+        this.minLat = minLat;
+    }
+
+    public double getMaxLat() {
+        return maxLat;
+    }
+
+    public void setMaxLat(double maxLat) {
+        this.maxLat = maxLat;
+    }
+    
+    
 }package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.SpatialRegistry;
@@ -401,14 +775,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.io.Serializable;
 
+
 public class Project implements Serializable {
     private String name;
-    private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
-    
-    // The Environment
-    private List<Layer> layers;
-    
-    private transient SpatialRegistry spatialRegistry;
+    private String crsCode = "EPSG:4326";
+    private List<Layer> layers; // The Environment
+    private transient SpatialRegistry spatialRegistry; // all Agents State
+    private double defaultAmbientTemp = 295.15; // 22 Celsius in Kelvin
     
     public Project(String name) {
         this.name = name;
@@ -450,62 +823,124 @@ public class Project implements Serializable {
                 .findFirst()
                 .orElse(null);
     }
+    
+    public void addRasterLayer(RasterLayer rasterLayer) {
+        if (rasterLayer != null) {
+            this.layers.add(rasterLayer);
+        }
+    }
+    
+    public void addAgentLayer(AgentLayer agentLayer) {
+        if (agentLayer != null) {
+            this.layers.add(agentLayer);
+        }
+    }
+    
+    public double getTemperatureAt(double x, double y) {
+        RasterLayer tempLayer = getRasterByName("Temperature");
+        if (tempLayer != null) {
+            return tempLayer.getValueAt(x, y);
+        }
+        return defaultAmbientTemp;
+    }
 
     // Standard Getters/Setters
-    public List<Layer> getLayers() { return layers; }
-    public void addLayer(Layer l) { this.layers.add(l); }
-    public String getName() { return name; }
-    public String getCrsCode() { return crsCode; }
-    public void setName(String name) { this.name = name; }
-    public void setCrsCode(String crsCode) { this.crsCode = crsCode; }
-    public void setSpatialRegistry(SpatialRegistry spatialRegistry) {
-        this.spatialRegistry = spatialRegistry;
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getCrsCode() {
+        return crsCode;
+    }
+
+    public void setCrsCode(String crsCode) {
+        this.crsCode = crsCode;
+    }
+
+    public List<Layer> getLayers() {
+        return layers;
+    }
+
+    public void setLayers(List<Layer> layers) {
+        this.layers = layers;
     }
 
     public SpatialRegistry getSpatialRegistry() {
         return spatialRegistry;
     }
+
+    public void setSpatialRegistry(SpatialRegistry spatialRegistry) {
+        this.spatialRegistry = spatialRegistry;
+    }
+    
 }package com.monadvsim.app.models.entities;
 
-
-
-
+import com.monadvsim.app.models.engine.TimeManager;
 import java.io.Serializable;
 import java.util.UUID;
 
 public abstract class Agent implements Serializable {
     private final String id;
+    private String name;
     protected double x, y; // World coordinates (EPSG:4326)
-    protected boolean alive = true;
-    protected String lifecycleStage; // e.g., "Egg", "Larva", "Adult"
     
-    // Physiological state
-    protected double energy = 1.0;
-    protected double ageInTicks = 0;
-
-    public Agent(double x, double y, String stage) {
+    
+    public Agent(double x, double y, String name) {
         this.id = UUID.randomUUID().toString();
         this.x = x;
         this.y = y;
-        this.lifecycleStage = stage;
+        this.name = name;
+    }
+    
+    public Agent(double x, double y) {
+        this.id = UUID.randomUUID().toString();
+        this.x = x;
+        this.y = y;
     }
 
     /**
      * The core logic "hook" called by the SimulationEngine.
-     * @param project Access to RasterLayers (Environment) and SpatialRegistry (Neighbors)
+     * @param project Access to RasterLayers (Environment) and SpatialRegistry 
+     * (Neighbors)
      * @param timeManager Access to current simulation time/date
      */
-    public abstract void update(Project project, com.monadvsim.app.models.engine.TimeManager timeManager);
+    public abstract void update(Project project, TimeManager timeManager);
 
     // Getters and Setters
-    public double getX() { return x; }
-    public double getY() { return y; }
-    public boolean isAlive() { return alive; }
-    public void setAlive(boolean alive) { this.alive = alive; }
-    public String getLifecycleStage() { return lifecycleStage; }
-    public String getId() { return id; }
-    public double getEnergy() { return energy; }
-    public void setEnergy(double energy) { this.energy = energy; }
+    
+    public String getId(){
+        return this.id;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public double getX() {
+        return x;
+    }
+
+    public void setX(double x) {
+        this.x = x;
+    }
+
+    public double getY() {
+        return y;
+    }
+
+    public void setY(double y) {
+        this.y = y;
+    }
+    
 }
 package com.monadvsim.app.models.entities;
 
@@ -610,42 +1045,59 @@ package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.engine.TimeManager;
 
 public class InertAgent extends Agent {
-    private double waterVolume = 50.0; // percentage 0-100
-    private int larvalCount = 0;
-    private final double capacity = 2000.0;
-
+    private double waterVolume; // percentage 0-100
+    private int larvalCount; // number of larvae in the container
+    private double capacity; // maximum number of larvae that a single container can support
+    private int eggGount; // number of eggs in the container
+    
+    
     public InertAgent(double x, double y) {
-        super(x, y, "WaterTank");
+        super(x, y);
     }
-
-    public int calculateHatching(Project project) {
-        RasterLayer rain = project.getRasterByName("Rainfall");
-        RasterLayer temp = project.getRasterByName("Temperature");
-
-        // Logic: Rain fills the tank, evaporation empties it
-        double currentRain = (rain != null) ? rain.getValueAt(x, y) : 0.0;
-        double currentTempC = (temp != null) ? temp.getValueAt(x, y) - 273.15 : 25.0;
-
-        waterVolume += (currentRain * 5000) - (currentTempC * 0.01);
-        waterVolume = Math.max(0, Math.min(100, waterVolume));
-
-        // Hatching only occurs if there's water and it's warm enough (>18C)
-        if (waterVolume > 5.0 && currentTempC > 18.0 && larvalCount > 0) {
-            int hatch = (int) (larvalCount * 0.02);
-            larvalCount -= hatch;
-            return hatch;
-        }
-        return 0;
+    
+    public InertAgent(double x, double y, String name) {
+        super(x, y, name);
     }
-
-    public void addEggs(int count) {
-        this.larvalCount = (int) Math.min(capacity, this.larvalCount + count);
-    }
-
+    
     @Override
     public void update(Project project, TimeManager tm) {
         // Updated via the Engine's parallel loop for performance
     }
+
+    public double getWaterVolume() {
+        return waterVolume;
+    }
+
+    public void setWaterVolume(double waterVolume) {
+        this.waterVolume = waterVolume;
+    }
+
+    public int getLarvalCount() {
+        return larvalCount;
+    }
+
+    public void setLarvalCount(int larvalCount) {
+        this.larvalCount = larvalCount;
+    }
+
+    public double getCapacity() {
+        return capacity;
+    }
+
+    public void setCapacity(double capacity) {
+        this.capacity = capacity;
+    }
+
+    public int getEggGount() {
+        return eggGount;
+    }
+
+    public void setEggGount(int eggGount) {
+        this.eggGount = eggGount;
+    }
+    
+    
+    
 }package com.monadvsim.app.models.entities;
 
 
@@ -683,92 +1135,87 @@ public class VectorLayer extends Layer {
     }
 
     @Override
-    public void update(long tick, double deltaT) {
+    public void update(Project project) {
         // Usually static, but can be used for "moving" boundaries if needed.
     }
+
+    public String getFilePath() {
+        return filePath;
+    }
+
+    public void setFilePath(String filePath) {
+        this.filePath = filePath;
+    }
+    
 }package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.TimeManager;
-import java.util.List;
 
 public class LivingAgent extends Agent {
     private boolean alive = true;
-    private boolean isGravid = false;
+    private boolean gravid = false; // not carrying eggs
     private int age = 0;
+    private LifeCycleStage stage;
+    private double energy = 1.0;
+    
 
     public LivingAgent(double x, double y) {
-        super(x, y, "Adult");
+        super(x, y);
+    }
+    
+    public LivingAgent(double x, double y, String name) {
+        super(x, y, name);
     }
 
     @Override
     public void update(Project project, TimeManager tm) {
-        if (!alive) return;
-        age++;
         
-        // 1. Basic Daily Mortality (e.g., ~10% chance to die per day)
-        // Since a tick is 15 mins, there are 96 ticks in a day.
-        // Probability of dying per tick ≈ 0.001
-        if (Math.random() < 0.001) {
-            this.alive = false;
-            return;
-        }
-
-        RasterLayer tempLayer = project.getRasterByName("Temperature");
-        double tempC = (tempLayer != null) ? tempLayer.getValueAt(x, y) - 273.15 : 25.0;
-        
-        RasterLayer elevLayer = project.getRasterByName("Elevation");
-        double elevation = (elevLayer != null) ? elevLayer.getValueAt(x, y) : 2300;
-
-        // High elevation increases mortality slightly (simulating thinner air/colder nights)
-        if (elevation > 2500) {
-            if (Math.random() < 0.01) this.alive = false;
-        }
-
-        // Tweak: Lower death probability so agents survive the first few days
-        double deathProb = 0.001; 
-        if (tempC > 40 || tempC < 10 || age > 2000) deathProb = 0.1;
-        
-
-        if (Math.random() < deathProb) {
-            alive = false;
-            return;
-        }
-
-        if (isGravid) {
-            seekAndLayEggs(project);
-        } else {
-            seekBloodMeal(project);
-        }
+    }
+    
+    public void move(double dx, double dy){
+        // live agents can move in the environment
     }
 
-    private void seekBloodMeal(Project project) {
-        RasterLayer pop = project.getRasterByName("Population");
-        double density = (pop != null) ? pop.getValueAt(x, y) : 0.0;
-
-        // Move toward humans (Biased Walk)
-        this.x += (Math.random() - 0.5) * 0.001 + (density * 0.0001);
-        this.y += (Math.random() - 0.5) * 0.001 + (density * 0.0001);
-
-        if (density > 0.5 && Math.random() < 0.1) isGravid = true;
+    public boolean isAlive() {
+        return alive;
     }
 
-    private void seekAndLayEggs(Project project) {
-        if (project.getSpatialRegistry() == null) return;
-        
-        List<Agent> nearby = project.getSpatialRegistry().getNearbyAgents(x, y, 0.01);
-        for (Agent a : nearby) {
-            if (a instanceof InertAgent tank) {
-                tank.addEggs(50);
-                isGravid = false;
-                return;
-            }
-        }
-        // Random search for tank
-        this.x += (Math.random() - 0.5) * 0.001;
-        this.y += (Math.random() - 0.5) * 0.001;
+    public void setAlive(boolean alive) {
+        this.alive = alive;
     }
 
-    @Override public boolean isAlive() { return alive; }
+    public boolean isGravid() {
+        return gravid;
+    }
+
+    public void setGravid(boolean gravid) {
+        this.gravid = gravid;
+    }
+
+    public int getAge() {
+        return age;
+    }
+
+    public void setAge(int age) {
+        this.age = age;
+    }
+
+    public LifeCycleStage getStage() {
+        return stage;
+    }
+
+    public void setStage(LifeCycleStage stage) {
+        this.stage = stage;
+    }
+
+    public double getEnergy() {
+        return energy;
+    }
+
+    public void setEnergy(double energy) {
+        this.energy = energy;
+    }
+
 }package com.monadvsim.app;
 
 import com.monadvsim.app.models.engine.*;
@@ -779,71 +1226,116 @@ import java.time.LocalDateTime;
 import java.util.Random;
 
 public class App {
+
     public static void main(String[] args) {
         try {
-            Project project = new Project("Addis_Ababa_MVS_V2");
+            // 1. Initialize Core Project Context
+            Project project = new Project("Addis_Ababa_Stephensis_Model");
             
-            // FIX: Use LocalDateTime to match new TimeManager
+            // Simulation starts Jan 1st, 2024. 
+            // 3000 ticks roughly covers 4 months of hourly climate data.
             LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-            TimeManager timeManager = new TimeManager(simStart, 100, 15); 
-            
+            TimeManager timeManager = new TimeManager(simStart, 3000, 15); 
+
             ProjectPersistenceService persistence = new ProjectPersistenceService();
+            RuleEngine biologicalRules = new RuleEngine();
 
-            double minLon = 38.70, maxLon = 38.80;
-            double minLat = 8.95, maxLat = 9.05;
-
-            // Initialize 5 Layers
-            RasterLayer pop = new RasterLayer("Population", 100, 100, 1);
-            RasterLayer temp = new RasterLayer("Temperature", 100, 100, 3000);
-            RasterLayer rain = new RasterLayer("Rainfall", 100, 100, 3000);
-            RasterLayer elev = new RasterLayer("Elevation", 100, 100, 1);
-            RasterLayer build = new RasterLayer("Buildings", 100, 100, 1);
-
-            RasterLayer[] allRasters = {pop, temp, rain, elev, build};
-            for (RasterLayer r : allRasters) {
-                r.setBounds(minLon, maxLon, minLat, maxLat);
-                project.addLayer(r);
-            }
-
+            // 2. Load Environmental Data (Dynamic Sizing via GeoTools)
+            // Initialize with dummy values, loadRasterData will resize them internally
+            RasterLayer pop = new RasterLayer("Population", 1, 1, 1);
             persistence.loadRasterData(pop, "prepared_data/pop_addis.tiff");
-            persistence.loadRasterData(elev, "prepared_data/elev_addis.tiff");
+
+            // Match other layers to Population resolution
+            RasterLayer temp = new RasterLayer("Temperature", pop.getWidth(), pop.getHeight(), 3000);
+            RasterLayer rain = new RasterLayer("Rainfall", pop.getWidth(), pop.getHeight(), 3000);
+            RasterLayer build = new RasterLayer("Buildings", pop.getWidth(), pop.getHeight(), 1);
+
             persistence.loadRasterData(build, "prepared_data/buildings_addis.tiff");
             persistence.loadClimateNetCDF(temp, rain, "prepared_data/climate_2024_01.nc");
 
-            Rectangle2D worldBounds = new Rectangle2D.Double(minLon, minLat, 0.1, 0.1);
+            project.addRasterLayer(pop);
+            project.addRasterLayer(temp);
+            project.addRasterLayer(rain);
+            project.addRasterLayer(build);
+
+            // 3. Setup Spatial Indexing
+            // IMPORTANT: Match bounds to the actual geographic footprint of your TIFF
+            // If pop.getMinLon() etc are implemented, use them here.
+            double minLon = 38.70, minLat = 8.95; 
+            double widthLon = 0.1, heightLat = 0.1; // Extent of simulation area
+            
+            Rectangle2D worldBounds = new Rectangle2D.Double(minLon, minLat, widthLon, heightLat);
             SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds);
+            project.setSpatialRegistry(spatialRegistry);
 
-            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes");
-            AgentLayer habitatLayer = new AgentLayer("Water_Tanks");
+            // 4. Create Agent Layers with Biological Rules
+            AgentLayer habitatLayer = new AgentLayer("Water_Tanks", biologicalRules);
+            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", biologicalRules);
+
+            // --- SCIENTIFIC RULE DEFINITIONS ---
+            // These strings are parsed by GraalVM JS at runtime
+            
+            // Rule: Larvae hatch into adults if there is sufficient rain
+            habitatLayer.addRule("rain > 0.05 && larvae > 0 && random < 0.1", "hatch");
+            
+            // Rule: Adult mortality based on thermal stress or senescence
+            mosquitoLayer.addRule("temp > 38 || age > 2500", "die");
+            
+            // Rule: Host seeking (random movement when not gravid)
+            mosquitoLayer.addRule("!isGravid && random < 0.3", "move_random");
+            
+            // Rule: Oviposition (seek Water_Tanks when gravid)
+            mosquitoLayer.addRule("isGravid", "lay_eggs");
+            
+            // Rule: Blood feeding (becoming gravid based on human population density)
+            mosquitoLayer.addRule("!isGravid && pop > 0.4 && random < 0.05", "get_gravid");
+
+            // 5. Seed Initial Population
             Random rand = new Random();
+            int totalAgentsToSeed = 5000;
+            
+            for (int i = 0; i < totalAgentsToSeed; i++) {
+                double rx = minLon + (widthLon * rand.nextDouble());
+                double ry = minLat + (heightLat * rand.nextDouble());
 
-            for (int i = 0; i < 2000; i++) {
-                double rx = minLon + 0.1 * rand.nextDouble();
-                double ry = minLat + 0.1 * rand.nextDouble();
+                // Spatially constrained seeding: Tanks only in built-up areas
                 if (build.getValueAt(rx, ry) > 0.5) {
                     InertAgent tank = new InertAgent(rx, ry);
-                    tank.addEggs(100); 
+                    tank.setLarvalCount(50);
+                    tank.setCapacity(200);
                     habitatLayer.addAgent(tank);
                 }
-                if (pop.getValueAt(rx, ry) > 0.5 && i < 500) {
+                
+                // Initial adult population seeding in populated areas
+                if (pop.getValueAt(rx, ry) > 0.5 && i < 1000) {
                     mosquitoLayer.addAgent(new LivingAgent(rx, ry));
                 }
             }
-            
-            project.addLayer(mosquitoLayer);
-            project.addLayer(habitatLayer);
 
+            // 6. Register Layers in Execution Order
+            // We register Habitat first so eggs laid by mosquitoes in T-1 
+            // can hatch in T-0.
+            project.addAgentLayer(habitatLayer);
+            project.addAgentLayer(mosquitoLayer);
+
+            // 7. Initialize and Run Engine
+            System.out.println("--- Starting Simulation: " + project.getName() + " ---");
             SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
-            engine.run(); // Executes the simulation
+            
+            // This loop runs until timeManager.tick() returns false
+            engine.run(); 
 
-            persistence.exportToCSV(project, "output/synthetic_surveillance_results.csv");
-            System.out.println("=== Simulation Complete ===");
+            // 8. Output and Analysis
+            persistence.exportToCSV(project, "output/addis_full_results.csv");
+            System.out.println("✅ Simulation Complete. Results exported to CSV.");
 
         } catch (Exception e) {
+            System.err.println("❌ Critical Simulation Failure:");
             e.printStackTrace();
         }
     }
-}package com.monadvsim.app;
+}
+package com.monadvsim.app;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

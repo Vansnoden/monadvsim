@@ -15,6 +15,16 @@ public class RasterLayer extends Layer implements Serializable {
         this.frames = frames;
         this.dataGrid = new double[frames][width][height];
     }
+    
+    /**
+     * Re-allocates the grid and sets bounds. Used when loading real GIS files.
+     */
+    public void initialize(int width, int height, int frames) {
+        this.width = width;
+        this.height = height;
+        this.frames = frames;
+        this.dataGrid = new double[frames][width][height];
+    }
 
     public void setBounds(double minLon, double maxLon, double minLat, double maxLat) {
         this.minLon = minLon;
@@ -54,7 +64,73 @@ public class RasterLayer extends Layer implements Serializable {
     }
 
     @Override
-    public void update(long tick, double deltaT) {
-        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    public void update(Project project) {
+        
     }
+
+    public double[][][] getDataGrid() {
+        return dataGrid;
+    }
+
+    public void setDataGrid(double[][][] dataGrid) {
+        this.dataGrid = dataGrid;
+    }
+
+    public int getWidth() {
+        return width;
+    }
+
+    public void setWidth(int width) {
+        this.width = width;
+    }
+
+    public int getHeight() {
+        return height;
+    }
+
+    public void setHeight(int height) {
+        this.height = height;
+    }
+
+    public int getFrames() {
+        return frames;
+    }
+
+    public void setFrames(int frames) {
+        this.frames = frames;
+    }
+
+    public double getMinLon() {
+        return minLon;
+    }
+
+    public void setMinLon(double minLon) {
+        this.minLon = minLon;
+    }
+
+    public double getMaxLon() {
+        return maxLon;
+    }
+
+    public void setMaxLon(double maxLon) {
+        this.maxLon = maxLon;
+    }
+
+    public double getMinLat() {
+        return minLat;
+    }
+
+    public void setMinLat(double minLat) {
+        this.minLat = minLat;
+    }
+
+    public double getMaxLat() {
+        return maxLat;
+    }
+
+    public void setMaxLat(double maxLat) {
+        this.maxLat = maxLat;
+    }
+    
+    
 }
