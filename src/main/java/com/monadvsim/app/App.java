@@ -62,6 +62,21 @@ public class App {
                 }
             }
             project.addLayer(mosquitoLayer);
+            
+            // 4b. Seed Breeding Sites (InertAgents) to prevent population collapse
+            AgentLayer habitatLayer = new AgentLayer("Water_Tanks");
+            for (int i = 0; i < 1000; i++) {
+                double tx = minLon + (maxLon - minLon) * rand.nextDouble();
+                double ty = minLat + (maxLat - minLat) * rand.nextDouble();
+
+                // Seed tanks where people live
+                if (popLayer.getValueAt(tx, ty) > 0.1) {
+                    InertAgent tank = new InertAgent(tx, ty, 2000.0); // Capacity for 2k larvae
+                    tank.addEggs(200); // Start with some larvae so the first generation hatches
+                    habitatLayer.addAgent(tank);
+                }
+            }
+            project.addLayer(habitatLayer);
 
             // 5. Setup Spatial Registry
             Rectangle2D worldBounds = new Rectangle2D.Double(minLon, minLat, 0.1, 0.1);

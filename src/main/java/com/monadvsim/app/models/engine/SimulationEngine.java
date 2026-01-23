@@ -16,6 +16,7 @@ public class SimulationEngine implements Runnable {
         this.project = project;
         this.timeManager = timeManager;
         this.spatialRegistry = spatialRegistry;
+        this.project.setSpatialRegistry(spatialRegistry);
     }
 
     @Override
