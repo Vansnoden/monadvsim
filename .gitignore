@@ -19,4 +19,4 @@ buildNumber.properties
 .classpath
 *.nc
 *.tiff
-
+*.tiff.aux.xml
