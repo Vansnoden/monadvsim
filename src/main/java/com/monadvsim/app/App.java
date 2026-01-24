@@ -2,15 +2,19 @@ package com.monadvsim.app;
 
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.netcdf.NetCDFClimateReader;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.services.RasterLoader;
 import java.awt.geom.Rectangle2D;
+import java.io.IOException;
 import java.time.LocalDateTime;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 
 public class App {
     
@@ -48,22 +52,75 @@ public class App {
     private static Project initializeProject() throws Exception {
         Project project = new Project("ThreadSafe_Simulation");
         LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-        // Load rasters
-        RasterLayer pop = new RasterLayer("Population", 1, 1, 1);
-        RasterLoader.loadRasterBulk(pop, "prepared_data/pop_addis.tiff");
-        RasterLayer temp = new RasterLayer("Temperature", pop.getWidth(), pop.getHeight(), 3000);
-        RasterLayer rain = new RasterLayer("Rainfall", pop.getWidth(), pop.getHeight(), 3000);
-        RasterLayer build = new RasterLayer("Buildings", pop.getWidth(), pop.getHeight(), 1);
+        // load netcdf file climate data
+        loadTimeSeriesNetCDFData(project, simStart);
+        // Load other rasters
+        ProjectPersistenceService persistence = new ProjectPersistenceService();
+        RasterLayer pop = new MemoryMappedRasterLayer("Population", 1, 1, 1);
+        persistence.loadRasterData(pop, "prepared_data/pop_addis.tiff");
+            
+        RasterLayer build = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
+        persistence.loadRasterData(build, "prepared_data/buildings_addis.tiff");
 
-        RasterLoader.loadRasterBulk(build, "prepared_data/buildings_addis.tiff");
-        // Load climate data (you'll need to implement the bulk NetCDF loader)
-        // RasterLoader.loadNetCDFOptimized(temp, rain, "prepared_data/climate_2024_01.nc", 3000);
         project.addRasterLayer(pop);
-        project.addRasterLayer(temp);
-        project.addRasterLayer(rain);
+        project.addRasterLayer(build);
+   
+        project.addRasterLayer(pop);
         project.addRasterLayer(build);
         return project;
     }
+    
+    
+    private static void loadTimeSeriesNetCDFData(Project project, LocalDateTime simStart){
+        // 2. Load NetCDF climate data first (to get time information)
+        System.out.println("=== Loading Climate Data ===");
+
+        NetCDFClimateReader climateReader = null;
+        EnhancedTimeManager timeManager = null;
+
+        try {
+            // Open NetCDF file
+            climateReader = new NetCDFClimateReader("prepared_data/climate_2024_01.nc");                
+            // Detect climate variables
+            NetCDFClimateReader.ClimateVariables climateVars = 
+                climateReader.detectClimateVariables();
+            // Get time values from NetCDF
+            int netcdfTimeSteps = climateReader.getTimeValues().size();
+            System.out.println("NetCDF has " + netcdfTimeSteps + " time steps");
+            // Create time manager synchronized with NetCDF
+            timeManager = new EnhancedTimeManager(
+                simStart, netcdfTimeSteps, 15, climateReader);
+
+            // Create raster layers with correct dimensions
+            int[] tempShape = climateVars.temperature.getShape();
+            int width = tempShape[2];  // Longitude dimension
+            int height = tempShape[1]; // Latitude dimension
+
+            RasterLayer tempLayer = new MemoryMappedRasterLayer(
+                "Temperature", width, height, netcdfTimeSteps);
+            RasterLayer rainLayer = new MemoryMappedRasterLayer(
+                "Rainfall", width, height, netcdfTimeSteps);
+
+            // Use enhanced loading
+            ProjectPersistenceService persistence = new ProjectPersistenceService();
+            persistence.loadClimateNetCDFEnhanced(
+                tempLayer, rainLayer,
+                "prepared_data/climate_2024_01.nc",
+                simStart, netcdfTimeSteps, 15);
+
+            project.addRasterLayer(tempLayer);
+            project.addRasterLayer(rainLayer);
+
+        } catch (IOException ex) {
+            Logger.getLogger(App.class.getName()).log(Level.SEVERE, null, ex);
+        } catch (Exception ex) {
+            Logger.getLogger(App.class.getName()).log(Level.SEVERE, null, ex);
+        } finally {
+                if (climateReader != null) {
+                    climateReader.close();
+                }
+            }
+        }
     
     
     private static void setupSimulation(Project project) {
