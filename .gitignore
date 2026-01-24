@@ -1,5 +1,6 @@
 target/
 venv/
+.env
 output/
 pom.xml.tag
 pom.xml.releaseBackup
