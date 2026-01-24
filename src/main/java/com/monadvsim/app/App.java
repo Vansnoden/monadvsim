@@ -24,10 +24,16 @@ public class App {
     public static void main(String[] args) {
         try {
             
+            LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
+            NetCDFClimateReader climateReader = null;
+            EnhancedTimeManager timeManager = null;
+            
             // Initialize with thread-safe components
-            Project project = initializeProject();
+            Project project = initializeProject(simStart, climateReader,
+                    timeManager);
             // Setup simulation
-            setupSimulation(project);
+            setupSimulation(project, simStart,  climateReader,
+                    timeManager);
             
             // Add shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -49,11 +55,13 @@ public class App {
     } 
     
     
-    private static Project initializeProject() throws Exception {
+    private static Project initializeProject(LocalDateTime simStart, 
+            NetCDFClimateReader climateReader,
+            EnhancedTimeManager timeManager ) throws Exception {
         Project project = new Project("ThreadSafe_Simulation");
-        LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
+        
         // load netcdf file climate data
-        loadTimeSeriesNetCDFData(project, simStart);
+        loadTimeSeriesNetCDFData(project, simStart, climateReader, timeManager);
         // Load other rasters
         ProjectPersistenceService persistence = new ProjectPersistenceService();
         RasterLayer pop = new MemoryMappedRasterLayer("Population", 1, 1, 1);
@@ -65,18 +73,15 @@ public class App {
         project.addRasterLayer(pop);
         project.addRasterLayer(build);
    
-        project.addRasterLayer(pop);
-        project.addRasterLayer(build);
         return project;
     }
     
     
-    private static void loadTimeSeriesNetCDFData(Project project, LocalDateTime simStart){
+    private static void loadTimeSeriesNetCDFData(Project project, 
+            LocalDateTime simStart, NetCDFClimateReader climateReader,
+            EnhancedTimeManager timeManager){
         // 2. Load NetCDF climate data first (to get time information)
         System.out.println("=== Loading Climate Data ===");
-
-        NetCDFClimateReader climateReader = null;
-        EnhancedTimeManager timeManager = null;
 
         try {
             // Open NetCDF file
@@ -123,22 +128,22 @@ public class App {
         }
     
     
-    private static void setupSimulation(Project project) {
-        TimeManager timeManager = new TimeManager(
-            LocalDateTime.of(2024, 1, 1, 0, 0), 3000, 15);
-        
+    private static void setupSimulation(Project project, LocalDateTime simStart, 
+            NetCDFClimateReader climateReader,
+            EnhancedTimeManager timeManager) {
+        if (timeManager == null) {
+            // Fallback to basic time manager
+            timeManager = new EnhancedTimeManager(simStart, 3000, 15, null);
+        }
         // Setup spatial registry with appropriate cell size
         double cellSize = 0.001; // ~100m at equator
         Rectangle2D worldBounds = new Rectangle2D.Double(38.70, 8.95, 0.1, 0.1);
         SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, cellSize);
-        
         // Create thread-safe rule engine
         ThreadSafeRuleEngine ruleEngine = new ThreadSafeRuleEngine();
-        
         // Create agent layers with thread-safe containers
         AgentLayer habitatLayer = new AgentLayer("Water_Tanks", ruleEngine);
         AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine);
-        
         // --- SCIENTIFIC RULE DEFINITIONS ---
         habitatLayer.addRule("rain > 0.05 && larvae > 0 && random < 0.1", "hatch", 10);
         mosquitoLayer.addRule("temp > 38 || age > 2500", "die", 100); // High priority
