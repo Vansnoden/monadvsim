@@ -47,7 +47,7 @@ public class IncrementalSpatialRegistry {
         this.spatialGrid = new ConcurrentHashMap<>(gridWidth * gridHeight);
         initializeGrid();
         
-        System.out.printf("Initialized IncrementalSpatialRegistry [%.4fx%.4f cells, %.6f° cell size]%n",
+        System.out.printf("Initialized IncrementalSpatialRegistry [%dx%d cells, %.6f° cell size]%n",
             gridWidth, gridHeight, cellSize);
     }
     

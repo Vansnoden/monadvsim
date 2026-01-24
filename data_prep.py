@@ -75,7 +75,7 @@ def download_climate_timeseries(lat, lon, buffer_km, year, month, output_path):
             'day': [str(i).zfill(2) for i in range(1, 32)],
             'time': [f"{str(i).zfill(2)}:00" for i in range(24)],
             'area': area,
-            'data_format': 'netcdf',
+            'format': 'netcdf',
         },
         output_path
     )

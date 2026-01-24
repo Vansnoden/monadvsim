@@ -11,6 +11,8 @@ import java.lang.ref.WeakReference;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import org.geotools.api.parameter.GeneralParameterValue;
+
 
 /**
  * Factory for creating auto-closeable GeoTools readers
@@ -44,22 +46,15 @@ public final class GeoToolsResourceFactory {
         // Check cache
         WeakReference<GridCoverage2D> cachedRef = coverageCache.get(filePath);
         GridCoverage2D cached = cachedRef != null ? cachedRef.get() : null;
-        
         if (cached != null && !isDisposed(cached)) {
             return cached;
         }
-        
         // Create new coverage
         GridCoverage2D coverage = supplier.get();
-        
-        // Track the coverage - trackGeoTools returns the same GridCoverage2D
-        GridCoverage2D trackedCoverage = resourceManager.trackGeoTools(
-            "GridCoverage2D", coverage, filePath);
-        
+        resourceManager.trackGeoTools("GridCoverage2D", coverage, filePath);
         // Cache weak reference
-        coverageCache.put(filePath, new WeakReference<>(trackedCoverage));
-        
-        return trackedCoverage;
+        coverageCache.put(filePath, new WeakReference<>(coverage));
+        return coverage;
     }
     
     private static boolean isDisposed(GridCoverage2D coverage) {
@@ -115,19 +110,14 @@ public final class GeoToolsResourceFactory {
         public AutoCloseableGeoTiffReader(File file) throws IOException {
             this.file = file;
             this.reader = new GeoTiffReader(file);
-            
             // Track resource - now this works because we implement Closeable
             resourceManager.track("GeoTiffReader", this, file.getAbsolutePath());
         }
         
-        public GridCoverage2D read(org.geotools.api.parameter.GeneralParameterValue[] params) 
+        public GridCoverage2D read(GeneralParameterValue[] params) 
                 throws IOException {
             checkClosed();
-            GridCoverage2D coverage = reader.read(params);
-            
-            // Track the coverage - trackGeoTools returns GridCoverage2D
-            return resourceManager.trackGeoTools(
-                "GridCoverage2D", coverage, "From: " + file.getAbsolutePath());
+            return reader.read(params);
         }
         
         public GridCoverage2D read() throws IOException {
