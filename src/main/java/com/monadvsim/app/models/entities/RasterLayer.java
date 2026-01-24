@@ -62,6 +62,10 @@ public class RasterLayer extends Layer implements Serializable {
     public void setActiveFrame(int index) {
         this.activeFrame = Math.min(index, frames - 1);
     }
+    
+    public int getActiveFrame(){
+        return this.activeFrame;
+    }
 
     @Override
     public void update(Project project) {

@@ -3,117 +3,216 @@ package com.monadvsim.app;
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
+import com.monadvsim.app.models.services.RasterLoader;
 import java.awt.geom.Rectangle2D;
 import java.time.LocalDateTime;
+import java.util.Map;
 import java.util.Random;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class App {
+    
+    private static SimulationEngine engine;
+    private static ScheduledExecutorService monitorExecutor;
 
     public static void main(String[] args) {
         try {
-            // 1. Initialize Core Project Context
-            Project project = new Project("Addis_Ababa_Stephensis_Model");
             
-            // Simulation starts Jan 1st, 2024. 
-            // 3000 ticks roughly covers 4 months of hourly climate data.
-            LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-            TimeManager timeManager = new TimeManager(simStart, 3000, 15); 
-
-            ProjectPersistenceService persistence = new ProjectPersistenceService();
-            RuleEngine biologicalRules = new RuleEngine();
-
-            // 2. Load Environmental Data (Dynamic Sizing via GeoTools)
-            // Initialize with dummy values, loadRasterData will resize them internally
-            RasterLayer pop = new RasterLayer("Population", 1, 1, 1);
-            persistence.loadRasterData(pop, "prepared_data/pop_addis.tiff");
-
-            // Match other layers to Population resolution
-            RasterLayer temp = new RasterLayer("Temperature", pop.getWidth(), pop.getHeight(), 3000);
-            RasterLayer rain = new RasterLayer("Rainfall", pop.getWidth(), pop.getHeight(), 3000);
-            RasterLayer build = new RasterLayer("Buildings", pop.getWidth(), pop.getHeight(), 1);
-
-            persistence.loadRasterData(build, "prepared_data/buildings_addis.tiff");
-            persistence.loadClimateNetCDF(temp, rain, "prepared_data/climate_2024_01.nc");
-
-            project.addRasterLayer(pop);
-            project.addRasterLayer(temp);
-            project.addRasterLayer(rain);
-            project.addRasterLayer(build);
-
-            // 3. Setup Spatial Indexing
-            // IMPORTANT: Match bounds to the actual geographic footprint of your TIFF
-            // If pop.getMinLon() etc are implemented, use them here.
-            double minLon = 38.70, minLat = 8.95; 
-            double widthLon = 0.1, heightLat = 0.1; // Extent of simulation area
+            // Initialize with thread-safe components
+            Project project = initializeProject();
+            // Setup simulation
+            setupSimulation(project);
             
-            Rectangle2D worldBounds = new Rectangle2D.Double(minLon, minLat, widthLon, heightLat);
-            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds);
-            project.setSpatialRegistry(spatialRegistry);
-
-            // 4. Create Agent Layers with Biological Rules
-            AgentLayer habitatLayer = new AgentLayer("Water_Tanks", biologicalRules);
-            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", biologicalRules);
-
-            // --- SCIENTIFIC RULE DEFINITIONS ---
-            // These strings are parsed by GraalVM JS at runtime
-            
-            // Rule: Larvae hatch into adults if there is sufficient rain
-            habitatLayer.addRule("rain > 0.05 && larvae > 0 && random < 0.1", "hatch");
-            
-            // Rule: Adult mortality based on thermal stress or senescence
-            mosquitoLayer.addRule("temp > 38 || age > 2500", "die");
-            
-            // Rule: Host seeking (random movement when not gravid)
-            mosquitoLayer.addRule("!isGravid && random < 0.3", "move_random");
-            
-            // Rule: Oviposition (seek Water_Tanks when gravid)
-            mosquitoLayer.addRule("isGravid", "lay_eggs");
-            
-            // Rule: Blood feeding (becoming gravid based on human population density)
-            mosquitoLayer.addRule("!isGravid && pop > 0.4 && random < 0.05", "get_gravid");
-
-            // 5. Seed Initial Population
-            Random rand = new Random();
-            int totalAgentsToSeed = 5000;
-            
-            for (int i = 0; i < totalAgentsToSeed; i++) {
-                double rx = minLon + (widthLon * rand.nextDouble());
-                double ry = minLat + (heightLat * rand.nextDouble());
-
-                // Spatially constrained seeding: Tanks only in built-up areas
-                if (build.getValueAt(rx, ry) > 0.5) {
-                    InertAgent tank = new InertAgent(rx, ry);
-                    tank.setLarvalCount(50);
-                    tank.setCapacity(200);
-                    habitatLayer.addAgent(tank);
+            // Add shutdown hook
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                System.out.println("\nShutdown requested...");
+                if (engine != null) {
+                    engine.stop();
                 }
-                
-                // Initial adult population seeding in populated areas
-                if (pop.getValueAt(rx, ry) > 0.5 && i < 1000) {
-                    mosquitoLayer.addAgent(new LivingAgent(rx, ry));
+                if (monitorExecutor != null) {
+                    monitorExecutor.shutdown();
                 }
-            }
-
-            // 6. Register Layers in Execution Order
-            // We register Habitat first so eggs laid by mosquitoes in T-1 
-            // can hatch in T-0.
-            project.addAgentLayer(habitatLayer);
-            project.addAgentLayer(mosquitoLayer);
-
-            // 7. Initialize and Run Engine
-            System.out.println("--- Starting Simulation: " + project.getName() + " ---");
-            SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
+            }));
             
-            // This loop runs until timeManager.tick() returns false
-            engine.run(); 
-
-            // 8. Output and Analysis
-            persistence.exportToCSV(project, "output/addis_full_results.csv");
-            System.out.println("✅ Simulation Complete. Results exported to CSV.");
-
+            // Run simulation
+            runSimulation(project);
         } catch (Exception e) {
             System.err.println("❌ Critical Simulation Failure:");
             e.printStackTrace();
         }
+    } 
+    
+    
+    private static Project initializeProject() throws Exception {
+        Project project = new Project("ThreadSafe_Simulation");
+        LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
+        // Load rasters
+        RasterLayer pop = new RasterLayer("Population", 1, 1, 1);
+        RasterLoader.loadRasterBulk(pop, "prepared_data/pop_addis.tiff");
+        RasterLayer temp = new RasterLayer("Temperature", pop.getWidth(), pop.getHeight(), 3000);
+        RasterLayer rain = new RasterLayer("Rainfall", pop.getWidth(), pop.getHeight(), 3000);
+        RasterLayer build = new RasterLayer("Buildings", pop.getWidth(), pop.getHeight(), 1);
+
+        RasterLoader.loadRasterBulk(build, "prepared_data/buildings_addis.tiff");
+        // Load climate data (you'll need to implement the bulk NetCDF loader)
+        // RasterLoader.loadNetCDFOptimized(temp, rain, "prepared_data/climate_2024_01.nc", 3000);
+        project.addRasterLayer(pop);
+        project.addRasterLayer(temp);
+        project.addRasterLayer(rain);
+        project.addRasterLayer(build);
+        return project;
     }
+    
+    
+    private static void setupSimulation(Project project) {
+        TimeManager timeManager = new TimeManager(
+            LocalDateTime.of(2024, 1, 1, 0, 0), 3000, 15);
+        
+        // Setup spatial registry with appropriate cell size
+        double cellSize = 0.001; // ~100m at equator
+        Rectangle2D worldBounds = new Rectangle2D.Double(38.70, 8.95, 0.1, 0.1);
+        SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, cellSize);
+        
+        // Create thread-safe rule engine
+        ThreadSafeRuleEngine ruleEngine = new ThreadSafeRuleEngine();
+        
+        // Create agent layers with thread-safe containers
+        AgentLayer habitatLayer = new AgentLayer("Water_Tanks", ruleEngine);
+        AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine);
+        
+        // --- SCIENTIFIC RULE DEFINITIONS ---
+        habitatLayer.addRule("rain > 0.05 && larvae > 0 && random < 0.1", "hatch", 10);
+        mosquitoLayer.addRule("temp > 38 || age > 2500", "die", 100); // High priority
+        mosquitoLayer.addRule("!isGravid && random < 0.3", "move_random", 50);
+        mosquitoLayer.addRule("isGravid", "lay_eggs", 80);
+        mosquitoLayer.addRule("!isGravid && pop > 0.4 && random < 0.05", "get_gravid", 60);
+        
+        project.addAgentLayer(habitatLayer);
+        project.addAgentLayer(mosquitoLayer);
+        project.setSpatialRegistry(spatialRegistry);
+        
+        // Create simulation engine
+        engine = new SimulationEngine(project, timeManager, spatialRegistry);
+    }
+    
+    
+    private static void runSimulation(Project project) {
+        System.out.println("=== Starting Thread-Safe Simulation ===");
+        System.out.println("Project: " + project.getName());
+        System.out.println("Available Processors: " + Runtime.getRuntime().availableProcessors());
+        System.out.println("Max Memory: " + Runtime.getRuntime().maxMemory() / (1024*1024) + " MB");
+        System.out.println("=====================================\n");
+        
+        // Start monitoring thread
+        startMonitoring(project);
+        
+        // Run simulation in separate thread
+        Thread simulationThread = new Thread(() -> {
+            try {
+                engine.run();
+            } catch (Exception e) {
+                System.err.println("Simulation thread error: " + e.getMessage());
+            }
+        });
+        simulationThread.setName("Simulation-Main");
+        simulationThread.start();
+        
+        // Wait for simulation to complete
+        try {
+            simulationThread.join();
+        } catch (InterruptedException e) {
+            System.out.println("Main thread interrupted");
+            Thread.currentThread().interrupt();
+        }
+        
+        System.out.println("\n=== Simulation Complete ===");
+    }
+    
+    private static void startMonitoring(Project project) {
+        monitorExecutor = Executors.newScheduledThreadPool(1);
+        
+        monitorExecutor.scheduleAtFixedRate(() -> {
+            try {
+                printSystemStats(project);
+            } catch (Exception e) {
+                System.err.println("Monitoring error: " + e.getMessage());
+            }
+        }, 5, 5, TimeUnit.SECONDS);
+    }
+    
+    private static void printSystemStats(Project project) {
+        Runtime runtime = Runtime.getRuntime();
+        long totalMemory = runtime.totalMemory();
+        long freeMemory = runtime.freeMemory();
+        long usedMemory = totalMemory - freeMemory;
+        
+        System.out.printf("[System] Memory: %.1f/%.1f MB (%.1f%%) | Threads: %d%n",
+            usedMemory / (1024.0 * 1024.0),
+            totalMemory / (1024.0 * 1024.0),
+            (usedMemory * 100.0) / totalMemory,
+            Thread.activeCount());
+        
+        if (engine != null) {
+            Map<String, Object> state = engine.getState();
+            System.out.printf("[Sim] Running: %s | Tick: %d | Agents: %d%n",
+                state.get("running"), state.get("tick"), state.get("totalAgents"));
+        }
+    }
+    
+    
+    private static void runSimulationWithMetrics(Project project, TimeManager timeManager,
+            SpatialRegistry spatialRegistry) {
+        SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
+
+        // Add performance monitoring
+        long startTime = System.currentTimeMillis();
+        long lastReportTime = startTime;
+        int lastTick = 0;
+
+        System.out.println("--- Starting Optimized Simulation ---");
+
+        // Run in a separate thread to allow monitoring
+        Thread engineThread = new Thread(() -> {
+            try {
+                engine.run();
+            } catch (Exception e) {
+                System.err.println("Engine error: " + e.getMessage());
+            }
+        });
+
+        engineThread.start();
+
+        // Monitor performance
+        while (engineThread.isAlive()) {
+            try {
+                Thread.sleep(5000); // Report every 5 seconds
+
+                long currentTime = System.currentTimeMillis();
+                int currentTick = (int) timeManager.getTickCount();
+                int ticksProcessed = currentTick - lastTick;
+
+                if (ticksProcessed > 0) {
+                    double timePerTick = (currentTime - lastReportTime) / (double) ticksProcessed;
+                    System.out.printf("Performance: %.2f ms/tick | %d agents%n",
+                            timePerTick, getTotalAgents(project));
+
+                    lastReportTime = currentTime;
+                    lastTick = currentTick;
+                }
+
+            } catch (InterruptedException e) {
+                break;
+            }
+        }
+    }
+    
+    
+    private static int getTotalAgents(Project project) {
+        return project.getAgentLayers().stream()
+            .mapToInt(l -> l.getAgents().size())
+            .sum();
+    }
+    
 }

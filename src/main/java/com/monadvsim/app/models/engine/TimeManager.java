@@ -62,4 +62,5 @@ public class TimeManager {
     public long getTickCount() { return tickCount; }
     public LocalDateTime getStartDateTime() { return startDateTime; }
     public LocalDateTime getEndDateTime() { return endDateTime; }
+    public Duration getTickDuration(){ return this.tickDuration; }
 }
