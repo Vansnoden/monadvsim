@@ -1,5 +1,6 @@
 package com.monadvsim.app.models.entities;
 
+import com.monadvsim.app.models.engine.AgentLifecycleManager;
 import com.monadvsim.app.models.engine.ThreadSafeRuleEngine;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -13,15 +14,43 @@ public class AgentLayer extends Layer {
     private final List<RuleDefinition> rules;
     private final ThreadSafeRuleEngine ruleEngine;
     private final ExecutorService ruleExecutor;
-    private final int batchSize;
-    
+    private AgentLifecycleManager lifecycleManager;
+    private int batchSize;
     // Statistics
     private final AtomicInteger rulesEvaluated = new AtomicInteger(0);
     private final AtomicInteger actionsExecuted = new AtomicInteger(0);
     private final AtomicInteger births = new AtomicInteger(0);
     private final AtomicInteger deaths = new AtomicInteger(0);
+    private final AtomicInteger birthsThisTick = new AtomicInteger(0);
+    private final AtomicInteger deathsThisTick = new AtomicInteger(0);
+    private final ThreadLocal<List<Agent>> immediateNewborns = ThreadLocal.withInitial(ArrayList::new);
+    
     
     public static record RuleDefinition(String condition, String action, int priority) {}
+    
+    public AgentLayer(String name, ThreadSafeRuleEngine ruleEngine, 
+                     AgentLifecycleManager lifecycleManager) {
+        super(name);
+        this.ruleEngine = ruleEngine;
+        this.lifecycleManager = lifecycleManager;
+        this.rules = new CopyOnWriteArrayList<>();
+        
+        int partitionCount = Runtime.getRuntime().availableProcessors();
+        this.agentContainer = new ThreadSafeAgentContainer(partitionCount);
+        
+        this.ruleExecutor = Executors.newFixedThreadPool(
+            partitionCount,
+            new ThreadFactory() {
+                private final AtomicInteger threadNumber = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "RuleWorker-" + threadNumber.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            }
+        );
+    }
     
     public AgentLayer(String name, ThreadSafeRuleEngine ruleEngine) {
         super(name);
@@ -58,35 +87,190 @@ public class AgentLayer extends Layer {
         rules.sort((r1, r2) -> Integer.compare(r2.priority(), r1.priority()));
     }
     
+    
     @Override
     public void update(Project project) {
         long startTime = System.nanoTime();
         
-        // 1. Apply pending agent operations (adds/removals)
+        // Reset per-tick counters
+        birthsThisTick.set(0);
+        deathsThisTick.set(0);
+        
+        // 1. Apply pending agent operations from previous tick
         agentContainer.applyPendingOperations();
         
-        // 2. Process agents with batching
+        // 2. Process all agents with rules
+        processAgentsWithRules(project);
+        
+        // 3. Process immediate newborns created during rule execution
+        processImmediateNewborns();
+        
+        // 4. Clean up dead agents
+        cleanupDeadAgents();
+        
+        // 5. Process scheduled lifecycle events
+        lifecycleManager.processLifecycleEvents();
+        
+        // 6. Log performance
+        logUpdatePerformance(startTime);
+    }
+    
+    
+    private void processAgentsWithRules(Project project) {
+        // Clear thread-local newborns
+        immediateNewborns.remove();
+        
+        // Process agents in parallel partitions
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         
         agentContainer.processWithBatching(batch -> {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                processAgentBatch(batch, project);
+                for (Agent agent : batch) {
+                    processAgentRules(agent, project);
+                }
             }, ruleExecutor);
             
             futures.add(future);
-        }, batchSize);
+        }, 100); // Process in batches of 100
         
-        // 3. Wait for all batches to complete
+        // Wait for all batches to complete
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException | ExecutionException e) {
-            System.err.println("Error processing agent batches: " + e.getMessage());
+            System.err.println("Error processing agent rules: " + e.getMessage());
+        }
+    }
+    
+    private void processAgentRules(Agent agent, Project project) {
+        // Check if agent is alive (for LivingAgent)
+        if (agent instanceof LivingAgent la && !la.isAlive()) {
+            // Schedule for death
+            lifecycleManager.scheduleDeath(agent.getId());
+            deathsThisTick.incrementAndGet();
+            return;
         }
         
-        // 4. Log performance
-        long duration = System.nanoTime() - startTime;
-        logUpdatePerformance(duration);
+        // Age increment for LivingAgent
+        if (agent instanceof LivingAgent la) {
+            la.incrementAge();
+        }
+        
+        // Evaluate rules
+        for (RuleDefinition rule : rules) {
+            rulesEvaluated.incrementAndGet();
+            
+            if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                // Execute rule - this may create immediate newborns
+                ruleEngine.execute(rule.action(), agent, project, this);
+                
+                // Check if agent died during rule execution
+                if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                    lifecycleManager.scheduleDeath(agent.getId());
+                    deathsThisTick.incrementAndGet();
+                    break; // Stop processing rules for dead agent
+                }
+                
+                // Stop after terminal actions
+                if (isTerminalAction(rule.action())) {
+                    break;
+                }
+            }
+        }
+        // Schedule position update if agent moved
+        if (agentHasMoved(agent)) {
+            lifecycleManager.scheduleMove(agent);
+        }
     }
+    
+    private boolean agentHasMoved(Agent agent) {
+        // Check if agent position changed since last update
+        // This would require tracking previous positions
+        return false; // Simplified for now
+    }
+    
+    private void processImmediateNewborns() {
+        // Get thread-local newborns and add to container
+        List<Agent> newborns = immediateNewborns.get();
+        if (!newborns.isEmpty()) {
+            agentContainer.addAgents(newborns);
+            birthsThisTick.addAndGet(newborns.size());
+            newborns.clear();
+        }
+    }
+    
+    private void cleanupDeadAgents() {
+        // Remove agents marked for death from container
+        // This happens after lifecycle manager processes deaths
+        agentContainer.applyPendingOperations();
+    }
+    
+    /**
+     * Create a new agent immediately (for use within rule execution)
+     */
+    public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
+        Agent agent = lifecycleManager.immediateBirth(agentClass, x, y);
+        
+        // Add to thread-local list for container update
+        List<Agent> newborns = immediateNewborns.get();
+        newborns.add(agent);
+        
+        return agent;
+    }
+    
+    /**
+     * Kill an agent immediately
+     */
+    public void killAgentImmediately(String agentId) {
+        lifecycleManager.immediateDeath(agentId);
+    }
+    
+    /**
+     * Update agent position immediately
+     */
+    public void updateAgentPositionImmediately(Agent agent) {
+        lifecycleManager.immediateMove(agent);
+    }
+    
+    private boolean isTerminalAction(String action) {
+        return action.equalsIgnoreCase("die") || 
+               action.equalsIgnoreCase("lay_eggs");
+    }
+    
+    private void logUpdatePerformance(long startTime) {
+        long duration = System.nanoTime() - startTime;
+        double durationMs = duration / 1_000_000.0;
+        
+        if (durationMs > 50) { // Log if > 50ms
+            System.out.printf("[%s] Update: %.2f ms | %d agents | %d births | %d deaths%n",
+                getName(), durationMs, agentContainer.size(), 
+                birthsThisTick.get(), deathsThisTick.get());
+        }
+    }
+    
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("agentCount", agentContainer.size());
+        stats.put("rulesCount", rules.size());
+        stats.put("rulesEvaluated", rulesEvaluated.get());
+        stats.put("birthsThisTick", birthsThisTick.get());
+        stats.put("deathsThisTick", deathsThisTick.get());
+        stats.putAll(agentContainer.getStatistics());
+        
+        return stats;
+    }
+    
+    public void shutdown() {
+        ruleExecutor.shutdown();
+        try {
+            if (!ruleExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                ruleExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            ruleExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+
     
     /**
      * Process a batch of agents (thread-safe)
@@ -168,21 +352,6 @@ public class AgentLayer extends Layer {
         }
     }
     
-    private boolean isTerminalAction(String action) {
-        return action.equalsIgnoreCase("die") || 
-               action.equalsIgnoreCase("lay_eggs");
-    }
-    
-    private void logUpdatePerformance(long durationNanos) {
-        double durationMs = durationNanos / 1_000_000.0;
-        int agentCount = agentContainer.size();
-        
-        if (durationMs > 100) { // Log if update takes > 100ms
-            System.out.printf("[%s] Update: %.2f ms for %d agents (%.2f µs/agent)%n",
-                getName(), durationMs, agentCount, (durationNanos / agentCount) / 1000.0);
-        }
-    }
-    
     /**
      * Thread-safe agent addition
      */
@@ -201,21 +370,6 @@ public class AgentLayer extends Layer {
         return agentContainer.getAllAgents();
     }
     
-    /**
-     * Get layer statistics
-     */
-    public Map<String, Object> getStatistics() {
-        Map<String, Object> stats = new HashMap<>();
-        stats.put("agentCount", agentContainer.size());
-        stats.put("rulesCount", rules.size());
-        stats.put("rulesEvaluated", rulesEvaluated.get());
-        stats.put("actionsExecuted", actionsExecuted.get());
-        stats.put("births", births.get());
-        stats.put("deaths", deaths.get());
-        stats.putAll(agentContainer.getStatistics());
-        
-        return stats;
-    }
     
     /**
      * Reset statistics
@@ -227,18 +381,8 @@ public class AgentLayer extends Layer {
         deaths.set(0);
     }
     
-    /**
-     * Cleanup resources
-     */
-    public void shutdown() {
-        ruleExecutor.shutdown();
-        try {
-            if (!ruleExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
-                ruleExecutor.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            ruleExecutor.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
+    public AgentLifecycleManager getLifecycleManager(){
+        return lifecycleManager;
     }
+    
 }

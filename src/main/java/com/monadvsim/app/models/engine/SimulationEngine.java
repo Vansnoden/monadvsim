@@ -6,8 +6,10 @@ import com.monadvsim.app.models.utils.ResourceManager;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -17,7 +19,8 @@ import java.util.stream.Collectors;
 public class SimulationEngine implements Runnable, Closeable {
     private final Project project;
     private final TimeManager timeManager;
-    private final SpatialRegistry spatialRegistry;
+//    private final SpatialRegistry spatialRegistry;
+    private final IncrementalSpatialRegistry spatialRegistry;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final ReentrantLock simulationLock = new ReentrantLock();
@@ -35,7 +38,7 @@ public class SimulationEngine implements Runnable, Closeable {
     // Statistics
     private final ConcurrentHashMap<String, AtomicInteger> layerStats = new ConcurrentHashMap<>();
     
-    public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
+    public SimulationEngine(Project project, TimeManager timeManager, IncrementalSpatialRegistry spatialRegistry) {
         this.project = project;
         this.timeManager = timeManager;
         this.spatialRegistry = spatialRegistry;
@@ -58,16 +61,171 @@ public class SimulationEngine implements Runnable, Closeable {
     
     @Override
     public void run() {
-        try {
-            // Track simulation start
-            resourceManager.track("SimulationEngine", this, "Simulation Engine Instance");
+        running.set(true); 
+        System.out.println("🚀-> Simulation Engine with Incremental Updates Started...");
+        
+        while (running.get()) {
+            long tickStart = System.nanoTime();
             
-            // Run simulation
-            simulationLoop();
+            // TICK SEQUENCE:
+            // 1. Advance time
+            if (!timeManager.tick()) {
+                running.set(false);
+                break;
+            }
             
-        } finally {
-            // Ensure cleanup
-            cleanupResources();
+            // 2. Update environment
+            project.updateEnvironment(timeManager.getCurrentFrameIndex());
+            
+            // 3. Process agent layers WITH immediate spatial updates
+            processAgentLayersWithImmediateUpdates();
+            
+            // 4. Finalize spatial registry for this tick
+            finalizeSpatialRegistry();
+            
+            // 5. Report progress
+            reportTickProgress(tickStart);
+            
+            // Adaptive sleep
+            adaptiveSleep(System.nanoTime() - tickStart);
+        }
+        
+        // Final cleanup
+        cleanup();
+    }
+    
+    private void processAgentLayersWithImmediateUpdates() {
+        List<AgentLayer> layers = project.getAgentLayers();
+        
+        // Process layers sequentially to maintain dependencies
+        // (e.g., mosquitoes depend on tanks from previous layer)
+        for (AgentLayer layer : layers) {
+            try {
+                // This now includes immediate spatial registry updates
+                layer.update(project);
+                
+                // Update statistics
+                updateLayerStats(layer.getName(), layer.getAgents().size());
+                
+            } catch (Exception e) {
+                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    private void finalizeSpatialRegistry() {
+        // Apply any pending changes in spatial registry
+        IncrementalSpatialRegistry registry = 
+            (IncrementalSpatialRegistry) project.getSpatialRegistry();
+        registry.applyPendingChanges();
+        
+        // Validate consistency (debug builds only)
+        if (System.getProperty("debug.spatial") != null) {
+            validateSpatialConsistency();
+        }
+    }
+    
+    private void validateSpatialConsistency() {
+        IncrementalSpatialRegistry registry = 
+            (IncrementalSpatialRegistry) project.getSpatialRegistry();
+        
+        // Get all agents from layers
+        List<Agent> layerAgents = project.getAgentLayers().stream()
+            .flatMap(l -> l.getAgents().stream())
+            .collect(Collectors.toList());
+        
+        // Get all agents from spatial registry
+        List<Agent> registryAgents = registry.getAllAgents();
+        
+        // Check counts match
+        if (layerAgents.size() != registryAgents.size()) {
+            System.err.printf("Spatial inconsistency: layers=%d, registry=%d%n",
+                layerAgents.size(), registryAgents.size());
+            
+            // Find missing agents
+            Set<String> layerIds = layerAgents.stream()
+                .map(Agent::getId)
+                .collect(Collectors.toSet());
+            Set<String> registryIds = registryAgents.stream()
+                .map(Agent::getId)
+                .collect(Collectors.toSet());
+            
+            Set<String> missingInRegistry = new HashSet<>(layerIds);
+            missingInRegistry.removeAll(registryIds);
+            
+            Set<String> extraInRegistry = new HashSet<>(registryIds);
+            extraInRegistry.removeAll(layerIds);
+            
+            if (!missingInRegistry.isEmpty()) {
+                System.err.println("Agents missing in registry: " + missingInRegistry.size());
+            }
+            if (!extraInRegistry.isEmpty()) {
+                System.err.println("Extra agents in registry: " + extraInRegistry.size());
+            }
+        }
+    }
+    
+    private void reportTickProgress(long tickStart) {
+        long tickDuration = System.nanoTime() - tickStart;
+        
+        if (timeManager.getTickCount() % 10 == 0) {
+            reportProgress();
+            
+            // Report spatial registry statistics
+            if (timeManager.getTickCount() % 100 == 0) {
+                reportSpatialStatistics();
+            }
+        }
+        
+        // Update performance metrics
+        updatePerformanceMetrics(tickDuration);
+    }
+    
+    private void reportSpatialStatistics() {
+        IncrementalSpatialRegistry registry = 
+            (IncrementalSpatialRegistry) project.getSpatialRegistry();
+        
+        Map<String, Object> stats = registry.getStatistics();
+        System.out.printf("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
+            stats.get("totalAgents"), stats.get("queryCount"),
+            stats.get("cacheSize"), stats.get("gridCells"));
+    }
+    
+    private void cleanup() {
+        // Clean up lifecycle managers
+        project.getAgentLayers().forEach(layer -> {
+            if (layer.getLifecycleManager() != null) {
+                layer.getLifecycleManager().shutdown();
+            }
+            layer.shutdown();
+        });
+        
+        // Print final statistics
+        printFinalStatistics();
+    }
+    
+    private void printFinalStatistics() {
+        System.out.println("\n=== Final Simulation Statistics ===");
+        
+        // Agent statistics
+        int totalAgents = project.getAgentLayers().stream()
+            .mapToInt(l -> l.getAgents().size())
+            .sum();
+        System.out.printf("Total agents: %,d%n", totalAgents);
+        
+        // Spatial registry statistics
+        IncrementalSpatialRegistry registry = project.getSpatialRegistry();
+        Map<String, Object> stats = registry.getStatistics();
+
+        System.out.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+            stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
+        
+        // Layer statistics
+        for (AgentLayer layer : project.getAgentLayers()) {
+            Map<String, Object> layerStats = layer.getStatistics();
+            System.out.printf("%s: %,d agents%n", 
+                layer.getName(), layerStats.get("agentCount"));
         }
     }
     
@@ -175,79 +333,79 @@ public class SimulationEngine implements Runnable, Closeable {
     }
     
     
-    private void simulationLoop() {
-        while (running.get() && !Thread.currentThread().isInterrupted()) {
-            // Check if paused
-            while (paused.get() && running.get()) {
-                try {
-                    Thread.sleep(100);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    return;
-                }
-            }
-            
-            long tickStartTime = System.nanoTime();
-            
-            try {
-                // Acquire lock for thread-safe tick processing
-                simulationLock.lock();
-                processTick();
-            } finally {
-                simulationLock.unlock();
-            }
-            
-            long tickDuration = System.nanoTime() - tickStartTime;
-            updatePerformanceMetrics(tickDuration);
-            
-            // Adaptive sleep to maintain tick rate
-            adaptiveSleep(tickDuration);
-        }
-    }
+//    private void simulationLoop() {
+//        while (running.get() && !Thread.currentThread().isInterrupted()) {
+//            // Check if paused
+//            while (paused.get() && running.get()) {
+//                try {
+//                    Thread.sleep(100);
+//                } catch (InterruptedException e) {
+//                    Thread.currentThread().interrupt();
+//                    return;
+//                }
+//            }
+//            
+//            long tickStartTime = System.nanoTime();
+//            
+//            try {
+//                // Acquire lock for thread-safe tick processing
+//                simulationLock.lock();
+//                processTick();
+//            } finally {
+//                simulationLock.unlock();
+//            }
+//            
+//            long tickDuration = System.nanoTime() - tickStartTime;
+//            updatePerformanceMetrics(tickDuration);
+//            
+//            // Adaptive sleep to maintain tick rate
+//            adaptiveSleep(tickDuration);
+//        }
+//    }
     
     /**
      * Process a single tick (thread-safe when called with lock)
      */
-    private void processTick() {
-        // Advance time
-        if (!timeManager.tick()) {
-            running.set(false);
-            return;
-        }
-        
-        // Update environment
-        project.updateEnvironment(timeManager.getCurrentFrameIndex());
-        
-        // Update spatial registry
-        updateSpatialRegistry();
-        
-        // Process agent layers in parallel
-        processAgentLayers();
-        
-        // Report progress periodically
-        if (timeManager.getTickCount() % 10 == 0) {
-            reportProgress();
-        }
-        
-        // Log performance periodically
-        if (timeManager.getTickCount() % 100 == 0) {
-            logPerformance();
-        }
-    }
+//    private void processTick() {
+//        // Advance time
+//        if (!timeManager.tick()) {
+//            running.set(false);
+//            return;
+//        }
+//        
+//        // Update environment
+//        project.updateEnvironment(timeManager.getCurrentFrameIndex());
+//        
+//        // Update spatial registry
+//        updateSpatialRegistry();
+//        
+//        // Process agent layers in parallel
+//        processAgentLayers();
+//        
+//        // Report progress periodically
+//        if (timeManager.getTickCount() % 10 == 0) {
+//            reportProgress();
+//        }
+//        
+//        // Log performance periodically
+//        if (timeManager.getTickCount() % 100 == 0) {
+//            logPerformance();
+//        }
+//    }
     
     /**
      * Thread-safe spatial registry update
      */
-    private void updateSpatialRegistry() {
-        List<Agent> allAgents = project.getAgentLayers().stream()
-            .flatMap(l -> l.getAgents().stream())
-            .collect(Collectors.toList());
-        
-        metrics.recordAgentProcessed();
-        
-        // Use incremental update for better performance
-        spatialRegistry.updateIncremental(allAgents);
-    }
+//    private void updateSpatialRegistry() {
+//        List<Agent> allAgents = project.getAgentLayers().stream()
+//            .flatMap(l -> l.getAgents().stream())
+//            .collect(Collectors.toList());
+//        
+//        metrics.recordAgentProcessed();
+//        
+//        // Use incremental update for better performance
+//        spatialRegistry.updateIncremental(allAgents);
+//    }
     
     /**
      * Process agent layers in parallel
@@ -405,6 +563,6 @@ public class SimulationEngine implements Runnable, Closeable {
 
     @Override
     public void close() throws IOException {
-        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+        
     }
 }

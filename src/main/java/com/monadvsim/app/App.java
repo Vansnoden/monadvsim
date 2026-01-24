@@ -138,7 +138,7 @@ public class App {
         // Setup spatial registry with appropriate cell size
         double cellSize = 0.001; // ~100m at equator
         Rectangle2D worldBounds = new Rectangle2D.Double(38.70, 8.95, 0.1, 0.1);
-        SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, cellSize);
+        IncrementalSpatialRegistry spatialRegistry = new IncrementalSpatialRegistry(worldBounds, cellSize);
         // Create thread-safe rule engine
         ThreadSafeRuleEngine ruleEngine = new ThreadSafeRuleEngine();
         // Create agent layers with thread-safe containers
@@ -225,7 +225,7 @@ public class App {
     
     
     private static void runSimulationWithMetrics(Project project, TimeManager timeManager,
-            SpatialRegistry spatialRegistry) {
+            IncrementalSpatialRegistry spatialRegistry) {
         SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
 
         // Add performance monitoring
@@ -275,6 +275,58 @@ public class App {
         return project.getAgentLayers().stream()
             .mapToInt(l -> l.getAgents().size())
             .sum();
+    }
+    
+    private static void seedInitialPopulation(AgentLayer habitatLayer, 
+                                             AgentLayer mosquitoLayer,
+                                             RasterLayer buildings,
+                                             RasterLayer population,
+                                             IncrementalSpatialRegistry spatialRegistry) {
+        System.out.println("Seeding initial population with immediate spatial registration...");
+        
+        Random rand = new Random();
+        int tanksToSeed = 1000;
+        int mosquitoesToSeed = 500;
+        
+        double minLon = 38.70, minLat = 8.95;
+        double widthLon = 0.1, heightLat = 0.1;
+        
+        // Seed water tanks
+        for (int i = 0; i < tanksToSeed; i++) {
+            double rx = minLon + (widthLon * rand.nextDouble());
+            double ry = minLat + (heightLat * rand.nextDouble());
+            
+            // Only in built-up areas
+            if (buildings.getValueAt(rx, ry) > 0.5) {
+                InertAgent tank = new InertAgent(rx, ry);
+                tank.setLarvalCount(rand.nextInt(50) + 10);
+                tank.setCapacity(200);
+                
+                // Add to layer AND register immediately in spatial registry
+                habitatLayer.addAgent(tank);
+                spatialRegistry.registerAgent(tank);
+            }
+        }
+        
+        // Seed mosquitoes
+        for (int i = 0; i < mosquitoesToSeed; i++) {
+            double rx = minLon + (widthLon * rand.nextDouble());
+            double ry = minLat + (heightLat * rand.nextDouble());
+            
+            // Only in populated areas
+            if (population.getValueAt(rx, ry) > 0.3) {
+                LivingAgent mosquito = new LivingAgent(rx, ry);
+                mosquito.setAge(rand.nextInt(500));
+                mosquito.setGravid(rand.nextDouble() < 0.3);
+                
+                // Add to layer AND register immediately
+                mosquitoLayer.addAgent(mosquito);
+                spatialRegistry.registerAgent(mosquito);
+            }
+        }
+        
+        System.out.printf("Seeded: %d tanks, %d mosquitoes%n", 
+            habitatLayer.getAgents().size(), mosquitoLayer.getAgents().size());
     }
     
 }

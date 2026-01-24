@@ -1,5 +1,6 @@
 package com.monadvsim.app.models.entities;
 
+import com.monadvsim.app.models.engine.IncrementalSpatialRegistry;
 import com.monadvsim.app.models.engine.SpatialRegistry;
 import com.monadvsim.app.models.engine.TimeManager;
 import java.util.ArrayList;
@@ -11,7 +12,8 @@ public class Project implements Serializable {
     private String name;
     private String crsCode = "EPSG:4326";
     private List<Layer> layers; // The Environment
-    private transient SpatialRegistry spatialRegistry; // all Agents State
+//    private transient SpatialRegistry spatialRegistry; // all Agents State
+    private transient IncrementalSpatialRegistry spatialRegistry;
     private double defaultAmbientTemp = 295.15; // 22 Celsius in Kelvin
     
     public Project(String name) {
@@ -101,11 +103,11 @@ public class Project implements Serializable {
         this.layers = layers;
     }
 
-    public SpatialRegistry getSpatialRegistry() {
+    public IncrementalSpatialRegistry getSpatialRegistry() {
         return spatialRegistry;
     }
 
-    public void setSpatialRegistry(SpatialRegistry spatialRegistry) {
+    public void setSpatialRegistry(IncrementalSpatialRegistry spatialRegistry) {
         this.spatialRegistry = spatialRegistry;
     }
     
