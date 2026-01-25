@@ -7,6 +7,7 @@ import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
 import java.io.File;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -188,22 +189,26 @@ public class SimulationEngine implements Runnable {
         updatePerformanceMetrics(tickDuration);
     }
     
+    
     private void exportSnapshot(Project project) {
-        try {
-            // Create results directory if it doesn't exist
-            String dirPath = "results";
-            File dir = new File(dirPath);
-            if (!dir.exists()) {
-                dir.mkdirs();
-                System.out.println("Created directory: " + dirPath);
-            }
+        // Run export in background thread
+        CompletableFuture.runAsync(() -> {
+            try {
+                String dirPath = "results";
+                File dir = new File(dirPath);
+                if (!dir.exists()) {
+                    dir.mkdirs();
+                }
 
-            String filename = String.format("results/snapshot_tick_%d.csv", timeManager.getTickCount());
-            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-            persistenceService.exportToCSV(project, filename);
-        } catch (Exception e) {
-            System.err.println("Error exporting snapshot: " + e.getMessage());
-        }
+                String filename = String.format("results/snapshot_tick_%d.csv", 
+                    timeManager.getTickCount());
+                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+                persistenceService.exportToCSV(project, filename);
+                System.out.println("✅ Snapshot exported to: " + filename);
+            } catch (Exception e) {
+                System.err.println("Error exporting snapshot: " + e.getMessage());
+            }
+        }, simulationExecutor);
     }
     
     private void reportSpatialStatistics() {

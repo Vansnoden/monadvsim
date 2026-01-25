@@ -15,6 +15,7 @@ import java.util.concurrent.ThreadLocalRandom;
 public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> evaluationCache = new ConcurrentHashMap<>();
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
@@ -36,6 +37,11 @@ public class RuleEngine {
 
     public boolean evaluate(String condition, Agent agent, Project project) {
         try {
+            String cacheKey = condition + "|" + agent.getId();
+            Boolean cached = evaluationCache.get(cacheKey);
+            if (cached != null) {
+                return cached;
+            }
             Context context = threadLocalContext.get();
             Value bindings = context.getBindings("js");
             
@@ -46,6 +52,7 @@ public class RuleEngine {
             );
 
             Value result = context.eval(source);
+            evaluationCache.put(cacheKey, result.isBoolean() && result.asBoolean());
             return result.isBoolean() && result.asBoolean();
 
         } catch (Exception e) {
