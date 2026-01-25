@@ -5,7 +5,13 @@ import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
+import com.monadvsim.app.models.utils.SnapshotMerger;
 import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -233,10 +239,70 @@ public class SimulationEngine implements Runnable {
         
         // Print final statistics
         printFinalStatistics();
+        SnapshotMerger.mergeAfterSimulation();
     }
     
     
     private void printFinalStatistics() {
+        try {
+            // Create results directory
+            File resultsDir = new File("results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+            }
+
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
+            String filename = String.format("results/%s_final_stats_%s.txt", safeProjectName, timestamp);
+
+            try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+                // Redirect console output to both console and file
+                ConsoleAndFileWriter dualWriter = new ConsoleAndFileWriter(writer);
+
+                dualWriter.println("\n=== Final Simulation Statistics ===");
+
+                // Agent statistics
+                int totalAgents = project.getAgentLayers().stream()
+                    .mapToInt(l -> l.getAgents().size())
+                    .sum();
+                dualWriter.printf("Total agents: %,d%n", totalAgents);
+
+                // Spatial registry statistics
+                SpatialRegistry registry = project.getSpatialRegistry();
+                Map<String, Object> stats = registry.getStatistics();
+
+                dualWriter.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+                    stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
+
+                // Layer statistics
+                for (AgentLayer layer : project.getAgentLayers()) {
+                    Map<String, Object> layerStats = layer.getStatistics();
+                    dualWriter.printf("%s: %,d agents%n", 
+                        layer.getName(), layerStats.get("agentCount"));
+                }
+
+                // Performance metrics
+                dualWriter.printf("Average tick time: %.2f ms%n", averageTickTime);
+                dualWriter.printf("Total ticks: %d%n", timeManager.getTickCount());
+
+                System.out.println("✅ Statistics saved to: " + filename);
+
+            } catch (IOException e) {
+                System.err.println("Error writing statistics file: " + e.getMessage());
+                // Fallback to console only
+                printToConsoleOnly();
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error in statistics generation: " + e.getMessage());
+            printToConsoleOnly();
+        }
+        
+    }
+    
+    
+    private void printToConsoleOnly() {
         System.out.println("\n=== Final Simulation Statistics ===");
         
         // Agent statistics
@@ -260,6 +326,27 @@ public class SimulationEngine implements Runnable {
         }
     }
     
+    
+    // Helper class to write to both console and file
+    private static class ConsoleAndFileWriter {
+        private final PrintWriter fileWriter;
+
+        ConsoleAndFileWriter(PrintWriter fileWriter) {
+            this.fileWriter = fileWriter;
+        }
+
+        void println(String text) {
+            System.out.println(text);
+            fileWriter.println(text);
+        }
+
+        void printf(String format, Object... args) {
+            String text = String.format(format, args);
+            System.out.print(text);
+            fileWriter.print(text);
+        }
+    }
+
     
     
     // Clean up all resources
