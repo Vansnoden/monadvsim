@@ -83,29 +83,26 @@ public class ProjectPersistenceService {
         
         try {
             // Load standard ERA5 variables
-            climateManager.loadERA5Dataset(netcdfFilePath);
+            climateManager.loadAvailableVariables(netcdfFilePath);
             
             // Add layers to project
             for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
                 project.addLayer(layer);
-                
-                // Set up tokens for rule engine (optional)
+
+                // Set up tokens for rule engine
                 if (project.getTokens() == null) {
                     project.setTokens(new ArrayList<>());
                 }
                 if (project.getLayerNames() == null) {
                     project.setLayerNames(new ArrayList<>());
                 }
-                
-                // Add token mapping for rule engine
-                String token = getTokenForVariable(layer.getName());
-                if (!project.getTokens().contains(token)) {
-                    project.getTokens().add(token);
-                    project.getLayerNames().add(layer.getName());
-                }
+
+                // Map variable names to tokens
+                String token = ProjectPersistenceService.getTokenForVariable(layer.getName());
+                project.getTokens().add(token);
+                project.getLayerNames().add(layer.getName());
             }
             
-            // Print statistics
             climateManager.printStatistics();
             System.out.println("✅ Climate data loaded successfully");
             

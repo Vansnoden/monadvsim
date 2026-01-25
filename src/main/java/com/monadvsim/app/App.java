@@ -40,31 +40,11 @@ public class App {
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
             String netcdfFile = "prepared_data/climate_2023_50_km_6.nc";
             
-//            ClimateDatasetManager climateManager = persistenceService.loadClimateData(
-//                project, netcdfFile, timeManager);
+            ClimateDatasetManager climateManager = persistenceService.loadClimateData(
+                project, netcdfFile, timeManager);
             
-            ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
-            climateManager.loadAvailableVariables(netcdfFile);
             
-            // Add layers to project
-            for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
-                project.addLayer(layer);
-
-                // Set up tokens for rule engine
-                if (project.getTokens() == null) {
-                    project.setTokens(new ArrayList<>());
-                }
-                if (project.getLayerNames() == null) {
-                    project.setLayerNames(new ArrayList<>());
-                }
-
-                // Map variable names to tokens
-                String token = ProjectPersistenceService.getTokenForVariable(layer.getName());
-                project.getTokens().add(token);
-                project.getLayerNames().add(layer.getName());
-            }
             
-            climateManager.printStatistics();
             
             // 5. Create agent layers with climate-aware rules
 //            RuleEngine ruleEngine = new RuleEngine();

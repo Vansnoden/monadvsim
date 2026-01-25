@@ -1828,29 +1828,26 @@ public class ProjectPersistenceService {
         
         try {
             // Load standard ERA5 variables
-            climateManager.loadERA5Dataset(netcdfFilePath);
+            climateManager.loadAvailableVariables(netcdfFilePath);
             
             // Add layers to project
             for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
                 project.addLayer(layer);
-                
-                // Set up tokens for rule engine (optional)
+
+                // Set up tokens for rule engine
                 if (project.getTokens() == null) {
                     project.setTokens(new ArrayList<>());
                 }
                 if (project.getLayerNames() == null) {
                     project.setLayerNames(new ArrayList<>());
                 }
-                
-                // Add token mapping for rule engine
-                String token = getTokenForVariable(layer.getName());
-                if (!project.getTokens().contains(token)) {
-                    project.getTokens().add(token);
-                    project.getLayerNames().add(layer.getName());
-                }
+
+                // Map variable names to tokens
+                String token = ProjectPersistenceService.getTokenForVariable(layer.getName());
+                project.getTokens().add(token);
+                project.getLayerNames().add(layer.getName());
             }
             
-            // Print statistics
             climateManager.printStatistics();
             System.out.println("✅ Climate data loaded successfully");
             
@@ -1862,7 +1859,7 @@ public class ProjectPersistenceService {
         }
     }
     
-    private String getTokenForVariable(String variableName) {
+    public static String getTokenForVariable(String variableName) {
         // Map NetCDF variable names to tokens used in rules
         switch (variableName.toLowerCase()) {
             case "t2m":
@@ -2617,9 +2614,11 @@ public class ClimateDatasetManager {
      */
     public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
         for (String varName : variableNames) {
+            System.out.println("Loading variable: " + varName);
             InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
             layer.loadFromNetCDF(filePath, varName);
             layers.put(varName, layer);
+            System.out.println("Successfully loaded: " + varName);
         }
     }
     
@@ -2636,6 +2635,29 @@ public class ClimateDatasetManager {
         };
         
         loadNetCDFDataset(filePath, standardVars);
+    }
+    
+    // smater loader to laod available variables
+    public void loadAvailableVariables(String filePath) throws IOException {
+        try (ucar.nc2.NetcdfFile ncfile = ucar.nc2.NetcdfFiles.open(filePath)) {
+            System.out.println("Available variables in file:");
+            for (ucar.nc2.Variable var : ncfile.getVariables()) {
+                String varName = var.getShortName();
+                System.out.println("  - " + varName);
+                
+                // Load common climate variables
+                if (varName.equals("t2m") || varName.equals("tp") || 
+                    varName.equals("sp") || varName.equals("u10") || 
+                    varName.equals("v10") || varName.equals("r") || 
+                    varName.equals("d2m")) {
+                    
+                    System.out.println("    Loading " + varName + "...");
+                    InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
+                    layer.loadFromNetCDF(filePath, varName);
+                    layers.put(varName, layer);
+                }
+            }
+        }
     }
     
     /**
@@ -3565,6 +3587,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -3597,14 +3620,19 @@ public class InterpolatedRasterLayer extends Layer {
     private boolean cacheValid = false;
     
     // NetCDF metadata
-    private String timeUnits = "hours since 1900-01-01 00:00:00";
-    private LocalDateTime timeReference = LocalDateTime.of(1900, 1, 1, 0, 0);
+    private String timeUnits = "seconds since 1970-01-01";
+    private LocalDateTime timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
     private boolean dataLoaded = false;
     
     // Statistics
     private long cacheHits = 0;
     private long cacheMisses = 0;
     private long interpolationsPerformed = 0;
+    
+    // Variable name mapping
+    private String timeDimName = "valid_time";
+    private String latDimName = "latitude";
+    private String lonDimName = "longitude";
     
     /**
      * Constructor for creating an empty layer to be loaded from NetCDF
@@ -3627,33 +3655,32 @@ public class InterpolatedRasterLayer extends Layer {
         try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
             LOGGER.info("Loading NetCDF file: " + filePath);
             
+            // Debug: Print file structure
+            printFileStructure(ncfile);
+            
             // Get the variable
             Variable var = ncfile.findVariable(variableName);
             if (var == null) {
-                throw new IOException("Variable '" + variableName + "' not found in file");
+                throw new IOException("Variable '" + variableName + "' not found in file. Available variables: " + 
+                    getVariableNames(ncfile));
             }
             
-            // Get dimensions
-            List<Dimension> dims = var.getDimensions();
-            if (dims.size() < 3) {
-                throw new IOException("Variable must have at least 3 dimensions (time, lat, lon)");
-            }
-            
-            // Determine dimension order (different NetCDF files may use different orders)
-            Dimension timeDim = findDimension(ncfile, "time");
-            Dimension latDim = findDimension(ncfile, "lat");
-            Dimension lonDim = findDimension(ncfile, "lon");
+            // Get dimensions - using your file's dimension names
+            Dimension timeDim = ncfile.findDimension(timeDimName);
+            Dimension latDim = ncfile.findDimension(latDimName);
+            Dimension lonDim = ncfile.findDimension(lonDimName);
             
             if (timeDim == null || latDim == null || lonDim == null) {
-                throw new IOException("Could not find required dimensions (time, lat, lon)");
+                throw new IOException("Could not find required dimensions. Found dimensions: " + 
+                    getDimensionNames(ncfile) + "\nLooking for: " + timeDimName + ", " + latDimName + ", " + lonDimName);
             }
             
             timeSize = timeDim.getLength();
             latSize = latDim.getLength();
             lonSize = lonDim.getLength();
             
-            LOGGER.info(String.format("Dimensions: time=%d, lat=%d, lon=%d", 
-                timeSize, latSize, lonSize));
+            LOGGER.info(String.format("Dimensions: %s=%d, %s=%d, %s=%d", 
+                timeDimName, timeSize, latDimName, latSize, lonDimName, lonSize));
             
             // Allocate data grid (time, lat, lon)
             dataGrid = new double[timeSize][latSize][lonSize];
@@ -3665,22 +3692,59 @@ public class InterpolatedRasterLayer extends Layer {
             readTimeMetadata(ncfile);
             
             // Read the data
-            LOGGER.info("Reading variable data...");
+            LOGGER.info("Reading variable data for: " + variableName);
             Array dataArray = var.read();
             Index index = dataArray.getIndex();
             
-            // Fill data grid - assuming order is (time, lat, lon)
+            // Check dimension order
+            List<Dimension> varDims = var.getDimensions();
+            if (varDims.size() != 3) {
+                throw new IOException("Expected 3 dimensions, found " + varDims.size());
+            }
+            
+            // Determine dimension order for your specific file
+            // Based on your ncdump: (valid_time, latitude, longitude)
+            int timeIndex = -1, latIndex = -1, lonIndex = -1;
+            for (int i = 0; i < varDims.size(); i++) {
+                String dimName = varDims.get(i).getShortName();
+                if (dimName.equals(timeDimName)) {
+                    timeIndex = i;
+                } else if (dimName.equals(latDimName)) {
+                    latIndex = i;
+                } else if (dimName.equals(lonDimName)) {
+                    lonIndex = i;
+                }
+            }
+            
+            if (timeIndex == -1 || latIndex == -1 || lonIndex == -1) {
+                throw new IOException("Could not identify dimension order in variable");
+            }
+            
+            LOGGER.info(String.format("Dimension order: time[%d], lat[%d], lon[%d]", 
+                timeIndex, latIndex, lonIndex));
+            
+            // Fill data grid with proper dimension order
             for (int t = 0; t < timeSize; t++) {
                 for (int lat = 0; lat < latSize; lat++) {
                     for (int lon = 0; lon < lonSize; lon++) {
-                        dataGrid[t][lat][lon] = dataArray.getDouble(index.set(t, lat, lon));
+                        // Set indices according to dimension order
+                        if (timeIndex == 0 && latIndex == 1 && lonIndex == 2) {
+                            // (time, lat, lon)
+                            dataGrid[t][lat][lon] = dataArray.getDouble(index.set(t, lat, lon));
+                        } else if (timeIndex == 0 && lonIndex == 1 && latIndex == 2) {
+                            // (time, lon, lat)
+                            dataGrid[t][lat][lon] = dataArray.getDouble(index.set(t, lon, lat));
+                        } else {
+                            // Fallback: assume (time, lat, lon)
+                            dataGrid[t][lat][lon] = dataArray.getDouble(index.set(t, lat, lon));
+                        }
                     }
                 }
             }
             
-            // Check if latitude is descending (NetCDF often has north to south)
+            // Check if latitude is descending (your file has stored_direction = "decreasing")
             if (latValues.length > 1 && latValues[0] > latValues[1]) {
-                LOGGER.info("Reversing latitude axis (south to north)");
+                LOGGER.info("Reversing latitude axis (north to south -> south to north)");
                 reverseLatitudeData();
             }
             
@@ -3696,32 +3760,57 @@ public class InterpolatedRasterLayer extends Layer {
         }
     }
     
-    private Dimension findDimension(NetcdfFile ncfile, String dimName) {
-        // Try exact match first
-        Dimension dim = ncfile.findDimension(dimName);
-        if (dim != null) return dim;
+    
+    private void printFileStructure(NetcdfFile ncfile) {
+        System.out.println("\n=== NetCDF File Structure ===");
+        System.out.println("Dimensions:");
+        for (Dimension dim : ncfile.getDimensions()) {
+            System.out.printf("  %s: %d%n", dim.getShortName(), dim.getLength());
+        }
         
-        // Try case-insensitive
-        for (Dimension d : ncfile.getDimensions()) {
-            if (d.getShortName().equalsIgnoreCase(dimName)) {
-                return d;
+        System.out.println("\nVariables:");
+        for (Variable var : ncfile.getVariables()) {
+            System.out.printf("  %s: ", var.getShortName());
+            System.out.print("Dimensions [");
+            for (Dimension dim : var.getDimensions()) {
+                System.out.print(dim.getShortName() + " ");
+            }
+            System.out.println("]");
+            
+            // Print units if available
+            Attribute units = var.findAttribute("units");
+            if (units != null) {
+                System.out.printf("    units: %s%n", units.getStringValue());
             }
         }
-        
-        // Try common alternatives
-        if (dimName.equals("lat")) {
-            return ncfile.findDimension("latitude");
-        } else if (dimName.equals("lon")) {
-            return ncfile.findDimension("longitude");
-        }
-        
-        return null;
     }
+    
+    
+    private String getVariableNames(NetcdfFile ncfile) {
+        StringBuilder sb = new StringBuilder();
+        for (Variable var : ncfile.getVariables()) {
+            sb.append(var.getShortName()).append(", ");
+        }
+        return sb.toString();
+    }
+    
+    
+    private String getDimensionNames(NetcdfFile ncfile) {
+        StringBuilder sb = new StringBuilder();
+        for (Dimension dim : ncfile.getDimensions()) {
+            sb.append(dim.getShortName()).append(" (").append(dim.getLength()).append("), ");
+        }
+        return sb.toString();
+    }
+    
     
     private void readCoordinateVariables(NetcdfFile ncfile) throws IOException {
         // Read latitude values
-        Variable latVar = ncfile.findVariable("lat");
-        if (latVar == null) latVar = ncfile.findVariable("latitude");
+        Variable latVar = ncfile.findVariable(latDimName);
+        if (latVar == null) {
+            // Try alternative names
+            latVar = ncfile.findVariable("lat");
+        }
         
         if (latVar != null) {
             Array latArray = latVar.read();
@@ -3729,13 +3818,18 @@ public class InterpolatedRasterLayer extends Layer {
             for (int i = 0; i < latSize; i++) {
                 latValues[i] = latArray.getDouble(i);
             }
+            LOGGER.info(String.format("Latitude range: %.3f to %.3f", 
+                latValues[0], latValues[latValues.length-1]));
         } else {
             throw new IOException("Latitude variable not found");
         }
         
         // Read longitude values
-        Variable lonVar = ncfile.findVariable("lon");
-        if (lonVar == null) lonVar = ncfile.findVariable("longitude");
+        Variable lonVar = ncfile.findVariable(lonDimName);
+        if (lonVar == null) {
+            // Try alternative names
+            lonVar = ncfile.findVariable("lon");
+        }
         
         if (lonVar != null) {
             Array lonArray = lonVar.read();
@@ -3743,18 +3837,21 @@ public class InterpolatedRasterLayer extends Layer {
             for (int i = 0; i < lonSize; i++) {
                 lonValues[i] = lonArray.getDouble(i);
             }
+            LOGGER.info(String.format("Longitude range: %.3f to %.3f", 
+                lonValues[0], lonValues[lonValues.length-1]));
         } else {
             throw new IOException("Longitude variable not found");
         }
     }
     
+    
     private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
-        Variable timeVar = ncfile.findVariable("time");
+        Variable timeVar = ncfile.findVariable(timeDimName);
         if (timeVar == null) {
             LOGGER.warning("Time variable not found, using simulation time directly");
             timeValues = new double[timeSize];
             for (int i = 0; i < timeSize; i++) {
-                timeValues[i] = i; // Assume hourly data
+                timeValues[i] = i * 3600; // Assume hourly data in seconds
             }
             return;
         }
@@ -3764,6 +3861,7 @@ public class InterpolatedRasterLayer extends Layer {
         if (unitsAttr != null) {
             timeUnits = unitsAttr.getStringValue();
             parseTimeUnits(timeUnits);
+            LOGGER.info("Time units: " + timeUnits);
         }
         
         // Read time values
@@ -3773,25 +3871,39 @@ public class InterpolatedRasterLayer extends Layer {
             timeValues[i] = timeArray.getDouble(i);
         }
         
-        LOGGER.info("Time units: " + timeUnits);
-        LOGGER.info(String.format("Time range: %.1f to %.1f (%d steps)",
+        LOGGER.info(String.format("Time range: %.0f to %.0f seconds (%d steps)",
             timeValues[0], timeValues[timeValues.length-1], timeSize));
+        
+        // Convert first and last times to human-readable
+        LocalDateTime firstTime = timeReference.plusSeconds((long) timeValues[0]);
+        LocalDateTime lastTime = timeReference.plusSeconds((long) timeValues[timeValues.length-1]);
+        LOGGER.info(String.format("Time range: %s to %s", 
+            firstTime.toString(), lastTime.toString()));
     }
     
+    
     private void parseTimeUnits(String units) {
-        // Parse units like "hours since 1900-01-01 00:00:00"
+        // Parse units like "seconds since 1970-01-01 00:00:00" or "seconds since 1970-01-01"
         try {
             String[] parts = units.split("since");
             if (parts.length == 2) {
                 String dateStr = parts[1].trim();
-                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
-                timeReference = LocalDateTime.parse(dateStr, formatter);
+                // Handle different date formats
+                if (dateStr.contains(" ")) {
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                    timeReference = LocalDateTime.parse(dateStr, formatter);
+                } else {
+                    DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd");
+                    timeReference = LocalDateTime.parse(dateStr, formatter);
+                }
+                LOGGER.info("Time reference: " + timeReference);
             }
         } catch (Exception e) {
-            LOGGER.warning("Could not parse time units: " + units + ", using default");
-            timeReference = LocalDateTime.of(1900, 1, 1, 0, 0);
+            LOGGER.warning("Could not parse time units: " + units + ", using 1970-01-01");
+            timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
         }
     }
+    
     
     private void reverseLatitudeData() {
         // Reverse latitude values
@@ -3837,12 +3949,13 @@ public class InterpolatedRasterLayer extends Layer {
         return getCachedValue(lon, lat);
     }
     
+    
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
-            // Get time index for interpolation
-            double hoursSinceReference = ChronoUnit.HOURS.between(
-                timeReference, currentTime);
+            // Convert current time to seconds since reference
+            long secondsSinceReference = currentTime.toEpochSecond(ZoneOffset.UTC) - 
+                                        timeReference.toEpochSecond(ZoneOffset.UTC);
             
             // Find bounding time indices
             int lowerIdx = -1;
@@ -3850,11 +3963,11 @@ public class InterpolatedRasterLayer extends Layer {
             double alpha = 0.0;
             
             for (int i = 0; i < timeValues.length - 1; i++) {
-                if (hoursSinceReference >= timeValues[i] && 
-                    hoursSinceReference <= timeValues[i + 1]) {
+                if (secondsSinceReference >= timeValues[i] && 
+                    secondsSinceReference <= timeValues[i + 1]) {
                     lowerIdx = i;
                     upperIdx = i + 1;
-                    alpha = (hoursSinceReference - timeValues[i]) / 
+                    alpha = (secondsSinceReference - timeValues[i]) / 
                            (timeValues[i + 1] - timeValues[i]);
                     break;
                 }
@@ -3862,7 +3975,7 @@ public class InterpolatedRasterLayer extends Layer {
             
             // Handle boundaries
             if (lowerIdx == -1) {
-                if (hoursSinceReference <= timeValues[0]) {
+                if (secondsSinceReference <= timeValues[0]) {
                     lowerIdx = upperIdx = 0;
                     alpha = 0.0;
                 } else {
@@ -3905,24 +4018,6 @@ public class InterpolatedRasterLayer extends Layer {
         }
     }
     
-    private double getCachedValue(double lon, double lat) {
-        // Find nearest grid cell (simple nearest neighbor)
-        int latIdx = findNearestIndex(latValues, lat);
-        int lonIdx = findNearestIndex(lonValues, lon);
-        
-        // Handle wrap-around for longitude (if using 0-360 instead of -180 to 180)
-        if (lonIdx == -1) {
-            // Try adjusting longitude
-            if (lon < 0) lon += 360;
-            lonIdx = findNearestIndex(lonValues, lon);
-        }
-        
-        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize) {
-            return cachedGrid[latIdx][lonIdx];
-        }
-        
-        return Double.NaN;
-    }
     
     private int findNearestIndex(double[] array, double value) {
         if (array == null || array.length == 0) return -1;
@@ -3948,6 +4043,44 @@ public class InterpolatedRasterLayer extends Layer {
         
         return Math.abs(array[low] - value) < Math.abs(array[high] - value) ? low : high;
     }
+    
+    
+    private double getCachedValue(double lon, double lat) {
+        // Find nearest grid cell (simple nearest neighbor)
+        int latIdx = findNearestIndex(latValues, lat);
+        int lonIdx = findNearestIndex(lonValues, lon);
+        
+        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize) {
+            return cachedGrid[latIdx][lonIdx];
+        }
+        
+        return Double.NaN;
+    }
+    
+    
+    private Dimension findDimension(NetcdfFile ncfile, String dimName) {
+        // Try exact match first
+        Dimension dim = ncfile.findDimension(dimName);
+        if (dim != null) return dim;
+        
+        // Try case-insensitive
+        for (Dimension d : ncfile.getDimensions()) {
+            if (d.getShortName().equalsIgnoreCase(dimName)) {
+                return d;
+            }
+        }
+        
+        // Try common alternatives
+        if (dimName.equals("lat")) {
+            return ncfile.findDimension("latitude");
+        } else if (dimName.equals("lon")) {
+            return ncfile.findDimension("longitude");
+        }
+        
+        return null;
+    }
+    
+   
     
     /**
      * Get bilinear interpolated value (more accurate but slower)
@@ -5018,6 +5151,7 @@ import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import java.awt.geom.Rectangle2D;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.Random;
 
 public class App {
@@ -5053,6 +5187,9 @@ public class App {
             
             ClimateDatasetManager climateManager = persistenceService.loadClimateData(
                 project, netcdfFile, timeManager);
+            
+            
+            
             
             // 5. Create agent layers with climate-aware rules
 //            RuleEngine ruleEngine = new RuleEngine();
