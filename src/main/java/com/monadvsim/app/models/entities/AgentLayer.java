@@ -73,7 +73,7 @@ public class AgentLayer extends Layer {
         // Determine optimal partition count
         int availableProcessors = Runtime.getRuntime().availableProcessors();
         int partitionCount = Math.max(2, availableProcessors);
-        this.batchSize = Math.max(100, 1000 / partitionCount);
+        this.batchSize = Math.max(50, 500 / partitionCount); // before 100, 1000
         
         this.agentContainer = new AgentContainer(partitionCount);
         
