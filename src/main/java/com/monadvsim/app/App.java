@@ -171,17 +171,44 @@ public class App {
                 10 // High priority - death should happen first
             );
             
-//            mosquitoLayer.addRule(
-//                "age > 1000",
-//                "die",
-//                9 // Die from old age
-//            );
+            mosquitoLayer.addRule(
+                "age > 1000",
+                "die",
+                9 // Die from old age
+            );
+            
+            // Add lifecycle progression rules for Mosquitoes
+            mosquitoLayer.addRule(
+                "stage == 'LARVA' && age > 480", // ~5 days as larva
+                "pupate",
+                2
+            );
+            mosquitoLayer.addRule(
+                "stage == 'PUPA' && age > 672", // ~7 days as pupa
+                "emerge",
+                2
+            );
+            mosquitoLayer.addRule(
+                "stage == 'ADULT' && age > 100 && energy < 0.3", // Hungry adult
+                "feed",
+                3
+            );
+            mosquitoLayer.addRule(
+                "stage == 'ADULT' && age > 200 && energy > 0.8", // Mature adult with energy
+                "get_gravid",
+                4
+            );
             
             // Add rules for water tanks (habitats)
             habitatLayer.addRule(
-                "temperature > 293.15", // >20°C
+                "temperature > 285.15", // Broader temperature range (>12°C)
                 "hatch",
                 1
+            );
+            habitatLayer.addRule(
+                "temperature > 293.15 && precipitation > 0.0005", // Warm and moist
+                "hatch",
+                2  // Higher priority
             );
             
             // Add layers to project
@@ -234,14 +261,6 @@ public class App {
                     
                     // After simulation completes, export results
                     System.out.println("Simulation completed, exporting results...");
-                    String timestamp = LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-                    String csvFile = String.format("results/simulation_results_%s.csv", timestamp);
-                    
-                    persistenceService.exportToCSV(project, csvFile);
-                    System.out.println("✅ Results exported to: " + csvFile);
-                    
-                    // Print final statistics
-                    printFinalStatistics(project, spatialRegistry);
                     
                 } catch (Exception e) {
                     System.err.println("Error in simulation thread: " + e.getMessage());

@@ -892,7 +892,13 @@ import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
+import com.monadvsim.app.models.utils.SnapshotMerger;
 import java.io.File;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.io.PrintWriter;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
@@ -1120,10 +1126,70 @@ public class SimulationEngine implements Runnable {
         
         // Print final statistics
         printFinalStatistics();
+        SnapshotMerger.mergeAfterSimulation();
     }
     
     
     private void printFinalStatistics() {
+        try {
+            // Create results directory
+            File resultsDir = new File("results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+            }
+
+            // Generate filename
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
+            String filename = String.format("results/%s_final_stats_%s.txt", safeProjectName, timestamp);
+
+            try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+                // Redirect console output to both console and file
+                ConsoleAndFileWriter dualWriter = new ConsoleAndFileWriter(writer);
+
+                dualWriter.println("\n=== Final Simulation Statistics ===");
+
+                // Agent statistics
+                int totalAgents = project.getAgentLayers().stream()
+                    .mapToInt(l -> l.getAgents().size())
+                    .sum();
+                dualWriter.printf("Total agents: %,d%n", totalAgents);
+
+                // Spatial registry statistics
+                SpatialRegistry registry = project.getSpatialRegistry();
+                Map<String, Object> stats = registry.getStatistics();
+
+                dualWriter.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+                    stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
+
+                // Layer statistics
+                for (AgentLayer layer : project.getAgentLayers()) {
+                    Map<String, Object> layerStats = layer.getStatistics();
+                    dualWriter.printf("%s: %,d agents%n", 
+                        layer.getName(), layerStats.get("agentCount"));
+                }
+
+                // Performance metrics
+                dualWriter.printf("Average tick time: %.2f ms%n", averageTickTime);
+                dualWriter.printf("Total ticks: %d%n", timeManager.getTickCount());
+
+                System.out.println("✅ Statistics saved to: " + filename);
+
+            } catch (IOException e) {
+                System.err.println("Error writing statistics file: " + e.getMessage());
+                // Fallback to console only
+                printToConsoleOnly();
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error in statistics generation: " + e.getMessage());
+            printToConsoleOnly();
+        }
+        
+    }
+    
+    
+    private void printToConsoleOnly() {
         System.out.println("\n=== Final Simulation Statistics ===");
         
         // Agent statistics
@@ -1147,6 +1213,27 @@ public class SimulationEngine implements Runnable {
         }
     }
     
+    
+    // Helper class to write to both console and file
+    private static class ConsoleAndFileWriter {
+        private final PrintWriter fileWriter;
+
+        ConsoleAndFileWriter(PrintWriter fileWriter) {
+            this.fileWriter = fileWriter;
+        }
+
+        void println(String text) {
+            System.out.println(text);
+            fileWriter.println(text);
+        }
+
+        void printf(String format, Object... args) {
+            String text = String.format(format, args);
+            System.out.print(text);
+            fileWriter.print(text);
+        }
+    }
+
     
     
     // Clean up all resources
@@ -2749,6 +2836,170 @@ public class RasterLoader {
 
 }
 package com.monadvsim.app.models.utils;
+
+import java.io.*;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+
+public class SnapshotMerger {
+    
+    /**
+     * Merges all snapshot CSV files in the results directory into a single CSV file
+     * and deletes the intermediate files.
+     * 
+     * @param resultsDirPath Path to the results directory (default: "results")
+     * @param outputFileName Name of the merged output file (default: "merged_snapshots.csv")
+     */
+    public static void mergeSnapshotsAndCleanup(String resultsDirPath, String outputFileName) {
+        if (resultsDirPath == null) resultsDirPath = "results";
+        if (outputFileName == null) outputFileName = "merged_snapshots.csv";
+        
+        File resultsDir = new File(resultsDirPath);
+        if (!resultsDir.exists() || !resultsDir.isDirectory()) {
+            System.out.println("Results directory not found: " + resultsDirPath);
+            return;
+        }
+        
+        try {
+            // Get all snapshot files sorted by tick number
+            List<File> snapshotFiles = Arrays.stream(resultsDir.listFiles())
+                .filter(file -> file.getName().startsWith("snapshot_tick_") && file.getName().endsWith(".csv"))
+                .sorted((f1, f2) -> {
+                    int tick1 = extractTickNumber(f1.getName());
+                    int tick2 = extractTickNumber(f2.getName());
+                    return Integer.compare(tick1, tick2);
+                })
+                .collect(Collectors.toList());
+            
+            if (snapshotFiles.isEmpty()) {
+                System.out.println("No snapshot files found to merge.");
+                return;
+            }
+            
+            System.out.println("Found " + snapshotFiles.size() + " snapshot files to merge.");
+            
+            // Create output file
+            File mergedFile = new File(resultsDir, outputFileName);
+            
+            try (PrintWriter writer = new PrintWriter(new FileWriter(mergedFile))) {
+                boolean headerWritten = false;
+                int totalRows = 0;
+                
+                for (int i = 0; i < snapshotFiles.size(); i++) {
+                    File snapshotFile = snapshotFiles.get(i);
+                    
+                    try (BufferedReader reader = new BufferedReader(new FileReader(snapshotFile))) {
+                        String line;
+                        int rowCount = 0;
+                        
+                        while ((line = reader.readLine()) != null) {
+                            // Skip empty lines
+                            if (line.trim().isEmpty()) continue;
+                            
+                            // Write header only once (from first file)
+                            if (i == 0 && !headerWritten) {
+                                writer.println(line);
+                                headerWritten = true;
+                                continue;
+                            }
+                            
+                            // Skip header for subsequent files
+                            if (i > 0 && rowCount == 0) {
+                                rowCount++;
+                                continue;
+                            }
+                            
+                            writer.println(line);
+                            rowCount++;
+                            totalRows++;
+                        }
+                        
+                        System.out.printf("  Processed %s: %d rows%n", 
+                            snapshotFile.getName(), rowCount);
+                        
+                    } catch (IOException e) {
+                        System.err.println("Error reading file: " + snapshotFile.getName() + " - " + e.getMessage());
+                    }
+                }
+                
+                System.out.printf("Successfully merged %d files into %s (total rows: %d)%n",
+                    snapshotFiles.size(), mergedFile.getPath(), totalRows);
+                
+                // Delete intermediate files
+                deleteIntermediateFiles(snapshotFiles);
+                
+            } catch (IOException e) {
+                System.err.println("Error writing merged file: " + e.getMessage());
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error merging snapshots: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    /**
+     * Extracts the tick number from snapshot filename
+     */
+    private static int extractTickNumber(String filename) {
+        try {
+            // Extract number from "snapshot_tick_123.csv"
+            String numberPart = filename.replace("snapshot_tick_", "").replace(".csv", "");
+            return Integer.parseInt(numberPart);
+        } catch (NumberFormatException e) {
+            return 0; // Default for sorting
+        }
+    }
+    
+    /**
+     * Deletes the intermediate snapshot files
+     */
+    private static void deleteIntermediateFiles(List<File> snapshotFiles) {
+        int deletedCount = 0;
+        long totalSize = 0;
+        
+        for (File file : snapshotFiles) {
+            try {
+                totalSize += file.length();
+                if (file.delete()) {
+                    deletedCount++;
+                } else {
+                    System.err.println("Warning: Could not delete " + file.getName());
+                }
+            } catch (SecurityException e) {
+                System.err.println("Security exception when deleting " + file.getName() + ": " + e.getMessage());
+            }
+        }
+        
+        System.out.printf("Deleted %d intermediate files (%.2f MB freed)%n",
+            deletedCount, totalSize / (1024.0 * 1024.0));
+    }
+    
+    /**
+     * Alternative method that can be called from the simulation engine after completion
+     */
+    public static void mergeAfterSimulation() {
+        mergeSnapshotsAndCleanup("results", "merged_snapshots.csv");
+    }
+    
+    /**
+     * Command-line interface for merging snapshots
+     */
+//    public static void main(String[] args) {
+//        if (args.length == 0) {
+//            // Default behavior: merge snapshots in results directory
+//            mergeSnapshotsAndCleanup("results", "merged_snapshots.csv");
+//        } else if (args.length == 1) {
+//            mergeSnapshotsAndCleanup(args[0], "merged_snapshots.csv");
+//        } else if (args.length == 2) {
+//            mergeSnapshotsAndCleanup(args[0], args[1]);
+//        } else {
+//            System.out.println("Usage: java SnapshotMerger [results_directory] [output_filename]");
+//            System.out.println("Example: java SnapshotMerger results combined_results.csv");
+//        }
+//    }
+}package com.monadvsim.app.models.utils;
 
 
 
@@ -5627,14 +5878,6 @@ public class App {
                     
                     // After simulation completes, export results
                     System.out.println("Simulation completed, exporting results...");
-                    String timestamp = LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-                    String csvFile = String.format("results/simulation_results_%s.csv", timestamp);
-                    
-                    persistenceService.exportToCSV(project, csvFile);
-                    System.out.println("✅ Results exported to: " + csvFile);
-                    
-                    // Print final statistics
-                    printFinalStatistics(project, spatialRegistry);
                     
                 } catch (Exception e) {
                     System.err.println("Error in simulation thread: " + e.getMessage());

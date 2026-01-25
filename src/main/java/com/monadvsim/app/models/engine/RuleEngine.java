@@ -86,31 +86,48 @@ public class RuleEngine {
             case "hatch" -> executeHatch(agent, project, layer);
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
+            // Add to the switch statement in execute() method
+            case "pupate" -> executePupate(agent, layer);
+            case "emerge" -> executeEmerge(agent, layer);
+            case "feed" -> executeFeed(agent, project, layer);
+        }
+    }
+    
+    private void executePupate(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
+            la.setStage(LifecycleStage.PUPA);
+            la.setEnergy(0.6); // Reset energy for pupa stage
+            System.out.println("Larva " + agent.getId() + " pupated");
         }
     }
 
-    public void execute(String action, Agent agent, Project project) {
-        switch (action.toLowerCase()) {
-            case "die" -> { 
-                if (agent instanceof LivingAgent la) {
-                    la.setAlive(false);
-                } 
-            }
-            case "get_gravid" -> {
-                if (agent instanceof LivingAgent la){
-                    la.setGravid(true);
-                } 
-            }
-            case "lay_eggs" -> executeLayEggs(agent, project);
-            case "move_random" -> {
-                if (agent instanceof LivingAgent la) {
-                    double step = project.getDefaultAgentStep();
-                    la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
-                            (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
+    private void executeEmerge(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+            la.setStage(LifecycleStage.ADULT);
+            la.setEnergy(0.9); // New adult has energy
+            System.out.println("Pupa " + agent.getId() + " emerged as adult");
+        }
+    }
+
+    private void executeFeed(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
+            // Look for nearby hosts (humans/population) to feed on
+            List<Agent> nearby = project.getSpatialRegistry()
+                .getNearbyAgents(agent.getX(), agent.getY(), 
+                    project.getDefaultAgentSearchRadius());
+
+            // Check if in populated area
+            Layer populationLayer = project.getLayerByName("Population");
+            if (populationLayer != null) {
+                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
+                if (popDensity > 1.0) { // Arbitrary threshold
+                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
+                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             }
         }
     }
+
 
     private void executeDie(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
@@ -181,14 +198,25 @@ public class RuleEngine {
             System.out.println("Hatching " + hatched + " eggs at " + 
                 project.getDefaultHatchingProbability() + " rate, temp: " + temperature);
 
-            for (int i = 0; i < hatched; i++) {
-                double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+            // Get the Mosquitoes layer to add larvae
+            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+                .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+                .findFirst().orElse(null);
 
-                LivingAgent larva = (LivingAgent) layer.createAgentImmediately(LivingAgent.class, x, y);
-                larva.setStage(LifecycleStage.LARVA);
-                larva.setAge(0);
-                larva.setEnergy(0.8);
+            if (mosquitoLayer != null) {
+                for (int i = 0; i < hatched; i++) {
+                    double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                    double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+
+                    // Create larva in Mosquitoes layer
+                    LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+                    larva.setStage(LifecycleStage.LARVA);
+                    larva.setAge(0);
+                    larva.setEnergy(0.8);
+
+                    // Schedule for growth to pupa after 5-7 days (480-672 ticks at 15-min intervals)
+                    larva.setDaysToPupa(5 + ThreadLocalRandom.current().nextInt(3));
+                }
             }
             layer.updateAgentPositionImmediately(ia);
         }

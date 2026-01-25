@@ -18,12 +18,30 @@ public class LivingAgent extends Agent {
     // For move operations, we need synchronization
     private final Object positionLock = new Object();
     private volatile double volatileX, volatileY;
+    private AtomicInteger daysToPupa = new AtomicInteger(0);
+    private AtomicInteger daysToAdult = new AtomicInteger(0);
 
     
     public LivingAgent(double x, double y) {
         super(x, y);
         this.volatileX = x;
         this.volatileY = y;
+    }
+    
+    public void setDaysToPupa(int days) {
+        this.daysToPupa.set(days * 96); // Convert days to ticks (15-min intervals)
+    }
+
+    public void setDaysToAdult(int days) {
+        this.daysToAdult.set(days * 96);
+    }
+
+    public boolean shouldPupate() {
+        return getStage() == LifecycleStage.LARVA && getAge() > daysToPupa.get();
+    }
+
+    public boolean shouldEmerge() {
+        return getStage() == LifecycleStage.PUPA && getAge() > daysToAdult.get();
     }
    
     

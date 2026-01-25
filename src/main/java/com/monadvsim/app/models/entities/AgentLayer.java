@@ -363,7 +363,7 @@ public class AgentLayer extends Layer {
             rulesEvaluated.incrementAndGet();
             
             if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                ruleEngine.execute(rule.action(), agent, project);
+                ruleEngine.execute(rule.action(), agent, project, this);
                 actionsExecuted.incrementAndGet();
                 
                 // Stop after first matching rule if it's a terminal action
