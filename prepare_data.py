@@ -29,11 +29,14 @@ def download_gee_data(lat, lon, buffer_km, output_folder):
     elev_img = ee.Image("CGIAR/SRTM90_V4").clip(region_of_interest)
 
     # Building Footprints (Google Open Buildings)
-    # We convert vector footprints to a density raster for the simulation
+    # We filter by confidence to reduce feature count and improve raster validity
     buildings = ee.FeatureCollection("GOOGLE/Research/open-buildings/v3/polygons") \
-                  .filterBounds(region_of_interest)
-    build_img = buildings.reduceToImage(properties=['area_in_meters'], reducer=ee.Reducer.count()) \
-                         .unmask(0).clip(region_of_interest)
+                  .filterBounds(region_of_interest) \
+                  .filter(ee.Filter.gte('confidence', 0.65))
+    build_img = buildings.reduceToImage(
+        properties=['area_in_meters'], 
+        reducer=ee.Reducer.count()
+    ).unmask(0).reproject(crs='EPSG:4326', scale=100).clip(region_of_interest)
 
     datasets = {
         f"pop_density_{int(buffer_km)}_km.tiff": pop_img,
@@ -50,6 +53,9 @@ def download_gee_data(lat, lon, buffer_km, output_folder):
                 'format': 'GEO_TIFF'
             })
             resp = requests.get(url)
+            if resp.headers.get('Content-Type') != 'image/tiff':
+                print(f"-> Error: GEE returned an error message instead of a TIFF: {resp.text}")
+                continue
             with open(os.path.join(output_folder, name), 'wb') as f:
                 f.write(resp.content)
             print(f"-> Successfully downloaded: {name}")
