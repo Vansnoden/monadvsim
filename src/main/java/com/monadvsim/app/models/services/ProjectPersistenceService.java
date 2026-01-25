@@ -1,8 +1,12 @@
 package com.monadvsim.app.models.services;
 
+import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import com.monadvsim.app.models.utils.ResourceManager;
 import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ProjectPersistenceService {
     
@@ -65,5 +69,90 @@ public class ProjectPersistenceService {
             }
         }
         System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
+    }
+    
+    
+    /**
+     * Load climate data from NetCDF file into the project
+     */
+    public ClimateDatasetManager loadClimateData(Project project, String netcdfFilePath, 
+                                                TimeManager timeManager) throws Exception {
+        System.out.println("Loading climate data from: " + netcdfFilePath);
+        
+        ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
+        
+        try {
+            // Load standard ERA5 variables
+            climateManager.loadERA5Dataset(netcdfFilePath);
+            
+            // Add layers to project
+            for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
+                project.addLayer(layer);
+                
+                // Set up tokens for rule engine (optional)
+                if (project.getTokens() == null) {
+                    project.setTokens(new ArrayList<>());
+                }
+                if (project.getLayerNames() == null) {
+                    project.setLayerNames(new ArrayList<>());
+                }
+                
+                // Add token mapping for rule engine
+                String token = getTokenForVariable(layer.getName());
+                if (!project.getTokens().contains(token)) {
+                    project.getTokens().add(token);
+                    project.getLayerNames().add(layer.getName());
+                }
+            }
+            
+            // Print statistics
+            climateManager.printStatistics();
+            System.out.println("✅ Climate data loaded successfully");
+            
+            return climateManager;
+            
+        } catch (IOException e) {
+            System.err.println("Error loading NetCDF file: " + e.getMessage());
+            throw new Exception("Failed to load climate data", e);
+        }
+    }
+    
+    public static String getTokenForVariable(String variableName) {
+        // Map NetCDF variable names to tokens used in rules
+        switch (variableName.toLowerCase()) {
+            case "t2m":
+                return "temperature";
+            case "tp":
+                return "precipitation";
+            case "sp":
+                return "pressure";
+            case "u10":
+                return "wind_u";
+            case "v10":
+                return "wind_v";
+            case "r":
+                return "humidity";
+            case "d2m":
+                return "dewpoint";
+            default:
+                return variableName;
+        }
+    }
+    
+    /**
+     * Load multiple climate files (e.g., different time periods)
+     */
+    public List<ClimateDatasetManager> loadClimateTimeSeries(Project project, 
+                                                            List<String> netcdfFiles,
+                                                            TimeManager timeManager) throws Exception {
+        List<ClimateDatasetManager> managers = new ArrayList<>();
+        
+        for (String filePath : netcdfFiles) {
+            System.out.println("Loading: " + filePath);
+            ClimateDatasetManager manager = loadClimateData(project, filePath, timeManager);
+            managers.add(manager);
+        }
+        
+        return managers;
     }
 }

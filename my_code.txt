@@ -1,95 +1,1302 @@
 package com.monadvsim.app.models.engine;
 
+
 import com.monadvsim.app.models.entities.Agent;
+import com.monadvsim.app.models.entities.GridCell;
 import com.monadvsim.app.models.entities.QuadTree;
 import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.StampedLock;
 
+
+// Spatial registry with incremental updates for newborn agents
 public class SpatialRegistry {
-    private QuadTree tree;
-    private Rectangle2D worldBounds;
-
-    public SpatialRegistry(Rectangle2D worldBounds) {
+    
+    private final Map<GridCell, List<Agent>> spatialGrid;
+    private final Rectangle2D worldBounds;
+    private final double cellSize;
+    private final int gridWidth;
+    private final int gridHeight;
+    // Agent tracking with versioning
+    private final Map<String, AgentRecord> agentRecords = new ConcurrentHashMap<>();
+    private final Map<String, GridCell> agentPositions = new ConcurrentHashMap<>();
+    
+    // Change tracking
+    private final Queue<SpatialChange> pendingChanges = new ConcurrentLinkedQueue<>();
+    private final AtomicInteger changeCount = new AtomicInteger(0);
+    private final StampedLock updateLock = new StampedLock();
+    
+    // Statistics
+    private final AtomicInteger totalInserts = new AtomicInteger(0);
+    private final AtomicInteger totalRemoves = new AtomicInteger(0);
+    private final AtomicInteger totalUpdates = new AtomicInteger(0);
+    private final AtomicInteger queryCount = new AtomicInteger(0);
+    
+    // Optimization: cache for frequently accessed cells
+    private final Map<GridCell, CellCacheEntry> cellCache = new ConcurrentHashMap<>();
+    private final int maxCacheSize = 1000;
+    
+    
+    public SpatialRegistry(Rectangle2D worldBounds, double cellSize) {
         this.worldBounds = worldBounds;
-        this.tree = new QuadTree(worldBounds);
+        this.cellSize = cellSize;
+        
+        this.gridWidth = (int) Math.ceil(worldBounds.getWidth() / cellSize);
+        this.gridHeight = (int) Math.ceil(worldBounds.getHeight() / cellSize);
+        
+        this.spatialGrid = new ConcurrentHashMap<>(gridWidth * gridHeight);
+        initializeGrid();
+        
+        System.out.printf("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
+            gridWidth, gridHeight, cellSize);
     }
-
-    public void update(List<Agent> allAgents) {
-        tree.clear();
-        for (Agent a : allAgents) {
-            tree.insert(a);
+    
+    
+    private void initializeGrid() {
+        for (int x = 0; x < gridWidth; x++) {
+            for (int y = 0; y < gridHeight; y++) {
+                spatialGrid.put(new GridCell(x, y),
+                        Collections.synchronizedList(new ArrayList<>()));
+            }
         }
     }
-
-    /**
-     * Query for nearby agents (e.g., search for breeding sites).
-     */
+    
+   
+    private GridCell getCellForPosition(double x, double y) {
+        if (!worldBounds.contains(x, y)) {
+            return null;
+        }
+        
+        int gridX = (int) ((x - worldBounds.getX()) / cellSize);
+        int gridY = (int) ((y - worldBounds.getY()) / cellSize);
+        
+        // Clamp to grid bounds
+        gridX = Math.max(0, Math.min(gridX, gridWidth - 1));
+        gridY = Math.max(0, Math.min(gridY, gridHeight - 1));
+        
+        return new GridCell(gridX, gridY);
+    }
+    
+    
+    // Register a new agent (for newborn agents)
+    public void registerAgent(Agent agent) {
+        if (agent == null) return;
+        
+        long stamp = updateLock.writeLock();
+        try {
+            GridCell cell = getCellForPosition(agent.getX(), agent.getY());
+            if (cell != null) {
+                // Add to spatial grid
+                spatialGrid.get(cell).add(agent);
+                
+                // Update tracking
+                agentPositions.put(agent.getId(), cell);
+                agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
+                
+                // Record change
+                pendingChanges.offer(new SpatialChange(
+                    SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
+                changeCount.incrementAndGet();
+                
+                totalInserts.incrementAndGet();
+                
+                // Invalidate cell cache
+                cellCache.remove(cell);
+            }
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+    
+    // Batch register multiple agents (efficient for newborns)
+    public void registerAgents(Collection<Agent> agents) {
+        if (agents == null || agents.isEmpty()) return;
+        
+        long stamp = updateLock.writeLock();
+        try {
+            Map<GridCell, List<Agent>> cellsToAdd = new HashMap<>();
+            
+            // Group agents by cell
+            for (Agent agent : agents) {
+                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
+                if (cell != null) {
+                    cellsToAdd.computeIfAbsent(cell, k -> new ArrayList<>()).add(agent);
+                }
+            }
+            
+            // Bulk add to cells
+            for (Map.Entry<GridCell, List<Agent>> entry : cellsToAdd.entrySet()) {
+                GridCell cell = entry.getKey();
+                List<Agent> cellAgents = spatialGrid.get(cell);
+                
+                if (cellAgents != null) {
+                    cellAgents.addAll(entry.getValue());
+                    
+                    // Update tracking for each agent
+                    for (Agent agent : entry.getValue()) {
+                        agentPositions.put(agent.getId(), cell);
+                        agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
+                        
+                        pendingChanges.offer(new SpatialChange(
+                            SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
+                        changeCount.incrementAndGet();
+                        
+                        totalInserts.incrementAndGet();
+                    }
+                    
+                    // Invalidate cell cache
+                    cellCache.remove(cell);
+                }
+            }
+            
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+    
+    // Unregister an agent (for dead agents)
+    public void unregisterAgent(String agentId) {
+        if (agentId == null) return;
+        
+        long stamp = updateLock.writeLock();
+        try {
+            GridCell oldCell = agentPositions.get(agentId);
+            if (oldCell != null) {
+                List<Agent> cellAgents = spatialGrid.get(oldCell);
+                if (cellAgents != null) {
+                    // Remove agent from cell
+                    boolean removed = cellAgents.removeIf(a -> a.getId().equals(agentId));
+                    
+                    if (removed) {
+                        // Update tracking
+                        agentPositions.remove(agentId);
+                        agentRecords.remove(agentId);
+                        
+                        // Record change
+                        pendingChanges.offer(new SpatialChange(
+                            SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
+                        changeCount.incrementAndGet();
+                        
+                        totalRemoves.incrementAndGet();
+                        
+                        // Invalidate cell cache
+                        cellCache.remove(oldCell);
+                    }
+                }
+            }
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+    
+    // Update agent position (for moving agents)
+    public void updateAgentPosition(Agent agent) {
+        if (agent == null) return;
+        
+        long stamp = updateLock.writeLock();
+        try {
+            String agentId = agent.getId();
+            GridCell oldCell = agentPositions.get(agentId);
+            GridCell newCell = getCellForPosition(agent.getX(), agent.getY());
+            
+            if (newCell == null) {
+                // Agent moved out of bounds - remove it
+                if (oldCell != null) {
+                    unregisterAgent(agentId);
+                }
+                return;
+            }
+            
+            if (oldCell == null) {
+                // Agent not previously registered (shouldn't happen)
+                registerAgent(agent);
+            } else if (!oldCell.equals(newCell)) {
+                // Agent moved to different cell
+                // Remove from old cell
+                List<Agent> oldCellAgents = spatialGrid.get(oldCell);
+                if (oldCellAgents != null) {
+                    oldCellAgents.removeIf(a -> a.getId().equals(agentId));
+                }
+                
+                // Add to new cell
+                List<Agent> newCellAgents = spatialGrid.get(newCell);
+                if (newCellAgents != null) {
+                    newCellAgents.add(agent);
+                }
+                
+                // Update tracking
+                agentPositions.put(agentId, newCell);
+                agentRecords.put(agentId, new AgentRecord(agent, newCell));
+                
+                // Record change
+                pendingChanges.offer(new SpatialChange(
+                    SpatialChange.ChangeType.MOVE, agentId, newCell, oldCell));
+                changeCount.incrementAndGet();
+                
+                totalUpdates.incrementAndGet();
+                
+                // Invalidate both cell caches
+                cellCache.remove(oldCell);
+                cellCache.remove(newCell);
+            }
+            // If same cell, no update needed
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+    
+    // Get nearby agents (includes newly registered agents)
     public List<Agent> getNearbyAgents(double x, double y, double radius) {
-        Rectangle2D searchArea = new Rectangle2D.Double(
-            x - radius, y - radius, radius * 2, radius * 2
+        queryCount.incrementAndGet();
+        
+        // Use optimistic read lock for high concurrency
+        long stamp = updateLock.tryOptimisticRead();
+        GridCell centerCell = getCellForPosition(x, y);
+        
+        if (centerCell == null) {
+            return Collections.emptyList();
+        }
+        
+        List<Agent> result = queryNearbyOptimistic(x, y, radius, centerCell);
+        
+        if (!updateLock.validate(stamp)) {
+            // Optimistic read failed, use full read lock
+            stamp = updateLock.readLock();
+            try {
+                result = queryNearbyOptimistic(x, y, radius, centerCell);
+            } finally {
+                updateLock.unlockRead(stamp);
+            }
+        }
+        
+        return result;
+    }
+    
+    
+    private List<Agent> queryNearbyOptimistic(double x, double y, double radius, GridCell centerCell) {
+        // Check cache first
+        CellCacheKey cacheKey = new CellCacheKey(centerCell, radius);
+        CellCacheEntry cached = cellCache.get(centerCell);
+        
+        if (cached != null && cached.isValidFor(cacheKey)) {
+            return new ArrayList<>(cached.agents);
+        }
+        
+        List<Agent> result = new ArrayList<>();
+        int cellsRadius = (int) Math.ceil(radius / cellSize);
+        
+        // Search cells within radius
+        for (int dx = -cellsRadius; dx <= cellsRadius; dx++) {
+            for (int dy = -cellsRadius; dy <= cellsRadius; dy++) {
+                int checkX = centerCell.gridX + dx;
+                int checkY = centerCell.gridY + dy;
+                
+                if (checkX >= 0 && checkX < gridWidth && 
+                    checkY >= 0 && checkY < gridHeight) {
+                    
+                    GridCell checkCell = new GridCell(checkX, checkY);
+                    List<Agent> cellAgents = spatialGrid.get(checkCell);
+                    
+                    if (cellAgents != null) {
+                        // Filter by actual distance
+                        for (Agent agent : cellAgents) {
+                            double distance = calculateDistance(x, y, agent.getX(), agent.getY());
+                            if (distance <= radius) {
+                                result.add(agent);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Cache result if within limits
+        if (result.size() <= 1000) { // Don't cache huge results
+            cacheQueryResult(centerCell, radius, result);
+        }
+        
+        return result;
+    }
+    
+    
+    private double calculateDistance(double x1, double y1, double x2, double y2) {
+        // Simple Euclidean distance (for small areas)
+        // For larger areas, use Haversine formula
+        double dx = x2 - x1;
+        double dy = y2 - y1;
+        return Math.sqrt(dx * dx + dy * dy);
+    }
+    
+    
+    private void cacheQueryResult(GridCell cell, double radius, List<Agent> agents) {
+        if (cellCache.size() >= maxCacheSize) {
+            // Remove oldest entry (simplified LRU)
+            GridCell oldest = cellCache.keySet().iterator().next();
+            cellCache.remove(oldest);
+        }
+        
+        CellCacheKey key = new CellCacheKey(cell, radius);
+        cellCache.put(cell, new CellCacheEntry(key, agents));
+    }
+    
+
+    // Apply pending changes from current tick
+    public void applyPendingChanges() {
+        // This is called at the end of each tick to finalize changes
+        // In our incremental approach, changes are applied immediately,
+        // but we can use this to clear the change queue
+        pendingChanges.clear();
+        changeCount.set(0);
+    }
+    
+
+    // Bulk update (for initial load or reset)
+    public void bulkUpdate(List<Agent> allAgents) {
+        long stamp = updateLock.writeLock();
+        try {
+            // Clear existing data
+            spatialGrid.values().forEach(List::clear);
+            agentPositions.clear();
+            agentRecords.clear();
+            cellCache.clear();
+            
+            // Bulk insert all agents
+            for (Agent agent : allAgents) {
+                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
+                if (cell != null) {
+                    spatialGrid.get(cell).add(agent);
+                    agentPositions.put(agent.getId(), cell);
+                    agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
+                }
+            }
+            
+            // Reset counters
+            pendingChanges.clear();
+            changeCount.set(0);
+            
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+
+    // Get all agents (for debugging or serialization)
+    public List<Agent> getAllAgents() {
+        List<Agent> allAgents = new ArrayList<>();
+        long stamp = updateLock.readLock();
+        try {
+            for (List<Agent> cellAgents : spatialGrid.values()) {
+                allAgents.addAll(cellAgents);
+            }
+        } finally {
+            updateLock.unlockRead(stamp);
+        }
+        return allAgents;
+    }
+    
+    
+    // Get agents in a specific cell (for testing)
+    public List<Agent> getAgentsInCell(GridCell cell) {
+        List<Agent> cellAgents = spatialGrid.get(cell);
+        return cellAgents != null ? new ArrayList<>(cellAgents) : Collections.emptyList();
+    }
+    
+
+    // Get agent position cell
+    public GridCell getAgentCell(String agentId) {
+        return agentPositions.get(agentId);
+    }
+    
+ 
+    // Get statistics
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        stats.put("totalAgents", agentRecords.size());
+        stats.put("gridCells", gridWidth * gridHeight);
+        stats.put("cellSizeDegrees", cellSize);
+        stats.put("pendingChanges", changeCount.get());
+        stats.put("queryCount", queryCount.get());
+        stats.put("totalInserts", totalInserts.get());
+        stats.put("totalRemoves", totalRemoves.get());
+        stats.put("totalUpdates", totalUpdates.get());
+        stats.put("cacheSize", cellCache.size());
+        
+        // Distribution statistics
+        int maxAgentsPerCell = 0;
+        int emptyCells = 0;
+        int totalAgentsInGrid = 0;
+        
+        for (List<Agent> cellAgents : spatialGrid.values()) {
+            int count = cellAgents.size();
+            totalAgentsInGrid += count;
+            maxAgentsPerCell = Math.max(maxAgentsPerCell, count);
+            if (count == 0) emptyCells++;
+        }
+        
+        stats.put("maxAgentsPerCell", maxAgentsPerCell);
+        stats.put("emptyCells", emptyCells);
+        stats.put("avgAgentsPerCell", totalAgentsInGrid / (double)(gridWidth * gridHeight));
+        
+        return stats;
+    }
+
+    
+    // Clear all data
+    public void clear() {
+        long stamp = updateLock.writeLock();
+        try {
+            spatialGrid.values().forEach(List::clear);
+            agentPositions.clear();
+            agentRecords.clear();
+            cellCache.clear();
+            pendingChanges.clear();
+            changeCount.set(0);
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+    
+    
+    // Inner classes
+    private static class AgentRecord {
+        final Agent agent;
+        final GridCell cell;
+        final long timestamp;
+        
+        AgentRecord(Agent agent, GridCell cell) {
+            this.agent = agent;
+            this.cell = cell;
+            this.timestamp = System.currentTimeMillis();
+        }
+    }
+    
+    
+    private static class SpatialChange {
+        enum ChangeType { INSERT, REMOVE, MOVE }
+        
+        final ChangeType type;
+        final String agentId;
+        final GridCell newCell;
+        final GridCell oldCell;
+        final long timestamp;
+        
+        SpatialChange(ChangeType type, String agentId, GridCell newCell, GridCell oldCell) {
+            this.type = type;
+            this.agentId = agentId;
+            this.newCell = newCell;
+            this.oldCell = oldCell;
+            this.timestamp = System.currentTimeMillis();
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("%s: %s [%s -> %s]", type, agentId, oldCell, newCell);
+        }
+    }
+    
+    
+    private static class CellCacheKey {
+        final GridCell cell;
+        final double radius;
+        final long timestamp;
+        
+        CellCacheKey(GridCell cell, double radius) {
+            this.cell = cell;
+            this.radius = radius;
+            this.timestamp = System.currentTimeMillis();
+        }
+        
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            CellCacheKey that = (CellCacheKey) o;
+            return Double.compare(that.radius, radius) == 0 &&
+                   Objects.equals(cell, that.cell);
+        }
+        
+        @Override
+        public int hashCode() {
+            return Objects.hash(cell, radius);
+        }
+    }
+    
+    
+    private static class CellCacheEntry {
+        final CellCacheKey key;
+        final List<Agent> agents;
+        final long created;
+        
+        CellCacheEntry(CellCacheKey key, List<Agent> agents) {
+            this.key = key;
+            this.agents = Collections.unmodifiableList(new ArrayList<>(agents));
+            this.created = System.currentTimeMillis();
+        }
+        
+        boolean isValidFor(CellCacheKey queryKey) {
+            // Cache valid for 1 second
+            return key.equals(queryKey) && (System.currentTimeMillis() - created) < 1000;
+        }
+    }
+    
+}package com.monadvsim.app.models.engine;
+
+
+import com.monadvsim.app.models.entities.Agent;
+import com.monadvsim.app.models.entities.LivingAgent;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+
+
+public class AgentLifecycleManager {
+    private final SpatialRegistry spatialRegistry;
+    
+    // Lifecycle queues
+    private final Queue<Agent> birthQueue = new ConcurrentLinkedQueue<>();
+    private final Queue<String> deathQueue = new ConcurrentLinkedQueue<>();
+    private final Queue<Agent> moveQueue = new ConcurrentLinkedQueue<>();
+    
+    // Agent pools for object reuse (reduces GC)
+    private final Map<Class<?>, Queue<Agent>> agentPools = new ConcurrentHashMap<>();
+    private final int maxPoolSize = 10000;
+    
+    // Statistics
+    private final AtomicInteger totalBirths = new AtomicInteger(0);
+    private final AtomicInteger totalDeaths = new AtomicInteger(0);
+    private final AtomicInteger totalMoves = new AtomicInteger(0);
+    private final AtomicInteger poolHits = new AtomicInteger(0);
+    private final AtomicInteger poolMisses = new AtomicInteger(0);
+    
+    // Batch processing
+    private final int batchSize = 1000;
+    private final ExecutorService lifecycleExecutor;
+    
+    public AgentLifecycleManager(SpatialRegistry spatialRegistry) {
+        this.spatialRegistry = spatialRegistry;
+        
+        // Create executor for lifecycle processing
+        int processors = Runtime.getRuntime().availableProcessors();
+        this.lifecycleExecutor = Executors.newFixedThreadPool(
+            Math.max(2, processors / 2),
+            new ThreadFactory() {
+                private final AtomicInteger count = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "Lifecycle-" + count.getAndIncrement());
+                    t.setDaemon(true);
+                    t.setPriority(Thread.NORM_PRIORITY);
+                    return t;
+                }
+            }
         );
-        return tree.query(searchArea, new ArrayList<>());
+        
+        // Initialize agent pools
+        initializeAgentPools();
+    }
+    
+    private void initializeAgentPools() {
+        // Initialize pools for common agent types
+        agentPools.put(LivingAgent.class, new ConcurrentLinkedQueue<>());
+        // Add more agent types as needed
+    }
+    
+    /**
+     * Schedule an agent for birth (creation)
+     */
+    public void scheduleBirth(Agent agent) {
+        if (agent == null) return;
+        
+        birthQueue.offer(agent);
+        totalBirths.incrementAndGet();
+    }
+    
+    /**
+     * Schedule multiple agents for birth
+     */
+    public void scheduleBirths(Collection<Agent> agents) {
+        if (agents == null || agents.isEmpty()) return;
+        
+        birthQueue.addAll(agents);
+        totalBirths.addAndGet(agents.size());
+    }
+    
+    /**
+     * Schedule an agent for death (removal)
+     */
+    public void scheduleDeath(String agentId) {
+        if (agentId == null) return;
+        
+        deathQueue.offer(agentId);
+        totalDeaths.incrementAndGet();
+    }
+    
+    /**
+     * Schedule an agent for position update
+     */
+    public void scheduleMove(Agent agent) {
+        if (agent == null) return;
+        
+        moveQueue.offer(agent);
+        totalMoves.incrementAndGet();
+    }
+    
+    /**
+     * Process all scheduled lifecycle events
+     * Called at the end of each simulation tick
+     */
+    public void processLifecycleEvents() {
+        // Process in parallel batches for performance
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        
+        // Process births
+        if (!birthQueue.isEmpty()) {
+            futures.add(processBirthsBatch());
+        }
+        
+        // Process deaths
+        if (!deathQueue.isEmpty()) {
+            futures.add(processDeathsBatch());
+        }
+        
+        // Process moves
+        if (!moveQueue.isEmpty()) {
+            futures.add(processMovesBatch());
+        }
+        
+        // Wait for all processing to complete
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("Lifecycle processing interrupted");
+        } catch (ExecutionException e) {
+            System.err.println("Error in lifecycle processing: " + e.getCause().getMessage());
+        }
+        
+        // Apply pending changes to spatial registry
+        spatialRegistry.applyPendingChanges();
+    }
+    
+    private CompletableFuture<Void> processBirthsBatch() {
+        return CompletableFuture.runAsync(() -> {
+            List<Agent> batch = new ArrayList<>(batchSize);
+            Agent agent;
+            
+            while ((agent = birthQueue.poll()) != null && batch.size() < batchSize) {
+                batch.add(agent);
+            }
+            
+            if (!batch.isEmpty()) {
+                spatialRegistry.registerAgents(batch);
+                
+                // Return agents to pool if they die immediately (edge case)
+                for (Agent a : batch) {
+                    if (a instanceof LivingAgent la && !la.isAlive()) {
+                        returnToPool(a);
+                    }
+                }
+            }
+        }, lifecycleExecutor);
+    }
+    
+    private CompletableFuture<Void> processDeathsBatch() {
+        return CompletableFuture.runAsync(() -> {
+            List<String> batch = new ArrayList<>(batchSize);
+            String agentId;
+            
+            while ((agentId = deathQueue.poll()) != null && batch.size() < batchSize) {
+                batch.add(agentId);
+            }
+            
+            for (String id : batch) {
+                spatialRegistry.unregisterAgent(id);
+            }
+        }, lifecycleExecutor);
+    }
+    
+    private CompletableFuture<Void> processMovesBatch() {
+        return CompletableFuture.runAsync(() -> {
+            List<Agent> batch = new ArrayList<>(batchSize);
+            Agent agent;
+            
+            while ((agent = moveQueue.poll()) != null && batch.size() < batchSize) {
+                batch.add(agent);
+            }
+            
+            for (Agent a : batch) {
+                spatialRegistry.updateAgentPosition(a);
+            }
+        }, lifecycleExecutor);
+    }
+    
+    /**
+     * Create a new agent using object pool
+     */
+    public <T extends Agent> T createAgent(Class<T> agentClass, double x, double y) {
+        Queue<Agent> pool = agentPools.get(agentClass);
+        
+        if (pool != null && !pool.isEmpty()) {
+            // Reuse agent from pool
+            T agent = agentClass.cast(pool.poll());
+            if (agent != null) {
+                // Reset agent state
+                resetAgent(agent, x, y);
+                poolHits.incrementAndGet();
+                return agent;
+            }
+        }
+        
+        poolMisses.incrementAndGet();
+        
+        // Create new agent
+        return createNewAgent(agentClass, x, y);
+    }
+    
+    @SuppressWarnings("unchecked")
+    private <T extends Agent> T createNewAgent(Class<T> agentClass, double x, double y) {
+        // Create new instance based on class
+        if (agentClass.equals(LivingAgent.class)) {
+            return (T) new LivingAgent(x, y);
+        }
+        // Add more agent types as needed
+        
+        throw new IllegalArgumentException("Unsupported agent class: " + agentClass);
+    }
+    
+    private void resetAgent(Agent agent, double x, double y) {
+        agent.setX(x);
+        agent.setY(y);
+        
+        if (agent instanceof LivingAgent la) {
+            la.setAlive(true);
+            la.setAge(0);
+            la.setGravid(false);
+            la.setEnergy(1.0);
+        }
+        // Reset other agent types as needed
+    }
+    
+    /**
+     * Return agent to pool for reuse
+     */
+    public void returnToPool(Agent agent) {
+        if (agent == null) return;
+        
+        Class<?> agentClass = agent.getClass();
+        Queue<Agent> pool = agentPools.get(agentClass);
+        
+        if (pool != null && pool.size() < maxPoolSize) {
+            pool.offer(agent);
+        }
+    }
+    
+    /**
+     * Immediate birth (for time-critical operations)
+     */
+    public Agent immediateBirth(Class<? extends Agent> agentClass, double x, double y) {
+        Agent agent = createAgent(agentClass, x, y);
+        spatialRegistry.registerAgent(agent);
+        return agent;
+    }
+    
+    /**
+     * Immediate death
+     */
+    public void immediateDeath(String agentId) {
+        spatialRegistry.unregisterAgent(agentId);
+    }
+    
+    /**
+     * Immediate move update
+     */
+    public void immediateMove(Agent agent) {
+        spatialRegistry.updateAgentPosition(agent);
+    }
+    
+    /**
+     * Get statistics
+     */
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        stats.put("pendingBirths", birthQueue.size());
+        stats.put("pendingDeaths", deathQueue.size());
+        stats.put("pendingMoves", moveQueue.size());
+        stats.put("totalBirths", totalBirths.get());
+        stats.put("totalDeaths", totalDeaths.get());
+        stats.put("totalMoves", totalMoves.get());
+        stats.put("poolHits", poolHits.get());
+        stats.put("poolMisses", poolMisses.get());
+        
+        // Pool statistics
+        Map<String, Integer> poolStats = new HashMap<>();
+        for (Map.Entry<Class<?>, Queue<Agent>> entry : agentPools.entrySet()) {
+            poolStats.put(entry.getKey().getSimpleName(), entry.getValue().size());
+        }
+        stats.put("agentPools", poolStats);
+        
+        return stats;
+    }
+    
+    /**
+     * Clear all queues and pools
+     */
+    public void clear() {
+        birthQueue.clear();
+        deathQueue.clear();
+        moveQueue.clear();
+        
+        agentPools.values().forEach(Queue::clear);
+        
+        totalBirths.set(0);
+        totalDeaths.set(0);
+        totalMoves.set(0);
+        poolHits.set(0);
+        poolMisses.set(0);
+    }
+    
+    /**
+     * Shutdown lifecycle executor
+     */
+    public void shutdown() {
+        lifecycleExecutor.shutdown();
+        try {
+            if (!lifecycleExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                lifecycleExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            lifecycleExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
     }
 }package com.monadvsim.app.models.engine;
 
+
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.utils.ManagedExecutorService;
+import com.monadvsim.app.models.utils.ResourceManager;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.stream.Collectors;
 
+
 public class SimulationEngine implements Runnable {
+    
     private final Project project;
     private final TimeManager timeManager;
     private final SpatialRegistry spatialRegistry;
-    private boolean running = false;
+    private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicBoolean paused = new AtomicBoolean(false);
+    private final ReentrantLock simulationLock = new ReentrantLock();
+    private final ResourceManager resourceManager = ResourceManager.getInstance();
+    private final ManagedExecutorService simulationExecutor;
+    private final AtomicBoolean resourcesCleaned = new AtomicBoolean(false);
+    // Performance monitoring
+    private final SimulationMetrics metrics = new SimulationMetrics();
+    private long lastTickTime = 0;
+    private double averageTickTime = 0;
+    private final int tickTimeWindow = 100;
+    // Statistics
+    private final ConcurrentHashMap<String, AtomicInteger> layerStats = new ConcurrentHashMap<>();
 
+    
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
         this.project = project;
         this.timeManager = timeManager;
         this.spatialRegistry = spatialRegistry;
         this.project.setSpatialRegistry(spatialRegistry);
+        
+        // Create managed executor service
+        int coreCount = Runtime.getRuntime().availableProcessors();
+        this.simulationExecutor = new ManagedExecutorService(
+            "SimulationEngine",
+            Math.max(2, coreCount - 1),  // Leave one core for system
+            coreCount * 2,               // Maximum threads
+            1000,                        // Queue capacity
+            60, TimeUnit.SECONDS         // Keep-alive time
+        );
+        
+        // Register shutdown hook
+        this.simulationExecutor.addShutdownHook(this::cleanupResources);
     }
-
+    
+    
     @Override
     public void run() {
-        running = true;
-        while (running) {
-            if (!timeManager.tick()) break;
-
+        running.set(true); 
+        System.out.println("🚀-> Simulation Engine with Incremental Updates Started...");
+        
+        while (running.get()) {
+            long tickStart = System.nanoTime();
+            
+            // TICK SEQUENCE:
+            // 1. Advance time
+            if (!timeManager.tick()) {
+                running.set(false);
+                break;
+            }
+            
+            // 2. Update environment
             project.updateEnvironment(timeManager.getCurrentFrameIndex());
             
-            List<Agent> allAgents = project.getAgentLayers().stream()
-                .flatMap(l -> l.getAgents().stream()).collect(Collectors.toList());
-            spatialRegistry.update(allAgents);
+            // 3. Process agent layers WITH immediate spatial updates
+            processAgentLayersWithImmediateUpdates();
+            
+            // 4. Finalize spatial registry for this tick
+            finalizeSpatialRegistry();
+            
+            // 5. Report progress
+            reportTickProgress(tickStart);
+            
+            // Adaptive sleep
+            adaptiveSleep(System.nanoTime() - tickStart);
+        }
+        
+        // Final cleanup
+        cleanup();
+    }
+    
+    
+    private void processAgentLayersWithImmediateUpdates() {
+        List<AgentLayer> layers = project.getAgentLayers();
+        
+        // Process layers sequentially to maintain dependencies
+        // (e.g., mosquitoes depend on tanks from previous layer)
+        for (AgentLayer layer : layers) {
+            try {
+                // This now includes immediate spatial registry updates
+                layer.update(project);
+                
+                // Update statistics
+//                updateLayerStats(layer.getName(), layer.getAgents().size());
+                
+            } catch (Exception e) {
+                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    
+    private void finalizeSpatialRegistry() {
+        // Apply any pending changes in spatial registry
+        SpatialRegistry registry = 
+            (SpatialRegistry) project.getSpatialRegistry();
+        registry.applyPendingChanges();
+        
+        // Validate consistency (debug builds only)
+        if (System.getProperty("debug.spatial") != null) {
+            validateSpatialConsistency();
+        }
+    }
+    
+    
+    private void validateSpatialConsistency() {
+        SpatialRegistry registry = 
+            (SpatialRegistry) project.getSpatialRegistry();
+        
+        // Get all agents from layers
+        List<Agent> layerAgents = project.getAgentLayers().stream()
+            .flatMap(l -> l.getAgents().stream())
+            .collect(Collectors.toList());
+        
+        // Get all agents from spatial registry
+        List<Agent> registryAgents = registry.getAllAgents();
+        
+        // Check counts match
+        if (layerAgents.size() != registryAgents.size()) {
+            System.err.printf("Spatial inconsistency: layers=%d, registry=%d%n",
+                layerAgents.size(), registryAgents.size());
+            
+            // Find missing agents
+            Set<String> layerIds = layerAgents.stream()
+                .map(Agent::getId)
+                .collect(Collectors.toSet());
+            Set<String> registryIds = registryAgents.stream()
+                .map(Agent::getId)
+                .collect(Collectors.toSet());
+            
+            Set<String> missingInRegistry = new HashSet<>(layerIds);
+            missingInRegistry.removeAll(registryIds);
+            
+            Set<String> extraInRegistry = new HashSet<>(registryIds);
+            extraInRegistry.removeAll(layerIds);
+            
+            if (!missingInRegistry.isEmpty()) {
+                System.err.println("Agents missing in registry: " + missingInRegistry.size());
+            }
+            if (!extraInRegistry.isEmpty()) {
+                System.err.println("Extra agents in registry: " + extraInRegistry.size());
+            }
+        }
+    }
+    
+    
+    private void reportTickProgress(long tickStart) {
+        long tickDuration = System.nanoTime() - tickStart;
+        
+        if (timeManager.getTickCount() % 10 == 0) {
+            reportProgress();
+            
+            // Report spatial registry statistics
+            if (timeManager.getTickCount() % 100 == 0) {
+                reportSpatialStatistics();
+            }
+        }
+        
+        // Update performance metrics
+        updatePerformanceMetrics(tickDuration);
+    }
+    
+    
+    private void reportSpatialStatistics() {
+        SpatialRegistry registry = 
+            (SpatialRegistry) project.getSpatialRegistry();
+        
+        Map<String, Object> stats = registry.getStatistics();
+        System.out.printf("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
+            stats.get("totalAgents"), stats.get("queryCount"),
+            stats.get("cacheSize"), stats.get("gridCells"));
+    }
+    
+    
+    private void cleanup() {
+        // Clean up lifecycle managers
+        project.getAgentLayers().forEach(layer -> {
+            if (layer.getLifecycleManager() != null) {
+                layer.getLifecycleManager().shutdown();
+            }
+            layer.shutdown();
+        });
+        
+        // Print final statistics
+        printFinalStatistics();
+    }
+    
+    
+    private void printFinalStatistics() {
+        System.out.println("\n=== Final Simulation Statistics ===");
+        
+        // Agent statistics
+        int totalAgents = project.getAgentLayers().stream()
+            .mapToInt(l -> l.getAgents().size())
+            .sum();
+        System.out.printf("Total agents: %,d%n", totalAgents);
+        
+        // Spatial registry statistics
+        SpatialRegistry registry = project.getSpatialRegistry();
+        Map<String, Object> stats = registry.getStatistics();
 
-            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
-                .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
-
-            for (AgentLayer layer : project.getAgentLayers()) {
-                // FIX: Use a Synchronized List for newborns
-                List<Agent> newborns = Collections.synchronizedList(new ArrayList<>());
-
-                layer.getAgents().parallelStream().forEach(agent -> {
-                    if (agent instanceof InertAgent tank) {
-                        int hatch = tank.calculateHatching(project);
-                        for (int i = 0; i < hatch; i++) {
-                            newborns.add(new LivingAgent(tank.getX(), tank.getY()));
-                        }
-                    } else {
-                        agent.update(project, timeManager);
+        System.out.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+            stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
+        
+        // Layer statistics
+        for (AgentLayer layer : project.getAgentLayers()) {
+            Map<String, Object> layerStats = layer.getStatistics();
+            System.out.printf("%s: %,d agents%n", 
+                layer.getName(), layerStats.get("agentCount"));
+        }
+    }
+    
+    
+    
+    // Clean up all resources
+    private void cleanupResources() {
+        if (resourcesCleaned.compareAndSet(false, true)) {
+            System.out.println("\n=== Cleaning up simulation resources ===");
+            
+            // Shutdown executor service
+            if (simulationExecutor != null && !simulationExecutor.isTerminated()) {
+                try {
+                    System.out.println("Shutting down executor service...");
+                    boolean terminated = simulationExecutor.gracefulShutdown(30, TimeUnit.SECONDS);
+                    System.out.println("Executor shutdown: " + (terminated ? "successful" : "timed out"));
+                    
+                    // Print executor statistics
+                    System.out.println("Executor statistics: " + simulationExecutor.getStatistics());
+                    
+                } catch (InterruptedException e) {
+                    System.err.println("Interrupted during executor shutdown");
+                    Thread.currentThread().interrupt();
+                    simulationExecutor.shutdownNow();
+                }
+            }
+            
+            // Clean up agent layers
+            if (project != null) {
+                System.out.println("Cleaning up agent layers...");
+                project.getAgentLayers().forEach(layer -> {
+                    AgentLayer al = (AgentLayer) layer; 
+                    al.shutdown();
+                });
+            }
+            
+            // Clean up spatial registry
+            if (spatialRegistry != null) {
+                System.out.println("Cleaning up spatial registry...");
+                // Add any spatial registry cleanup if needed
+            }
+            
+            // 4. Clean up raster layers
+            if (project != null) {
+                System.out.println("Cleaning up raster layers...");
+                project.getLayers().forEach(layer -> {
+                    if (layer instanceof MemoryMappedRasterLayer mmrl) {
+                        mmrl.dispose();
                     }
                 });
-
-                if (mosquitoLayer != null && !newborns.isEmpty()) {
-                    mosquitoLayer.getAgents().addAll(newborns);
-                }
-                layer.update(timeManager.getTickCount(), 1.0);
             }
-
-            if (timeManager.getTickCount() % 10 == 0) {
-                long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-                System.out.println("Tick: " + timeManager.getTickCount() + " | Adults: " + adults);
+            
+            // 5. Force garbage collection
+            System.out.println("Requesting garbage collection...");
+            System.gc();
+            System.runFinalization();
+            
+            // 6. Print final resource statistics
+            System.out.println("\n=== Final Resource Statistics ===");
+            Map<String, Object> stats = resourceManager.getStatistics();
+            stats.forEach((key, value) -> System.out.printf("%s: %s%n", key, value));
+            
+            System.out.println("=== Resource cleanup complete ===");
+        }
+    }
+    
+    
+    // Get engine statistics including resource usage
+    public Map<String, Object> getDetailedStatistics() {
+        Map<String, Object> stats = getState(); // From previous implementation
+        
+        // Add resource statistics
+        stats.put("resourceManager", resourceManager.getStatistics());
+        stats.put("executorService", simulationExecutor.getStatistics());
+        
+        // Add memory statistics
+        Runtime runtime = Runtime.getRuntime();
+        stats.put("memoryUsedMB", (runtime.totalMemory() - runtime.freeMemory()) / (1024.0 * 1024.0));
+        stats.put("memoryTotalMB", runtime.totalMemory() / (1024.0 * 1024.0));
+        stats.put("memoryMaxMB", runtime.maxMemory() / (1024.0 * 1024.0));
+        
+        // Add file descriptor statistics (if available)
+        try {
+            if (java.lang.management.ManagementFactory.getOperatingSystemMXBean() 
+                    instanceof com.sun.management.UnixOperatingSystemMXBean) {
+                com.sun.management.UnixOperatingSystemMXBean unixBean = 
+                    (com.sun.management.UnixOperatingSystemMXBean) 
+                    java.lang.management.ManagementFactory.getOperatingSystemMXBean();
+                stats.put("openFileDescriptors", unixBean.getOpenFileDescriptorCount());
+                stats.put("maxFileDescriptors", unixBean.getMaxFileDescriptorCount());
             }
+        } catch (Exception e) {
+            // Not available on this JVM
+        }
+        
+        return stats;
+    }
+    
+    
+    public void stop() {
+        running.set(false);
+        System.out.println("Stopping simulation with resource cleanup...");
+        cleanupResources();
+    }
+    
+    
+    public Map<String, Object> getState() {
+        Map<String, Object> state = new HashMap<>();
+        state.put("running", running.get());
+        state.put("paused", paused.get());
+        state.put("tick", timeManager.getTickCount());
+        state.put("totalAgents", getTotalAgentCount());
+        state.put("avgTickTime", averageTickTime);
+//        state.put("threadPoolActive", (simulationExecutor).getActiveCount());
+//        state.put("threadPoolQueue", (simulationExecutor).getQueue().size());
+        return state;
+    }
+    
+    
+    private int getTotalAgentCount() {
+        return project.getAgentLayers().stream()
+            .mapToInt(l -> l.getAgents().size())
+            .sum();
+    }
+    
+    
+    private void reportProgress() {
+        AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+            .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+            .findFirst().orElse(null);
+
+        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
+        
+        long totalLarvae = project.getAgentLayers().stream()
+            .flatMap(l -> l.getAgents().stream())
+            .filter(a -> a instanceof InertAgent)
+            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
+            .sum();
+
+        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
+            timeManager.getTickCount(), adults, totalLarvae,
+            Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
+    }
+    
+    
+    private void adaptiveSleep(long tickDuration) {
+        long targetTickTime = 16_666_667L; // 60 FPS ≈ 16.67ms per tick
+        
+        if (tickDuration < targetTickTime) {
+            long sleepTime = targetTickTime - tickDuration;
+            try {
+                TimeUnit.NANOSECONDS.sleep(sleepTime);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+    }
+    
+    
+    private void logPerformance() {
+        double fps = 1000.0 / averageTickTime;
+        
+        System.out.printf("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
+            timeManager.getTickCount(), averageTickTime, fps, getTotalAgentCount());
+        
+        // Log layer statistics
+        layerStats.forEach((name, count) -> {
+            System.out.printf("  %s: %,d agents%n", name, count.get());
+        });
+    }
+    
+    
+    private void updatePerformanceMetrics(long tickDuration) {
+        lastTickTime = tickDuration;
+        
+        // Calculate moving average
+        if (averageTickTime == 0) {
+            averageTickTime = tickDuration / 1_000_000.0; // Convert to ms
+        } else {
+            double alpha = 2.0 / (tickTimeWindow + 1);
+            averageTickTime = (1 - alpha) * averageTickTime + 
+                             alpha * (tickDuration / 1_000_000.0);
         }
     }
 }package com.monadvsim.app.models.engine;
@@ -156,12 +1363,399 @@ public class TimeManager {
     public long getTickCount() { return tickCount; }
     public LocalDateTime getStartDateTime() { return startDateTime; }
     public LocalDateTime getEndDateTime() { return endDateTime; }
-}package com.monadvsim.app.models.services;
+}package com.monadvsim.app.models.engine;
 
+import com.monadvsim.app.models.entities.Agent;
+import com.monadvsim.app.models.entities.AgentLayer;
+import com.monadvsim.app.models.entities.InertAgent;
+import com.monadvsim.app.models.entities.Layer;
+import com.monadvsim.app.models.entities.LifecycleStage;
+import com.monadvsim.app.models.entities.LivingAgent;
+import com.monadvsim.app.models.entities.Project;
+import java.util.HashMap;
+import javax.script.ScriptEngine;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import javax.script.Bindings;
+import javax.script.Compilable;
+import javax.script.CompiledScript;
+import javax.script.ScriptEngineManager;
+import javax.script.ScriptException;
+
+public class RuleEngine {
+    
+    private ScriptEngine engine;
+    // Cache for compiled scripts (thread-safe)
+    private final ConcurrentHashMap<String, CompiledScript> scriptCache = new ConcurrentHashMap<>();
+    
+    
+    // Thread-local engine to avoid synchronization
+    private static final ThreadLocal<ScriptEngine> threadLocalEngine = ThreadLocal.withInitial(() -> {
+        System.setProperty("polyglot.js.nashorn-compat", "true");
+        ScriptEngineManager manager = new ScriptEngineManager();
+        ScriptEngine engine = manager.getEngineByName("graal.js");
+        if (engine == null) {
+            throw new RuntimeException("GraalVM JS Engine not found");
+        }
+        return engine;
+    });
+    
+    
+    public boolean evaluate(String condition, Agent agent, Project project) {
+        ScriptEngine engine = threadLocalEngine.get();
+        
+        try {
+            Bindings bindings = engine.createBindings();
+            populateBindings(bindings, agent, project);
+            
+            // Try to use cached compiled script
+            CompiledScript compiled = scriptCache.get(condition);
+            if (compiled == null) {
+                Compilable compilable = (Compilable) engine;
+                compiled = compilable.compile(condition);
+                scriptCache.putIfAbsent(condition, compiled);
+            }
+            
+            Object result = compiled.eval(bindings);
+            return result instanceof Boolean && (Boolean) result;
+            
+        } catch (ScriptException e) {
+            System.err.println("Rule Syntax Error: " + condition + " -> " + e.getMessage());
+            return false;
+        } catch (Exception e) {
+            System.err.println("Unexpected error in rule evaluation: " + e.getMessage());
+            return false;
+        }
+    }
+    
+    
+    // Populate bindings in a thread-safe manner
+    private void populateBindings(Bindings bindings, Agent agent, Project project) {
+        
+        if (project.getTokens().size() != project.getLayerNames().size()) {
+            throw new IllegalArgumentException("Number of tokens and"
+                    + " layers should be equal."
+                    + "\n tokens size: " + project.getTokens().size()
+                    + "\n layerNames: "+ project.getLayerNames().size());
+        }
+
+        // map agent environment values
+        // tokens and layerNames should always have the same size 
+        for(int i=0; i<project.getLayerNames().size(); i++){
+            bindings.put(project.getTokens().get(i), getValueAt(project, 
+                    project.getLayerNames().get(i), 
+                    agent.getX(), 
+                    agent.getY()));
+        }
+            
+    }
+    
+    
+    // Thread-safe action execution with proper synchronization
+    public void execute(String action, Agent agent, Project project, AgentLayer layer) {
+        switch (action.toLowerCase()) {
+            case "die":
+                executeDie(agent, layer);
+                break;
+                
+            case "get_gravid":
+                executeGetGravid(agent);
+                break;
+                
+            case "lay_eggs":
+                executeLayEggs(agent, project, layer);
+                break;
+                
+            case "hatch":
+                executeHatch(agent, project, layer);
+                break;
+                
+            case "move_random":
+                executeMoveRandom(agent, project, layer);
+                break;
+                
+            case "reproduce":
+                executeReproduce(agent, project, layer);
+                break;
+        }
+    }
+    
+    
+    private void executeDie(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            la.setAlive(false);
+            // Schedule immediate removal from spatial registry
+            layer.killAgentImmediately(agent.getId());
+        }
+    }
+    
+    
+    private void executeGetGravid(Agent agent) {
+        if (agent instanceof LivingAgent la) {
+            la.setGravid(true);
+        }
+    }
+    
+    
+    private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
+        // Get nearby tanks
+        List<Agent> nearby = project.getSpatialRegistry()
+            .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+        
+        // Find suitable tank
+        for (Agent n : nearby) {
+            if (n instanceof InertAgent ia) {
+                // Add eggs to the tank
+                ia.addEggs(project.getDefaultBirthRate());
+                
+                // Reset gravid status
+                if (agent instanceof LivingAgent la) {
+                    la.setGravid(false);
+                }
+                
+                // Update tank position in spatial registry
+                layer.updateAgentPositionImmediately(n);
+                
+                break; // Lay eggs in first suitable tank only
+            }
+        }
+        
+        // If no tank found, eggs are lost
+        // Could optionally create a new tank here
+    }
+    
+    
+    private void executeHatch(Agent agent,  Project project, AgentLayer layer) {
+        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
+            int eggsToHatch = (int) (ia.getEggCount() * project.getDefaultHatchingProbability());
+            eggsToHatch = Math.max(1, Math.min(eggsToHatch, ia.getEggCount()));
+    
+            // Remove eggs from tank
+            ia.takeEggs(eggsToHatch);
+            
+            // Create new mosquito agents immediately
+            for (int i = 0; i < eggsToHatch; i++) {
+                // Create at tank location with small random offset
+                double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                
+                // Create agent immediately (added to spatial registry)
+                LivingAgent larva;
+                larva = (LivingAgent) layer.createAgentImmediately(LivingAgent.class, x, y);
+                larva.setStage(LifecycleStage.LARVA);
+                larva.setAge(0);
+            }
+            
+            // Update tank in spatial registry
+            layer.updateAgentPositionImmediately(ia);
+        }
+    }
+    
+    
+    private void executeMoveRandom(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            double dx = (ThreadLocalRandom.current().nextDouble() - 0.5) * project.getDefaultAgentStep();
+            double dy = (ThreadLocalRandom.current().nextDouble() - 0.5) * project.getDefaultAgentStep();
+            
+            la.move(dx, dy);
+            
+            // Update position in spatial registry immediately
+            layer.updateAgentPositionImmediately(la);
+        }
+    }
+    
+    
+    private void executeReproduce(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.isGravid()) {
+            // Find mate nearby (includes newly created agents!)
+            List<Agent> nearby = project.getSpatialRegistry()
+                .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+            
+            for (Agent n : nearby) {
+                if (n instanceof LivingAgent mate && 
+                    mate != agent && 
+                    !mate.isGravid() && 
+                    mate.isAlive()) {
+                    
+                    // Create offspring
+                    double x = (agent.getX() + mate.getX()) / 2;
+                    double y = (agent.getY() + mate.getY()) / 2;
+                    
+                    LivingAgent offspring = (LivingAgent) layer.createAgentImmediately(
+                        LivingAgent.class, x, y);
+                    offspring.setStage(LifecycleStage.ADULT);
+                    offspring.setAge(0);
+                    
+                    // Reset gravid status
+                    la.setGravid(false);
+                    
+                    break;
+                }
+            }
+        }
+    }
+    
+    
+    public void execute(String action, Agent agent, Project project) {
+        switch (action.toLowerCase()) {
+            case "die":
+                if (agent instanceof LivingAgent la) {
+                    la.setAlive(false);
+                }
+                break;
+                
+            case "get_gravid":
+                if (agent instanceof LivingAgent la) {
+                    la.setGravid(true);
+                }
+                break;
+                
+            case "lay_eggs":
+                executeLayEggs(agent, project);
+                break;
+                
+            case "hatch":
+                if (agent instanceof InertAgent ia) {
+                    // Use thread-safe hatching
+                    int larvaeCount = ia.getLarvalCount();
+                    int hatchCount = (int) (larvaeCount * project.getDefaultHatchingProbability());
+                    if (hatchCount > 0) {
+                        ia.decrementLarvalCount(hatchCount);
+                        // Hatching logic would create new agents
+                    }
+                }
+                break;
+                
+            case "move_random":
+                if (agent instanceof LivingAgent la) {
+                    double dx = (ThreadLocalRandom.current().nextDouble() - 0.5) * project.getDefaultAgentStep();
+                    double dy = (ThreadLocalRandom.current().nextDouble() - 0.5) * project.getDefaultAgentStep();
+                    la.move(dx, dy);
+                }
+                break;
+        }
+    }
+    
+   
+    // Synchronized egg-laying to prevent race conditions
+    private synchronized void executeLayEggs(Agent agent, Project project) {
+        // Get nearby tanks
+        List<Agent> nearby = project.getSpatialRegistry()
+            .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+        
+        // Find first suitable tank
+        for (Agent n : nearby) {
+            if (n instanceof InertAgent ia) {
+                // Add eggs to the tank (thread-safe)
+                ia.addEggs(20);
+                
+                // Reset gravid status
+                if (agent instanceof LivingAgent la) {
+                    la.setGravid(false);
+                }
+                break; // Lay eggs in first suitable tank only
+            }
+        }
+    }
+    
+    
+    public void clearCache() {
+        scriptCache.clear();
+    }
+    
+    
+    /**
+     * Get cache statistics
+     */
+    public Map<String, Object> getCacheStats() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("cachedScripts", scriptCache.size());
+        stats.put("cacheMemory", "N/A"); // Could estimate memory usage
+        return stats;
+    }
+    
+    
+    private double getValueAt(Project p, String layerName, double x, double y) {
+        Layer layer = p.getLayerByName(layerName);
+        return (layer != null) ? layer.getValueAt(x, y) : 0.0;
+    }
+}
+package com.monadvsim.app.models.engine;
+
+
+import java.util.concurrent.atomic.AtomicLong;
+
+
+public class SimulationMetrics {
+    private final AtomicLong agentsProcessed = new AtomicLong(0);
+    private final AtomicLong rulesEvaluated = new AtomicLong(0);
+    private final AtomicLong spatialQueries = new AtomicLong(0);
+    private final AtomicLong births = new AtomicLong(0);
+    private final AtomicLong deaths = new AtomicLong(0);
+    private final long startTime;
+    
+    public SimulationMetrics() {
+        this.startTime = System.currentTimeMillis();
+    }
+    
+    public void recordAgentProcessed() {
+        agentsProcessed.incrementAndGet();
+    }
+    
+    public void recordRuleEvaluated() {
+        rulesEvaluated.incrementAndGet();
+    }
+    
+    public void recordSpatialQuery() {
+        spatialQueries.incrementAndGet();
+    }
+    
+    public void recordBirth() {
+        births.incrementAndGet();
+    }
+    
+    public void recordDeath() {
+        deaths.incrementAndGet();
+    }
+    
+    public void printReport() {
+        long currentTime = System.currentTimeMillis();
+        double elapsedSeconds = (currentTime - startTime) / 1000.0;
+        
+        System.out.println("\n=== SIMULATION METRICS ===");
+        System.out.printf("Elapsed Time: %.2f seconds%n", elapsedSeconds);
+        System.out.printf("Agents Processed: %,d (%.0f/sec)%n", 
+            agentsProcessed.get(), agentsProcessed.get() / elapsedSeconds);
+        System.out.printf("Rules Evaluated: %,d (%.0f/sec)%n", 
+            rulesEvaluated.get(), rulesEvaluated.get() / elapsedSeconds);
+        System.out.printf("Spatial Queries: %,d%n", spatialQueries.get());
+        System.out.printf("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
+        System.out.println("=========================\n");
+    }
+    
+    public void reset() {
+        agentsProcessed.set(0);
+        rulesEvaluated.set(0);
+        spatialQueries.set(0);
+        births.set(0);
+        deaths.set(0);
+    }
+}
+package com.monadvsim.app.models.services;
+
+import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.utils.ClimateDatasetManager;
+import com.monadvsim.app.models.utils.ResourceManager;
 import java.io.*;
+import java.util.ArrayList;
+import java.util.List;
 
 public class ProjectPersistenceService {
+    
+    private final ResourceManager resourceManager = ResourceManager.getInstance();
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
@@ -206,103 +1800,1565 @@ public class ProjectPersistenceService {
                     double t = (temp != null) ? temp.getValueAt(agent.getX(), agent.getY()) - 273.15 : 25.0;
                     double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0; // m to mm
                     double p = (pop != null) ? pop.getValueAt(agent.getX(), agent.getY()) : 0.0;
+                    LifecycleStage stage = LifecycleStage.UNDEFINED;
+                    boolean alive = false;
+                    if (agent instanceof LivingAgent la){ 
+                        alive = la.isAlive();
+                        stage = la.getStage();
+                    }
 
                     writer.printf("%s,%.6f,%.6f,%s,%b,%.2f,%.2f,%.4f%n",
                         agent.getId(), agent.getX(), agent.getY(),
-                        agent.getLifecycleStage(), agent.isAlive(), p, t, r);
+                        stage, alive, p, t, r);
                 }
             }
         }
         System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
     }
-}package com.monadvsim.app.models.entities;
-
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.stream.Collectors;
-
-public class AgentLayer extends Layer {
-    private List<Agent> agents;
-
-    public AgentLayer(String name) {
-        super(name);
-        this.agents = new CopyOnWriteArrayList<>();
-    }
-
-    public List<Agent> getAgents() {
-        return agents;
-    }
-
-    public void addAgent(Agent agent) {
-        this.agents.add(agent);
-    }
-
+    
+    
     /**
-     * Headless update loop.
-     * Filter out dead agents and then run logic for living/inert ones.
+     * Load climate data from NetCDF file into the project
      */
-    @Override
-    public void update(long tick, double deltaT) {
-        // 1. Remove agents that died in the last tick
-        agents.removeIf(a -> !a.isAlive());
-
-        // 2. Logic is typically handled by the SimulationEngine's 
-        // parallel loop for performance, but we keep the structure here.
-    }
-
-    /**
-     * Helper for synthetic surveillance: 
-     * Get counts of agents in a specific lifecycle stage.
-     */
-    public long getCountByStage(String stage) {
-        return agents.stream()
-            .filter(a -> a.getLifecycleStage().equalsIgnoreCase(stage))
-            .count();
+    public ClimateDatasetManager loadClimateData(Project project, String netcdfFilePath, 
+                                                TimeManager timeManager) throws Exception {
+        System.out.println("Loading climate data from: " + netcdfFilePath);
+        
+        ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
+        
+        try {
+            // Load standard ERA5 variables
+            climateManager.loadERA5Dataset(netcdfFilePath);
+            
+            // Add layers to project
+            for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
+                project.addLayer(layer);
+                
+                // Set up tokens for rule engine (optional)
+                if (project.getTokens() == null) {
+                    project.setTokens(new ArrayList<>());
+                }
+                if (project.getLayerNames() == null) {
+                    project.setLayerNames(new ArrayList<>());
+                }
+                
+                // Add token mapping for rule engine
+                String token = getTokenForVariable(layer.getName());
+                if (!project.getTokens().contains(token)) {
+                    project.getTokens().add(token);
+                    project.getLayerNames().add(layer.getName());
+                }
+            }
+            
+            // Print statistics
+            climateManager.printStatistics();
+            System.out.println("✅ Climate data loaded successfully");
+            
+            return climateManager;
+            
+        } catch (IOException e) {
+            System.err.println("Error loading NetCDF file: " + e.getMessage());
+            throw new Exception("Failed to load climate data", e);
+        }
     }
     
-    // For MVS: clear agents if resetting simulation
-    public void clear() {
-        agents.clear();
+    private String getTokenForVariable(String variableName) {
+        // Map NetCDF variable names to tokens used in rules
+        switch (variableName.toLowerCase()) {
+            case "t2m":
+                return "temperature";
+            case "tp":
+                return "precipitation";
+            case "sp":
+                return "pressure";
+            case "u10":
+                return "wind_u";
+            case "v10":
+                return "wind_v";
+            case "r":
+                return "humidity";
+            case "d2m":
+                return "dewpoint";
+            default:
+                return variableName;
+        }
     }
+    
+    /**
+     * Load multiple climate files (e.g., different time periods)
+     */
+    public List<ClimateDatasetManager> loadClimateTimeSeries(Project project, 
+                                                            List<String> netcdfFiles,
+                                                            TimeManager timeManager) throws Exception {
+        List<ClimateDatasetManager> managers = new ArrayList<>();
+        
+        for (String filePath : netcdfFiles) {
+            System.out.println("Loading: " + filePath);
+            ClimateDatasetManager manager = loadClimateData(project, filePath, timeManager);
+            managers.add(manager);
+        }
+        
+        return managers;
+    }
+}package com.monadvsim.app.models.utils;
+
+
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
+
+
+// Managed executor service with resource tracking and cleanup
+public class ManagedExecutorService implements ExecutorService {
+    private final ExecutorService delegate;
+    private final String name;
+    private final AtomicInteger activeTasks = new AtomicInteger(0);
+    private final AtomicInteger completedTasks = new AtomicInteger(0);
+    private final AtomicInteger failedTasks = new AtomicInteger(0);
+    private final List<Runnable> shutdownHooks = new CopyOnWriteArrayList<>();
+    private final ReentrantLock shutdownLock = new ReentrantLock();
+    private volatile boolean shuttingDown = false;
+    
+    // Statistics
+    private long startTime = System.currentTimeMillis();
+    private long totalQueueTime = 0;
+    private long totalExecutionTime = 0;
+    private int maxActiveTasks = 0;
+    
+    public ManagedExecutorService(String name, int corePoolSize, int maxPoolSize, 
+                                 int queueCapacity, long keepAliveTime, TimeUnit unit) {
+        this.name = name;
+        
+        // Create delegate executor with monitoring wrapper
+        this.delegate = new ThreadPoolExecutor(
+            corePoolSize, maxPoolSize,
+            keepAliveTime, unit,
+            new MonitoringBlockingQueue<>(queueCapacity),
+            new ManagedThreadFactory(name),
+            new MonitoringRejectedExecutionHandler()
+        ) {
+            @Override
+            protected void beforeExecute(Thread t, Runnable r) {
+                activeTasks.incrementAndGet();
+                maxActiveTasks = Math.max(maxActiveTasks, activeTasks.get());
+                
+                if (r instanceof TrackedRunnable) {
+                    ((TrackedRunnable) r).setStartTime(System.currentTimeMillis());
+                }
+                
+                super.beforeExecute(t, r);
+            }
+            
+            @Override
+            protected void afterExecute(Runnable r, Throwable t) {
+                activeTasks.decrementAndGet();
+                
+                if (r instanceof TrackedRunnable) {
+                    TrackedRunnable tr = (TrackedRunnable) r;
+                    long executionTime = System.currentTimeMillis() - tr.getStartTime();
+                    totalExecutionTime += executionTime;
+                    
+                    if (t != null) {
+                        failedTasks.incrementAndGet();
+                    } else {
+                        completedTasks.incrementAndGet();
+                    }
+                }
+                
+                super.afterExecute(r, t);
+            }
+        };
+        
+        System.out.printf("Created ManagedExecutorService: %s [core=%d, max=%d, queue=%d]%n",
+            name, corePoolSize, maxPoolSize, queueCapacity);
+    }
+    
+    @Override
+    public void execute(Runnable command) {
+        checkShutdown();
+        delegate.execute(wrapRunnable(command));
+    }
+    
+    @Override
+    public Future<?> submit(Runnable task) {
+        checkShutdown();
+        return delegate.submit(wrapRunnable(task));
+    }
+    
+    @Override
+    public <T> Future<T> submit(Runnable task, T result) {
+        checkShutdown();
+        return delegate.submit(wrapRunnable(task), result);
+    }
+    
+    @Override
+    public <T> Future<T> submit(Callable<T> task) {
+        checkShutdown();
+        return delegate.submit(wrapCallable(task));
+    }
+    
+    private Runnable wrapRunnable(Runnable r) {
+        if (r instanceof TrackedRunnable) {
+            return r;
+        }
+        return new TrackedRunnable(r);
+    }
+    
+    private <T> Callable<T> wrapCallable(Callable<T> c) {
+        if (c instanceof TrackedCallable) {
+            return c;
+        }
+        return new TrackedCallable<>(c);
+    }
+    
+    private void checkShutdown() {
+        if (shuttingDown) {
+            throw new RejectedExecutionException("Executor " + name + " is shutting down");
+        }
+    }
+    
+    /**
+     * Graceful shutdown with timeout
+     */
+    @Override
+    public void shutdown() {
+        shutdownLock.lock();
+        try {
+            if (shuttingDown) {
+                return;
+            }
+            shuttingDown = true;
+            
+            System.out.printf("Shutting down executor: %s%n", name);
+            
+            // Run shutdown hooks
+            for (Runnable hook : shutdownHooks) {
+                try {
+                    hook.run();
+                } catch (Exception e) {
+                    System.err.printf("Error in shutdown hook for %s: %s%n", name, e.getMessage());
+                }
+            }
+            
+            delegate.shutdown();
+            
+        } finally {
+            shutdownLock.unlock();
+        }
+    }
+    
+    @Override
+    public List<Runnable> shutdownNow() {
+        shutdownLock.lock();
+        try {
+            shuttingDown = true;
+            System.out.printf("Forcing shutdown of executor: %s%n", name);
+            return delegate.shutdownNow();
+        } finally {
+            shutdownLock.unlock();
+        }
+    }
+    
+    @Override
+    public boolean isShutdown() {
+        return shuttingDown || delegate.isShutdown();
+    }
+    
+    @Override
+    public boolean isTerminated() {
+        return delegate.isTerminated();
+    }
+    
+    @Override
+    public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
+        return delegate.awaitTermination(timeout, unit);
+    }
+    
+    /**
+     * Graceful shutdown with progress reporting
+     */
+    public boolean gracefulShutdown(long timeout, TimeUnit unit) throws InterruptedException {
+        shutdown();
+        
+        long deadline = System.currentTimeMillis() + unit.toMillis(timeout);
+        long checkInterval = 1000; // 1 second
+        
+        while (System.currentTimeMillis() < deadline) {
+            if (isTerminated()) {
+                return true;
+            }
+            
+            // Report progress
+            System.out.printf("[%s] Waiting for termination: %d active, %d queue%n",
+                name, activeTasks.get(), getQueueSize());
+            
+            Thread.sleep(Math.min(checkInterval, deadline - System.currentTimeMillis()));
+        }
+        
+        // Force shutdown if timeout reached
+        if (!isTerminated()) {
+            System.out.printf("[%s] Timeout reached, forcing shutdown%n", name);
+            shutdownNow();
+        }
+        
+        return isTerminated();
+    }
+    
+    /**
+     * Add shutdown hook
+     */
+    public void addShutdownHook(Runnable hook) {
+        shutdownHooks.add(hook);
+    }
+    
+    /**
+     * Get executor statistics
+     */
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        stats.put("name", name);
+        stats.put("activeTasks", activeTasks.get());
+        stats.put("completedTasks", completedTasks.get());
+        stats.put("failedTasks", failedTasks.get());
+        stats.put("maxActiveTasks", maxActiveTasks);
+        stats.put("queueSize", getQueueSize());
+        stats.put("uptimeMinutes", (System.currentTimeMillis() - startTime) / 60000.0);
+        
+        if (completedTasks.get() > 0) {
+            stats.put("avgExecutionTimeMs", totalExecutionTime / (double) completedTasks.get());
+        }
+        
+        if (delegate instanceof ThreadPoolExecutor) {
+            ThreadPoolExecutor tpe = (ThreadPoolExecutor) delegate;
+            stats.put("poolSize", tpe.getPoolSize());
+            stats.put("corePoolSize", tpe.getCorePoolSize());
+            stats.put("maxPoolSize", tpe.getMaximumPoolSize());
+            stats.put("largestPoolSize", tpe.getLargestPoolSize());
+        }
+        
+        return stats;
+    }
+    
+    private int getQueueSize() {
+        if (delegate instanceof ThreadPoolExecutor) {
+            return ((ThreadPoolExecutor) delegate).getQueue().size();
+        }
+        return 0;
+    }
+    
+    // Delegate methods
+    @Override
+    public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks) throws InterruptedException {
+        checkShutdown();
+        return delegate.invokeAll(wrapCallables(tasks));
+    }
+    
+    @Override
+    public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) 
+            throws InterruptedException {
+        checkShutdown();
+        return delegate.invokeAll(wrapCallables(tasks), timeout, unit);
+    }
+    
+    @Override
+    public <T> T invokeAny(Collection<? extends Callable<T>> tasks) 
+            throws InterruptedException, ExecutionException {
+        checkShutdown();
+        return delegate.invokeAny(wrapCallables(tasks));
+    }
+    
+    @Override
+    public <T> T invokeAny(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) 
+            throws InterruptedException, ExecutionException, TimeoutException {
+        checkShutdown();
+        return delegate.invokeAny(wrapCallables(tasks), timeout, unit);
+    }
+    
+    private <T> Collection<Callable<T>> wrapCallables(Collection<? extends Callable<T>> tasks) {
+        List<Callable<T>> wrapped = new ArrayList<>();
+        for (Callable<T> task : tasks) {
+            wrapped.add(wrapCallable(task));
+        }
+        return wrapped;
+    }
+    
+    // Inner classes
+    private class TrackedRunnable implements Runnable {
+        private final Runnable delegate;
+        private long startTime;
+        private long queueTime;
+        
+        TrackedRunnable(Runnable delegate) {
+            this.delegate = delegate;
+            this.queueTime = System.currentTimeMillis();
+        }
+        
+        void setStartTime(long startTime) {
+            this.startTime = startTime;
+            totalQueueTime += (startTime - queueTime);
+        }
+        
+        long getStartTime() {
+            return startTime;
+        }
+        
+        @Override
+        public void run() {
+            delegate.run();
+        }
+    }
+    
+    private class TrackedCallable<T> implements Callable<T> {
+        private final Callable<T> delegate;
+        private long startTime;
+        private long queueTime;
+        
+        TrackedCallable(Callable<T> delegate) {
+            this.delegate = delegate;
+            this.queueTime = System.currentTimeMillis();
+        }
+        
+        void setStartTime(long startTime) {
+            this.startTime = startTime;
+            totalQueueTime += (startTime - queueTime);
+        }
+        
+        long getStartTime() {
+            return startTime;
+        }
+        
+        @Override
+        public T call() throws Exception {
+            return delegate.call();
+        }
+    }
+    
+    private class MonitoringBlockingQueue<E> extends LinkedBlockingQueue<E> {
+        private final AtomicInteger maxSize = new AtomicInteger(0);
+        
+        MonitoringBlockingQueue(int capacity) {
+            super(capacity);
+        }
+        
+        @Override
+        public boolean offer(E e) {
+            boolean offered = super.offer(e);
+            maxSize.set(Math.max(maxSize.get(), size()));
+            return offered;
+        }
+    }
+    
+    private class ManagedThreadFactory implements ThreadFactory {
+        private final AtomicInteger threadNumber = new AtomicInteger(1);
+        private final String namePrefix;
+        
+        ManagedThreadFactory(String poolName) {
+            namePrefix = poolName + "-worker-";
+        }
+        
+        @Override
+        public Thread newThread(Runnable r) {
+            Thread t = new Thread(r, namePrefix + threadNumber.getAndIncrement());
+            t.setDaemon(true);
+            t.setPriority(Thread.NORM_PRIORITY);
+            
+            // Set uncaught exception handler
+            t.setUncaughtExceptionHandler((thread, throwable) -> {
+                System.err.printf("Uncaught exception in thread %s: %s%n", 
+                    thread.getName(), throwable.getMessage());
+                throwable.printStackTrace();
+            });
+            
+            return t;
+        }
+    }
+    
+    private class MonitoringRejectedExecutionHandler implements RejectedExecutionHandler {
+        private final AtomicInteger rejectedCount = new AtomicInteger(0);
+        
+        @Override
+        public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
+            rejectedCount.incrementAndGet();
+            System.err.printf("[%s] Task rejected (queue full). Rejected count: %d%n", 
+                name, rejectedCount.get());
+            
+            // Try to add to stats
+            Map<String, Object> stats = getStatistics();
+            System.err.println("Executor state: " + stats);
+            
+            throw new RejectedExecutionException("Task rejected from " + name);
+        }
+    }
+}
+package com.monadvsim.app.models.utils;
+
+
+import java.io.Closeable;
+import java.lang.ref.Cleaner;
+import java.lang.ref.PhantomReference;
+import java.lang.ref.ReferenceQueue;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
+
+
+// Advanced resource management system for tracking and auto-closing resources
+public final class ResourceManager implements Closeable {
+    private static final ResourceManager INSTANCE = new ResourceManager();
+    private static final Cleaner CLEANER = Cleaner.create();
+    
+    // Resource tracking
+    private final Map<String, ResourceTracker> trackedResources = new ConcurrentHashMap<>();
+    private final ReferenceQueue<Object> referenceQueue = new ReferenceQueue<>();
+    private final Map<PhantomReference<?>, CleanupAction> phantomReferences = new ConcurrentHashMap<>();
+    
+    // Statistics
+    private final AtomicLong totalResources = new AtomicLong(0);
+    private final AtomicLong leakedResources = new AtomicLong(0);
+    private final AtomicLong disposedResources = new AtomicLong(0);
+    
+    // Cleanup thread
+    private final Thread cleanupThread;
+    private volatile boolean running = true;
+    
+    private ResourceManager() {
+        // Start cleanup thread
+        cleanupThread = new Thread(this::cleanupLoop, "ResourceManager-Cleanup");
+        cleanupThread.setDaemon(true);
+        cleanupThread.setPriority(Thread.MIN_PRIORITY);
+        cleanupThread.start();
+        
+        // Register shutdown hook
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.out.println("ResourceManager shutdown initiated...");
+            close();
+        }));
+    }
+    
+    public static ResourceManager getInstance() {
+        return INSTANCE;
+    }
+    
+    /**
+     * Register a resource for tracking
+     */
+    public <T extends Closeable> T track(String resourceType, T resource, String description) {
+        String id = UUID.randomUUID().toString();
+        ResourceTracker tracker = new ResourceTracker(id, resourceType, description, System.currentTimeMillis());
+        
+        trackedResources.put(id, tracker);
+        totalResources.incrementAndGet();
+        
+        // Register with Cleaner for automatic cleanup
+        CLEANER.register(resource, new ResourceCleanup(id, tracker));
+        
+        // Also track with phantom reference
+        PhantomReference<T> phantomRef = new PhantomReference<>(resource, referenceQueue);
+        phantomReferences.put(phantomRef, new CleanupAction(id, resource));
+        
+        System.out.printf("[Resource] Tracked: %s - %s (%s)%n", 
+            resourceType, description, id.substring(0, 8));
+        
+        return resource;
+    }
+    
+    /**
+     * Manually release a tracked resource
+     */
+    public void release(Closeable resource) {
+        try {
+            resource.close();
+            disposedResources.incrementAndGet();
+        } catch (Exception e) {
+            System.err.println("Error releasing resource: " + e.getMessage());
+        }
+    }
+    
+    /**
+     * Track GeoTools resources (GridCoverage2D, Readers, etc.)
+     */
+    public <T> T trackGeoTools(String resourceType, T resource, String filePath) {
+        if (resource instanceof org.geotools.coverage.grid.GridCoverage2D) {
+            // Wrap GridCoverage2D in AutoCloseable wrapper
+            GridCoverageWrapper wrapper = new GridCoverageWrapper(
+                (org.geotools.coverage.grid.GridCoverage2D) resource, filePath);
+            return (T) wrapper;
+        }
+        return resource;
+    }
+    
+    private void cleanupLoop() {
+        while (running) {
+            try {
+                // Check for garbage collected resources
+                PhantomReference<?> phantomRef = (PhantomReference<?>) referenceQueue.remove(1000);
+                if (phantomRef != null) {
+                    CleanupAction action = phantomReferences.remove(phantomRef);
+                    if (action != null) {
+                        System.err.printf("[Resource Leak] Resource was garbage collected without proper cleanup: %s%n",
+                            action.resourceId);
+                        leakedResources.incrementAndGet();
+                        
+                        // Attempt cleanup if possible
+                        if (action.resource instanceof Closeable) {
+                            try {
+                                ((Closeable) action.resource).close();
+                            } catch (Exception e) {
+                                // Ignore - resource may already be closed
+                            }
+                        }
+                    }
+                }
+                
+                // Periodic cleanup of old tracking entries
+                if (System.currentTimeMillis() % 30000 < 1000) { // Every ~30 seconds
+                    cleanupOldEntries();
+                }
+                
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            } catch (Exception e) {
+                System.err.println("Error in cleanup loop: " + e.getMessage());
+            }
+        }
+    }
+    
+    private void cleanupOldEntries() {
+        long cutoff = System.currentTimeMillis() - 300000; // 5 minutes
+        Iterator<Map.Entry<String, ResourceTracker>> it = trackedResources.entrySet().iterator();
+        
+        while (it.hasNext()) {
+            Map.Entry<String, ResourceTracker> entry = it.next();
+            if (entry.getValue().creationTime < cutoff) {
+                it.remove();
+            }
+        }
+    }
+    
+    @Override
+    public void close() {
+        running = false;
+        cleanupThread.interrupt();
+        
+        // Force cleanup of all tracked resources
+        System.out.println("\n=== Resource Manager Final Cleanup ===");
+        System.out.printf("Total resources tracked: %,d%n", totalResources.get());
+        System.out.printf("Disposed resources: %,d%n", disposedResources.get());
+        System.out.printf("Leaked resources: %,d%n", leakedResources.get());
+        
+        // Attempt to close any remaining resources
+        int remaining = trackedResources.size();
+        if (remaining > 0) {
+            System.out.printf("Warning: %,d resources still tracked%n", remaining);
+            
+            for (ResourceTracker tracker : trackedResources.values()) {
+                System.err.printf("Leaked: %s - %s (created %d ms ago)%n",
+                    tracker.resourceType, tracker.description,
+                    System.currentTimeMillis() - tracker.creationTime);
+            }
+        }
+        
+        trackedResources.clear();
+        phantomReferences.clear();
+    }
+    
+    /**
+     * Get resource statistics
+     */
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("totalTracked", totalResources.get());
+        stats.put("currentlyTracked", trackedResources.size());
+        stats.put("disposed", disposedResources.get());
+        stats.put("leaked", leakedResources.get());
+        
+        // Group by resource type
+        Map<String, Integer> byType = new HashMap<>();
+        for (ResourceTracker tracker : trackedResources.values()) {
+            byType.merge(tracker.resourceType, 1, Integer::sum);
+        }
+        stats.put("byType", byType);
+        
+        return stats;
+    }
+    
+    // Inner classes
+    private static class ResourceTracker {
+        final String id;
+        final String resourceType;
+        final String description;
+        final long creationTime;
+        
+        ResourceTracker(String id, String resourceType, String description, long creationTime) {
+            this.id = id;
+            this.resourceType = resourceType;
+            this.description = description;
+            this.creationTime = creationTime;
+        }
+    }
+    
+    private static class ResourceCleanup implements Runnable {
+        private final String id;
+        private final ResourceTracker tracker;
+        
+        ResourceCleanup(String id, ResourceTracker tracker) {
+            this.id = id;
+            this.tracker = tracker;
+        }
+        
+        @Override
+        public void run() {
+            System.err.printf("[Cleaner] Resource cleanup triggered for: %s - %s%n",
+                tracker.resourceType, tracker.description);
+        }
+    }
+    
+    private static class CleanupAction {
+        final String resourceId;
+        final Object resource;
+        
+        CleanupAction(String resourceId, Object resource) {
+            this.resourceId = resourceId;
+            this.resource = resource;
+        }
+    }
+    
+    /**
+     * AutoCloseable wrapper for GridCoverage2D
+     */
+    public static class GridCoverageWrapper implements AutoCloseable {
+        private final org.geotools.coverage.grid.GridCoverage2D coverage;
+        private final String source;
+        private volatile boolean disposed = false;
+        
+        public GridCoverageWrapper(org.geotools.coverage.grid.GridCoverage2D coverage, String source) {
+            this.coverage = coverage;
+            this.source = source;
+        }
+        
+        public org.geotools.coverage.grid.GridCoverage2D getCoverage() {
+            if (disposed) {
+                throw new IllegalStateException("GridCoverage2D already disposed: " + source);
+            }
+            return coverage;
+        }
+        
+        @Override
+        public void close() {
+            if (!disposed) {
+                disposed = true;
+                try {
+                    coverage.dispose(true);
+                    System.out.printf("[Resource] Disposed GridCoverage2D: %s%n", source);
+                } catch (Exception e) {
+                    System.err.printf("Error disposing GridCoverage2D (%s): %s%n", 
+                        source, e.getMessage());
+                }
+            }
+        }
+        
+        @Override
+        protected void finalize() throws Throwable {
+            if (!disposed) {
+                System.err.printf("[Finalizer] GridCoverage2D not properly disposed: %s%n", source);
+                close();
+            }
+            super.finalize();
+        }
+    }
+}package com.monadvsim.app.models.utils;
+
+
+
+public class RasterLoader {
+
+}
+package com.monadvsim.app.models.utils;
+
+
+
+public class TimeSeriesLoader {
+
+}
+package com.monadvsim.app.models.utils;
+
+
+import com.monadvsim.app.models.engine.TimeManager;
+import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Map;
+
+/**
+ * Manages multiple climate variables from NetCDF files
+ */
+public class ClimateDatasetManager {
+    private final TimeManager timeManager;
+    private final Map<String, InterpolatedRasterLayer> layers = new HashMap<>();
+    
+    // Standard ERA5 variable names
+    public static final String TEMPERATURE_2M = "t2m";
+    public static final String TOTAL_PRECIPITATION = "tp";
+    public static final String SURFACE_PRESSURE = "sp";
+    public static final String U_WIND = "u10";
+    public static final String V_WIND = "v10";
+    public static final String RELATIVE_HUMIDITY = "r";
+    public static final String DEW_POINT = "d2m";
+    
+    public ClimateDatasetManager(TimeManager timeManager) {
+        this.timeManager = timeManager;
+    }
+    
+    /**
+     * Load a NetCDF file with multiple variables
+     */
+    public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
+        for (String varName : variableNames) {
+            InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
+            layer.loadFromNetCDF(filePath, varName);
+            layers.put(varName, layer);
+        }
+    }
+    
+    /**
+     * Load standard ERA5 climate variables
+     */
+    public void loadERA5Dataset(String filePath) throws IOException {
+        String[] standardVars = {
+            TEMPERATURE_2M,      // 2m temperature (K)
+            TOTAL_PRECIPITATION, // Total precipitation (m)
+            SURFACE_PRESSURE,    // Surface pressure (Pa)
+            U_WIND,              // 10m u-component of wind (m/s)
+            V_WIND,              // 10m v-component of wind (m/s)
+        };
+        
+        loadNetCDFDataset(filePath, standardVars);
+    }
+    
+    /**
+     * Get value for a specific variable at location
+     */
+    public double getValue(String variableName, double lon, double lat) {
+        InterpolatedRasterLayer layer = layers.get(variableName);
+        if (layer == null) {
+            throw new IllegalArgumentException("Variable not loaded: " + variableName);
+        }
+        return layer.getValueAt(lon, lat);
+    }
+    
+    /**
+     * Get temperature in Celsius (converts from Kelvin)
+     */
+    public double getTemperatureCelsius(double lon, double lat) {
+        double tempK = getValue(TEMPERATURE_2M, lon, lat);
+        return tempK - 273.15; // Convert Kelvin to Celsius
+    }
+    
+    /**
+     * Get precipitation in mm/hour (converts from m)
+     */
+    public double getPrecipitationMmHour(double lon, double lat) {
+        double precipM = getValue(TOTAL_PRECIPITATION, lon, lat);
+        return precipM * 1000; // Convert m to mm
+    }
+    
+    /**
+     * Get wind speed (m/s) from u and v components
+     */
+    public double getWindSpeed(double lon, double lat) {
+        double u = getValue(U_WIND, lon, lat);
+        double v = getValue(V_WIND, lon, lat);
+        return Math.sqrt(u * u + v * v);
+    }
+    
+    /**
+     * Get wind direction (degrees from north)
+     */
+    public double getWindDirection(double lon, double lat) {
+        double u = getValue(U_WIND, lon, lat);
+        double v = getValue(V_WIND, lon, lat);
+        
+        double direction = Math.toDegrees(Math.atan2(u, v));
+        if (direction < 0) direction += 360;
+        return direction;
+    }
+    
+    public InterpolatedRasterLayer getLayer(String variableName) {
+        return layers.get(variableName);
+    }
+    
+    public Map<String, InterpolatedRasterLayer> getLayers() {
+        return new HashMap<>(layers);
+    }
+    
+    public void printStatistics() {
+        System.out.println("=== Climate Dataset Statistics ===");
+        for (Map.Entry<String, InterpolatedRasterLayer> entry : layers.entrySet()) {
+            System.out.println(entry.getKey() + ":");
+            entry.getValue().printStatistics();
+            System.out.println();
+        }
+    }
+}
+package com.monadvsim.app.models.entities;
+
+
+import com.monadvsim.app.models.engine.AgentLifecycleManager;
+import com.monadvsim.app.models.engine.RuleEngine;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
+
+
+public class AgentLayer extends Layer {
+    
+    private final AgentContainer agentContainer;
+    private final List<RuleDefinition> rules;
+    private final RuleEngine ruleEngine;
+    private AgentLifecycleManager lifecycleManager;
+    private final ExecutorService ruleExecutor;
+    private int batchSize;
+    // Statistics
+    private final AtomicInteger rulesEvaluated = new AtomicInteger(0);
+    private final AtomicInteger actionsExecuted = new AtomicInteger(0);
+    private final AtomicInteger births = new AtomicInteger(0);
+    private final AtomicInteger deaths = new AtomicInteger(0);
+    private final AtomicInteger birthsThisTick = new AtomicInteger(0);
+    private final AtomicInteger deathsThisTick = new AtomicInteger(0);
+    private final ThreadLocal<List<Agent>> immediateNewborns = ThreadLocal.withInitial(ArrayList::new);
+
+    
+    
+    public static record RuleDefinition(String condition, String action, int priority) {}
+    
+    
+    public AgentLayer(String name, RuleEngine ruleEngine, 
+                     AgentLifecycleManager lifecycleManager) {
+        super(name);
+        this.ruleEngine = ruleEngine;
+        this.lifecycleManager = lifecycleManager;
+        this.rules = new CopyOnWriteArrayList<>();
+        
+        int partitionCount = Runtime.getRuntime().availableProcessors();
+        this.agentContainer = new AgentContainer(partitionCount);
+        
+        this.ruleExecutor = Executors.newFixedThreadPool(
+            partitionCount,
+            new ThreadFactory() {
+                private final AtomicInteger threadNumber = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "RuleWorker-" + threadNumber.getAndIncrement());
+                    t.setDaemon(true);
+                    return t;
+                }
+            }
+        );
+    }
+    
+    
+    public AgentLayer(String name, RuleEngine ruleEngine) {
+        super(name);
+        this.ruleEngine = ruleEngine;
+        this.rules = new CopyOnWriteArrayList<>(); // Thread-safe for rule modifications
+        
+        // Determine optimal partition count
+        int availableProcessors = Runtime.getRuntime().availableProcessors();
+        int partitionCount = Math.max(2, availableProcessors);
+        this.batchSize = Math.max(100, 1000 / partitionCount);
+        
+        this.agentContainer = new AgentContainer(partitionCount);
+        
+        // Create bounded thread pool for rule evaluation
+        this.ruleExecutor = Executors.newFixedThreadPool(
+            partitionCount,
+            new ThreadFactory() {
+                private final AtomicInteger threadNumber = new AtomicInteger(1);
+                
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "RuleWorker-" + threadNumber.getAndIncrement());
+                    t.setDaemon(true);
+                    t.setPriority(Thread.NORM_PRIORITY - 1);
+                    return t;
+                }
+            }
+        );
+    }
+    
+    
+    public void addRule(String condition, String action, int priority) {
+        rules.add(new RuleDefinition(condition, action, priority));
+        // Sort rules by priority (highest first)
+        rules.sort((r1, r2) -> Integer.compare(r2.priority(), r1.priority()));
+    }
+    
+    
+    @Override
+    public void update(Project project) {
+        long startTime = System.nanoTime();
+        
+        // Reset per-tick counters
+        birthsThisTick.set(0);
+        deathsThisTick.set(0);
+        
+        // Apply pending agent operations from previous tick
+        agentContainer.applyPendingOperations();
+        
+        // Process all agents with rules
+        processAgentsWithRules(project);
+    
+        // Process immediate newborns created during rule execution
+        processImmediateNewborns();
+        
+        // Clean up dead agents
+        cleanupDeadAgents();
+        
+        // Process scheduled lifecycle events
+        lifecycleManager.processLifecycleEvents();
+        
+        // Log performance
+        logUpdatePerformance(startTime);
+    }
+    
+    
+    private void processAgentsWithRules(Project project) {
+        // Clear thread-local newborns
+        immediateNewborns.remove();
+        
+        // Process agents in parallel partitions
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
+        
+        agentContainer.processWithBatching(batch -> {
+            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                for (Agent agent : batch) {
+                    processAgentRules(agent, project);
+                }
+            }, ruleExecutor);
+            
+            futures.add(future);
+        }, 100); // Process in batches of 100
+        
+        // Wait for all batches to complete
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException | ExecutionException e) {
+            System.err.println("Error processing agent rules: " + e.getMessage());
+        }
+    }
+    
+    
+    private void processAgentRules(Agent agent, Project project) {
+        // Check if agent is alive (for LivingAgent)
+        if (agent instanceof LivingAgent la && !la.isAlive()) {
+            // Schedule for death
+            lifecycleManager.scheduleDeath(agent.getId());
+            deathsThisTick.incrementAndGet();
+            return;
+        }
+        
+        // Age increment for LivingAgent
+        if (agent instanceof LivingAgent la) {
+            la.incrementAge();
+        }
+        
+        // Evaluate rules
+        for (RuleDefinition rule : rules) {
+            rulesEvaluated.incrementAndGet();
+            
+            if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                // Execute rule - this may create immediate newborns
+                ruleEngine.execute(rule.action(), agent, project, this);
+                
+                // Check if agent died during rule execution
+                if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                    lifecycleManager.scheduleDeath(agent.getId());
+                    deathsThisTick.incrementAndGet();
+                    break; // Stop processing rules for dead agent
+                }
+                
+                // Stop after terminal actions
+                if (isTerminalAction(rule.action())) {
+                    break;
+                }
+            }
+        }
+        // Schedule position update if agent moved
+        if (agentHasMoved(agent)) {
+            lifecycleManager.scheduleMove(agent);
+        }
+    }
+    
+    
+    private boolean agentHasMoved(Agent agent) {
+        // Check if agent position changed since last update
+        // This would require tracking previous positions
+        return false; // Simplified for now
+    }
+    
+    
+    private void processImmediateNewborns() {
+        // Get thread-local newborns and add to container
+        List<Agent> newborns = immediateNewborns.get();
+        if (!newborns.isEmpty()) {
+            agentContainer.addAgents(newborns);
+            birthsThisTick.addAndGet(newborns.size());
+            newborns.clear();
+        }
+    }
+    
+    
+    private void cleanupDeadAgents() {
+        // Remove agents marked for death from container
+        // This happens after lifecycle manager processes deaths
+        agentContainer.applyPendingOperations();
+    }
+    
+    
+    // Create a new agent immediately (for use within rule execution)
+    public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
+        Agent agent = lifecycleManager.immediateBirth(agentClass, x, y);
+        
+        // Add to thread-local list for container update
+        List<Agent> newborns = immediateNewborns.get();
+        newborns.add(agent);
+        
+        return agent;
+    }
+    
+    
+    public void killAgentImmediately(String agentId) {
+        lifecycleManager.immediateDeath(agentId);
+    }
+    
+    
+    public void updateAgentPositionImmediately(Agent agent) {
+        lifecycleManager.immediateMove(agent);
+    }
+    
+    
+    private boolean isTerminalAction(String action) {
+        return action.equalsIgnoreCase("die") || 
+               action.equalsIgnoreCase("lay_eggs");
+    }
+    
+    
+    private void logUpdatePerformance(long startTime) {
+        long duration = System.nanoTime() - startTime;
+        double durationMs = duration / 1_000_000.0;
+        
+        if (durationMs > 50) { // Log if > 50ms
+            System.out.printf("[%s] Update: %.2f ms | %d agents | %d births | %d deaths%n",
+                getName(), durationMs, agentContainer.size(), 
+                birthsThisTick.get(), deathsThisTick.get());
+        }
+    }
+    
+    
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("agentCount", agentContainer.size());
+        stats.put("rulesCount", rules.size());
+        stats.put("rulesEvaluated", rulesEvaluated.get());
+        stats.put("birthsThisTick", birthsThisTick.get());
+        stats.put("deathsThisTick", deathsThisTick.get());
+        stats.putAll(agentContainer.getStatistics());
+        
+        return stats;
+    }
+    
+    
+    public void shutdown() {
+        ruleExecutor.shutdown();
+        try {
+            if (!ruleExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                ruleExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            ruleExecutor.shutdownNow();
+            Thread.currentThread().interrupt();
+        }
+    }
+    
+    
+    // Process a batch of agents (thread-safe)
+    private void processAgentBatch(List<Agent> batch, Project project) {
+        List<Agent> localNewborns = new ArrayList<>();
+        
+        for (Agent agent : batch) {
+            try {
+                processSingleAgent(agent, project, localNewborns);
+            } catch (Exception e) {
+                System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                // Mark agent for removal if it's causing errors
+                if (agent instanceof LivingAgent la) {
+                    la.setAlive(false);
+                }
+            }
+        }
+        
+        // Add newborns to container
+        if (!localNewborns.isEmpty()) {
+            agentContainer.addAgents(localNewborns);
+            births.addAndGet(localNewborns.size());
+        }
+    }
+    
+    
+    // Process a single agent (thread-safe)
+    private void processSingleAgent(Agent agent, Project project, List<Agent> newborns) {
+        // Handle LivingAgent specific logic
+        if (agent instanceof LivingAgent la) {
+            // Check if agent is alive (thread-safe)
+            if (!la.isAlive()) {
+                agentContainer.markForRemoval(agent);
+                deaths.incrementAndGet();
+                return;
+            }
+            
+            // Increment age (thread-safe)
+            la.incrementAge();
+        }
+        
+        // Evaluate rules in priority order
+        for (RuleDefinition rule : rules) {
+            rulesEvaluated.incrementAndGet();
+            
+            if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                ruleEngine.execute(rule.action(), agent, project);
+                actionsExecuted.incrementAndGet();
+                
+                // Stop after first matching rule if it's a terminal action
+                if (isTerminalAction(rule.action())) {
+                    break;
+                }
+            }
+        }
+        
+        // Handle hatching for InertAgents
+        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
+            handleHatching(ia, newborns);
+        }
+    }
+    
+    
+    // Handle egg hatching (thread-safe)
+    private void handleHatching(InertAgent tank, List<Agent> newborns) {
+        int eggsToHatch = (int) (tank.getEggCount() * 0.1); // 10% hatch rate
+        
+        if (eggsToHatch > 0) {
+            int hatched = tank.takeEggs(eggsToHatch);
+            
+            for (int i = 0; i < hatched; i++) {
+                LivingAgent larva = new LivingAgent(tank.getX(), tank.getY());
+                larva.setStage(LifecycleStage.LARVA);
+                newborns.add(larva);
+            }
+        }
+    }
+    
+    
+    public void addAgent(Agent agent) {
+        agentContainer.addAgent(agent);
+    }
+    
+    
+    public void addAgents(List<Agent> agents) {
+        agentContainer.addAgents(agents);
+    }
+    
+    
+    public List<Agent> getAgents() {
+        return agentContainer.getAllAgents();
+    }
+    
+    
+    // Reset statistics
+    public void resetStatistics() {
+        rulesEvaluated.set(0);
+        actionsExecuted.set(0);
+        births.set(0);
+        deaths.set(0);
+    }
+    
+    
+    public AgentLifecycleManager getLifecycleManager(){
+        return lifecycleManager;
+    }
+    
+
+    @Override
+    public double getValueAt(double x, double y) {
+        return 0.0;
+    }
+    
 }package com.monadvsim.app.models.entities;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.function.Consumer;
+
+
+
+public class AgentContainer {
+
+    private final List<ConcurrentLinkedQueue<Agent>> partitions;
+    private final Map<String, Agent> agentRegistry; // For quick lookup by ID
+    private final Map<String, Integer> agentPartitionMap; // Tracks which partition an agent is in
+    private final ReentrantReadWriteLock registryLock = new ReentrantReadWriteLock();
+    private final int partitionCount;
+    private final AtomicInteger size = new AtomicInteger(0);
+    // Dead agent buffer for safe removal
+    private final ConcurrentLinkedQueue<Agent> deadAgents = new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<Agent> newAgents = new ConcurrentLinkedQueue<>();
+    
+    
+    public AgentContainer(int partitionCount) {
+        this.partitionCount = partitionCount;
+        this.partitions = new ArrayList<>(partitionCount);
+        this.agentRegistry = new ConcurrentHashMap<>();
+        this.agentPartitionMap = new ConcurrentHashMap<>();
+
+        for (int i = 0; i < partitionCount; i++) {
+            partitions.add(new ConcurrentLinkedQueue<>());
+        }
+    }
+    
+    
+    // thread safe operations
+    public boolean addAgent(Agent agent) {
+        newAgents.add(agent);
+        size.incrementAndGet();
+        return true;
+    }
+    
+    
+    // Batch add multiple agents
+    public void addAgents(Collection<Agent> agents) {
+        newAgents.addAll(agents);
+        size.addAndGet(agents.size());
+    }
+    
+    
+    // Mark agent for removal (thread-safe)
+    public void markForRemoval(Agent agent) {
+        deadAgents.add(agent);
+    }
+    
+    
+    // Apply pending operations (adds and removals) form a single thread
+    // ideally the main threat
+    public void applyPendingOperations() {
+        processNewAgents();
+        processDeadAgents();
+    }
+    
+    
+    private void processNewAgents(){
+        while (!newAgents.isEmpty()) {
+            Agent agent = newAgents.poll();
+            if (agent != null) {
+                int partitionIndex = Math.abs(agent.getId().hashCode()) % partitionCount;
+                partitions.get(partitionIndex).add(agent);
+                
+                registryLock.writeLock().lock();
+                try {
+                    agentRegistry.put(agent.getId(), agent);
+                    agentPartitionMap.put(agent.getId(), partitionIndex);
+                } finally {
+                    registryLock.writeLock().unlock();
+                }
+            }
+        }
+    }
+    
+    
+    private void processDeadAgents(){
+        while (!deadAgents.isEmpty()) {
+            Agent agent = deadAgents.poll();
+            if (agent != null) {
+                registryLock.readLock().lock();
+                try {
+                    Integer partitionIndex = agentPartitionMap.get(agent.getId());
+                    if (partitionIndex != null) {
+                        partitions.get(partitionIndex).remove(agent);
+                        agentRegistry.remove(agent.getId());
+                        agentPartitionMap.remove(agent.getId());
+                        size.decrementAndGet();
+                    }
+                } finally {
+                    registryLock.readLock().unlock();
+                }
+            }
+        }
+    }
+    
+    
+    // Get agents from a specific partition (thread-safe for iteration)
+    public List<Agent> getAgentsFromPartition(int partitionIndex) {
+        if (partitionIndex < 0 || partitionIndex >= partitionCount) {
+            return Collections.emptyList();
+        }
+        return new ArrayList<>(partitions.get(partitionIndex));
+    }
+    
+    
+    // Get all agents (for spatial registry updates)
+    public List<Agent> getAllAgents() {
+        List<Agent> allAgents = new ArrayList<>(size.get());
+        registryLock.readLock().lock();
+        try {
+            allAgents.addAll(agentRegistry.values());
+        } finally {
+            registryLock.readLock().unlock();
+        }
+        return allAgents;
+    }
+    
+    
+    // Find agent by ID (thread-safe)
+    public Agent getAgentById(String id) {
+        registryLock.readLock().lock();
+        try {
+            return agentRegistry.get(id);
+        } finally {
+            registryLock.readLock().unlock();
+        }
+    }
+    
+    
+    // Process agents in parallel using partitioned processing
+    public void processInParallel(Consumer<Agent> processor) {
+        partitions.parallelStream().forEach(partition -> {
+            for (Agent agent : partition) {
+                processor.accept(agent);
+            }
+        });
+    }
+    
+    
+    // Process agents with partition-level batching
+    public void processWithBatching(Consumer<List<Agent>> batchProcessor, 
+                                   int batchSize) {
+        partitions.parallelStream().forEach(partition -> {
+            List<Agent> batch = new ArrayList<>(batchSize);
+            for (Agent agent : partition) {
+                batch.add(agent);
+                if (batch.size() >= batchSize) {
+                    batchProcessor.accept(batch);
+                    batch.clear();
+                }
+            }
+            if (!batch.isEmpty()) {
+                batchProcessor.accept(batch);
+            }
+        });
+    }
+    
+    
+    // Getters
+    public int size() {
+        return size.get();
+    }
+    
+    
+    public int getPartitionCount() {
+        return partitionCount;
+    }
+    
+    
+    public boolean isEmpty() {
+        return size.get() == 0;
+    }
+    
+    
+    // Get statistics about the container
+    public Map<String, Object> getStatistics() {
+        Map<String, Object> stats = new HashMap<>();
+        stats.put("totalAgents", size.get());
+        stats.put("partitions", partitionCount);
+        stats.put("pendingAdds", newAgents.size());
+        stats.put("pendingRemovals", deadAgents.size());
+        
+        // Partition sizes
+        Map<Integer, Integer> partitionSizes = new HashMap<>();
+        for (int i = 0; i < partitionCount; i++) {
+            partitionSizes.put(i, partitions.get(i).size());
+        }
+        stats.put("partitionSizes", partitionSizes);
+        
+        return stats;
+    }
+    
+    
+}
+package com.monadvsim.app.models.entities;
 
 
 import java.io.Serializable;
 import java.util.UUID;
 
 public abstract class Layer implements Serializable {
+    
     private final String id;
     private String name;
     private boolean visible = true;
-    
-    // Crucial for .mvsim persistence: stores where the raw data lives
     protected String filePath;
 
+    
     public Layer(String name) {
         this.id = UUID.randomUUID().toString();
         this.name = name;
     }
 
     public String getId() { return id; }
+    
+    
     public String getName() { return name; }
+    
+    
     public void setName(String name) { this.name = name; }
     
+    
     public boolean isVisible() { return visible; }
+    
+    
     public void setVisible(boolean visible) { this.visible = visible; }
 
+    
     public String getFilePath() { return filePath; }
+    
+    
     public void setFilePath(String path) { this.filePath = path; }
 
-    /**
-     * The 'Update' hook.
-     * In headless mode, this is called by the SimulationEngine every tick.
-     * RasterLayers might use this to swap time-series frames.
-     * AgentLayers use this to iterate through mosquito logic.
-     */
-    public abstract void update(long tick, double deltaT);
+    
+    public abstract void update(Project project);
+   
+    
+    public abstract double getValueAt(double x, double y);
 
+    
     @Override
     public String toString() {
         return name + (visible ? "" : " (Hidden)");
@@ -336,14 +3392,18 @@ public abstract class Rule {
 }
 package com.monadvsim.app.models.entities;
 
+
 import java.io.Serializable;
 
+
 public class RasterLayer extends Layer implements Serializable {
+    
     private double[][][] dataGrid; // [frame][x][y]
     private int width, height, frames;
     private int activeFrame = 0;
     private double minLon, maxLon, minLat, maxLat;
 
+    
     public RasterLayer(String name, int width, int height, int frames) {
         super(name);
         this.width = width;
@@ -351,7 +3411,16 @@ public class RasterLayer extends Layer implements Serializable {
         this.frames = frames;
         this.dataGrid = new double[frames][width][height];
     }
+    
+    
+    public void initialize(int width, int height, int frames) {
+        this.width = width;
+        this.height = height;
+        this.frames = frames;
+        this.dataGrid = new double[frames][width][height];
+    }
 
+    
     public void setBounds(double minLon, double maxLon, double minLat, double maxLat) {
         this.minLon = minLon;
         this.maxLon = maxLon;
@@ -359,9 +3428,8 @@ public class RasterLayer extends Layer implements Serializable {
         this.maxLat = maxLat;
     }
 
-    /**
-     * Maps geographic Lon/Lat to the internal grid index.
-     */
+    
+    @Override
     public double getValueAt(double lon, double lat) {
         if (maxLon == minLon || maxLat == minLat) return 0.0;
 
@@ -379,19 +3447,898 @@ public class RasterLayer extends Layer implements Serializable {
         return dataGrid[activeFrame][x][y];
     }
 
+    
+    @Override
+    public void update(Project project) {
+        
+    }
+    
+    
     public void setData(int frame, int x, int y, double value) {
         if (frame < frames && x < width && y < height) {
             dataGrid[frame][x][y] = value;
         }
     }
 
+    
     public void setActiveFrame(int index) {
         this.activeFrame = Math.min(index, frames - 1);
     }
+    
+    
+    public int getActiveFrame(){
+        return this.activeFrame;
+    }
+    
 
+    public double[][][] getDataGrid() {
+        return dataGrid;
+    }
+
+    
+    public void setDataGrid(double[][][] dataGrid) {
+        this.dataGrid = dataGrid;
+    }
+
+    
+    public int getWidth() {
+        return width;
+    }
+
+    
+    public void setWidth(int width) {
+        this.width = width;
+    }
+
+    
+    public int getHeight() {
+        return height;
+    }
+
+    
+    public void setHeight(int height) {
+        this.height = height;
+    }
+
+    
+    public int getFrames() {
+        return frames;
+    }
+
+    
+    public void setFrames(int frames) {
+        this.frames = frames;
+    }
+
+    
+    public double getMinLon() {
+        return minLon;
+    }
+
+    
+    public void setMinLon(double minLon) {
+        this.minLon = minLon;
+    }
+
+    
+    public double getMaxLon() {
+        return maxLon;
+    }
+
+    
+    public void setMaxLon(double maxLon) {
+        this.maxLon = maxLon;
+    }
+
+    
+    public double getMinLat() {
+        return minLat;
+    }
+
+    
+    public void setMinLat(double minLat) {
+        this.minLat = minLat;
+    }
+
+    
+    public double getMaxLat() {
+        return maxLat;
+    }
+
+    
+    public void setMaxLat(double maxLat) {
+        this.maxLat = maxLat;
+    }
+    
+}package com.monadvsim.app.models.entities;
+
+import com.monadvsim.app.models.engine.TimeManager;
+import ucar.ma2.Array;
+import ucar.ma2.Index;
+import ucar.ma2.InvalidRangeException;
+import ucar.nc2.NetcdfFile;
+import ucar.nc2.NetcdfFiles;
+import ucar.nc2.Variable;
+import ucar.nc2.Dimension;
+import ucar.nc2.Attribute;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.time.temporal.ChronoUnit;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * Interpolated raster layer that reads NetCDF climate files (ERA5, etc.)
+ * and performs temporal interpolation between time steps.
+ */
+public class InterpolatedRasterLayer extends Layer {
+    private static final Logger LOGGER = Logger.getLogger(InterpolatedRasterLayer.class.getName());
+    
+    // Core data structures
+    private double[][][] dataGrid; // [time][lat][lon] or [time][lon][lat]
+    private double[] timeValues; // Time values in hours since reference
+    private double[] latValues; // Latitude values (degrees north)
+    private double[] lonValues; // Longitude values (degrees east)
+    
+    // Dimensions
+    private int timeSize, latSize, lonSize;
+    private final TimeManager timeManager;
+    private final ReentrantReadWriteLock dataLock = new ReentrantReadWriteLock();
+    
+    // Interpolation cache for performance
+    private double[][] cachedGrid; // Current interpolated grid
+    private LocalDateTime lastCacheTime;
+    private boolean cacheValid = false;
+    
+    // NetCDF metadata
+    private String timeUnits = "hours since 1900-01-01 00:00:00";
+    private LocalDateTime timeReference = LocalDateTime.of(1900, 1, 1, 0, 0);
+    private boolean dataLoaded = false;
+    
+    // Statistics
+    private long cacheHits = 0;
+    private long cacheMisses = 0;
+    private long interpolationsPerformed = 0;
+    
+    /**
+     * Constructor for creating an empty layer to be loaded from NetCDF
+     */
+    public InterpolatedRasterLayer(String name, TimeManager timeManager) {
+        super(name);
+        this.timeManager = timeManager;
+        this.cachedGrid = null;
+        this.lastCacheTime = null;
+    }
+    
+    /**
+     * Load data from a NetCDF file
+     * @param filePath Path to NetCDF file
+     * @param variableName Variable to load (e.g., "t2m", "tp", "rh")
+     * @throws IOException If file cannot be read
+     */
+    public void loadFromNetCDF(String filePath, String variableName) throws IOException {
+        dataLock.writeLock().lock();
+        try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
+            LOGGER.info("Loading NetCDF file: " + filePath);
+            
+            // Get the variable
+            Variable var = ncfile.findVariable(variableName);
+            if (var == null) {
+                throw new IOException("Variable '" + variableName + "' not found in file");
+            }
+            
+            // Get dimensions
+            List<Dimension> dims = var.getDimensions();
+            if (dims.size() < 3) {
+                throw new IOException("Variable must have at least 3 dimensions (time, lat, lon)");
+            }
+            
+            // Determine dimension order (different NetCDF files may use different orders)
+            Dimension timeDim = findDimension(ncfile, "time");
+            Dimension latDim = findDimension(ncfile, "lat");
+            Dimension lonDim = findDimension(ncfile, "lon");
+            
+            if (timeDim == null || latDim == null || lonDim == null) {
+                throw new IOException("Could not find required dimensions (time, lat, lon)");
+            }
+            
+            timeSize = timeDim.getLength();
+            latSize = latDim.getLength();
+            lonSize = lonDim.getLength();
+            
+            LOGGER.info(String.format("Dimensions: time=%d, lat=%d, lon=%d", 
+                timeSize, latSize, lonSize));
+            
+            // Allocate data grid (time, lat, lon)
+            dataGrid = new double[timeSize][latSize][lonSize];
+            
+            // Read coordinate variables
+            readCoordinateVariables(ncfile);
+            
+            // Read time variable and units
+            readTimeMetadata(ncfile);
+            
+            // Read the data
+            LOGGER.info("Reading variable data...");
+            Array dataArray = var.read();
+            Index index = dataArray.getIndex();
+            
+            // Fill data grid - assuming order is (time, lat, lon)
+            for (int t = 0; t < timeSize; t++) {
+                for (int lat = 0; lat < latSize; lat++) {
+                    for (int lon = 0; lon < lonSize; lon++) {
+                        dataGrid[t][lat][lon] = dataArray.getDouble(index.set(t, lat, lon));
+                    }
+                }
+            }
+            
+            // Check if latitude is descending (NetCDF often has north to south)
+            if (latValues.length > 1 && latValues[0] > latValues[1]) {
+                LOGGER.info("Reversing latitude axis (south to north)");
+                reverseLatitudeData();
+            }
+            
+            dataLoaded = true;
+            cacheValid = false;
+            
+            LOGGER.info(String.format("Successfully loaded %s: %d time steps, %.2f° to %.2f° lat, %.2f° to %.2f° lon",
+                variableName, timeSize, latValues[0], latValues[latValues.length-1],
+                lonValues[0], lonValues[lonValues.length-1]));
+                
+        } finally {
+            dataLock.writeLock().unlock();
+        }
+    }
+    
+    private Dimension findDimension(NetcdfFile ncfile, String dimName) {
+        // Try exact match first
+        Dimension dim = ncfile.findDimension(dimName);
+        if (dim != null) return dim;
+        
+        // Try case-insensitive
+        for (Dimension d : ncfile.getDimensions()) {
+            if (d.getShortName().equalsIgnoreCase(dimName)) {
+                return d;
+            }
+        }
+        
+        // Try common alternatives
+        if (dimName.equals("lat")) {
+            return ncfile.findDimension("latitude");
+        } else if (dimName.equals("lon")) {
+            return ncfile.findDimension("longitude");
+        }
+        
+        return null;
+    }
+    
+    private void readCoordinateVariables(NetcdfFile ncfile) throws IOException {
+        // Read latitude values
+        Variable latVar = ncfile.findVariable("lat");
+        if (latVar == null) latVar = ncfile.findVariable("latitude");
+        
+        if (latVar != null) {
+            Array latArray = latVar.read();
+            latValues = new double[latSize];
+            for (int i = 0; i < latSize; i++) {
+                latValues[i] = latArray.getDouble(i);
+            }
+        } else {
+            throw new IOException("Latitude variable not found");
+        }
+        
+        // Read longitude values
+        Variable lonVar = ncfile.findVariable("lon");
+        if (lonVar == null) lonVar = ncfile.findVariable("longitude");
+        
+        if (lonVar != null) {
+            Array lonArray = lonVar.read();
+            lonValues = new double[lonSize];
+            for (int i = 0; i < lonSize; i++) {
+                lonValues[i] = lonArray.getDouble(i);
+            }
+        } else {
+            throw new IOException("Longitude variable not found");
+        }
+    }
+    
+    private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
+        Variable timeVar = ncfile.findVariable("time");
+        if (timeVar == null) {
+            LOGGER.warning("Time variable not found, using simulation time directly");
+            timeValues = new double[timeSize];
+            for (int i = 0; i < timeSize; i++) {
+                timeValues[i] = i; // Assume hourly data
+            }
+            return;
+        }
+        
+        // Read time units
+        Attribute unitsAttr = timeVar.findAttribute("units");
+        if (unitsAttr != null) {
+            timeUnits = unitsAttr.getStringValue();
+            parseTimeUnits(timeUnits);
+        }
+        
+        // Read time values
+        Array timeArray = timeVar.read();
+        timeValues = new double[timeSize];
+        for (int i = 0; i < timeSize; i++) {
+            timeValues[i] = timeArray.getDouble(i);
+        }
+        
+        LOGGER.info("Time units: " + timeUnits);
+        LOGGER.info(String.format("Time range: %.1f to %.1f (%d steps)",
+            timeValues[0], timeValues[timeValues.length-1], timeSize));
+    }
+    
+    private void parseTimeUnits(String units) {
+        // Parse units like "hours since 1900-01-01 00:00:00"
+        try {
+            String[] parts = units.split("since");
+            if (parts.length == 2) {
+                String dateStr = parts[1].trim();
+                DateTimeFormatter formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+                timeReference = LocalDateTime.parse(dateStr, formatter);
+            }
+        } catch (Exception e) {
+            LOGGER.warning("Could not parse time units: " + units + ", using default");
+            timeReference = LocalDateTime.of(1900, 1, 1, 0, 0);
+        }
+    }
+    
+    private void reverseLatitudeData() {
+        // Reverse latitude values
+        double[] reversedLat = new double[latSize];
+        for (int i = 0; i < latSize; i++) {
+            reversedLat[i] = latValues[latSize - 1 - i];
+        }
+        latValues = reversedLat;
+        
+        // Reverse data along latitude dimension
+        double[][][] reversedData = new double[timeSize][latSize][lonSize];
+        for (int t = 0; t < timeSize; t++) {
+            for (int lat = 0; lat < latSize; lat++) {
+                for (int lon = 0; lon < lonSize; lon++) {
+                    reversedData[t][lat][lon] = dataGrid[t][latSize - 1 - lat][lon];
+                }
+            }
+        }
+        dataGrid = reversedData;
+    }
+    
     @Override
-    public void update(long tick, double deltaT) {
-        throw new UnsupportedOperationException("Not supported yet."); // Generated from nbfs://nbhost/SystemFileSystem/Templates/Classes/Code/GeneratedMethodBody
+    public double getValueAt(double lon, double lat) {
+        if (!dataLoaded) {
+            return Double.NaN;
+        }
+        
+        // Check cache first
+        LocalDateTime currentTime = timeManager.getCurrentDateTime();
+        if (cacheValid && lastCacheTime != null && 
+            lastCacheTime.equals(currentTime) && cachedGrid != null) {
+            cacheHits++;
+            return getCachedValue(lon, lat);
+        }
+        
+        // Cache miss - need to interpolate
+        cacheMisses++;
+        interpolationsPerformed++;
+        
+        // Update cache
+        updateCache(currentTime);
+        
+        return getCachedValue(lon, lat);
+    }
+    
+    private void updateCache(LocalDateTime currentTime) {
+        dataLock.readLock().lock();
+        try {
+            // Get time index for interpolation
+            double hoursSinceReference = ChronoUnit.HOURS.between(
+                timeReference, currentTime);
+            
+            // Find bounding time indices
+            int lowerIdx = -1;
+            int upperIdx = -1;
+            double alpha = 0.0;
+            
+            for (int i = 0; i < timeValues.length - 1; i++) {
+                if (hoursSinceReference >= timeValues[i] && 
+                    hoursSinceReference <= timeValues[i + 1]) {
+                    lowerIdx = i;
+                    upperIdx = i + 1;
+                    alpha = (hoursSinceReference - timeValues[i]) / 
+                           (timeValues[i + 1] - timeValues[i]);
+                    break;
+                }
+            }
+            
+            // Handle boundaries
+            if (lowerIdx == -1) {
+                if (hoursSinceReference <= timeValues[0]) {
+                    lowerIdx = upperIdx = 0;
+                    alpha = 0.0;
+                } else {
+                    lowerIdx = upperIdx = timeValues.length - 1;
+                    alpha = 0.0;
+                }
+            }
+            
+            // Create or resize cache grid
+            if (cachedGrid == null || cachedGrid.length != latSize || 
+                cachedGrid[0].length != lonSize) {
+                cachedGrid = new double[latSize][lonSize];
+            }
+            
+            // Perform temporal interpolation
+            if (lowerIdx == upperIdx || alpha == 0.0) {
+                // No interpolation needed
+                for (int lat = 0; lat < latSize; lat++) {
+                    for (int lon = 0; lon < lonSize; lon++) {
+                        cachedGrid[lat][lon] = dataGrid[lowerIdx][lat][lon];
+                    }
+                }
+            } else {
+                // Linear interpolation between time steps
+                for (int lat = 0; lat < latSize; lat++) {
+                    for (int lon = 0; lon < lonSize; lon++) {
+                        double lowerValue = dataGrid[lowerIdx][lat][lon];
+                        double upperValue = dataGrid[upperIdx][lat][lon];
+                        cachedGrid[lat][lon] = lowerValue + 
+                            (upperValue - lowerValue) * alpha;
+                    }
+                }
+            }
+            
+            lastCacheTime = currentTime;
+            cacheValid = true;
+            
+        } finally {
+            dataLock.readLock().unlock();
+        }
+    }
+    
+    private double getCachedValue(double lon, double lat) {
+        // Find nearest grid cell (simple nearest neighbor)
+        int latIdx = findNearestIndex(latValues, lat);
+        int lonIdx = findNearestIndex(lonValues, lon);
+        
+        // Handle wrap-around for longitude (if using 0-360 instead of -180 to 180)
+        if (lonIdx == -1) {
+            // Try adjusting longitude
+            if (lon < 0) lon += 360;
+            lonIdx = findNearestIndex(lonValues, lon);
+        }
+        
+        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize) {
+            return cachedGrid[latIdx][lonIdx];
+        }
+        
+        return Double.NaN;
+    }
+    
+    private int findNearestIndex(double[] array, double value) {
+        if (array == null || array.length == 0) return -1;
+        
+        // Binary search for nearest value
+        int low = 0;
+        int high = array.length - 1;
+        
+        while (low <= high) {
+            int mid = (low + high) / 2;
+            if (array[mid] == value) {
+                return mid;
+            } else if (array[mid] < value) {
+                low = mid + 1;
+            } else {
+                high = mid - 1;
+            }
+        }
+        
+        // Return nearest of low or high (clamped to array bounds)
+        if (low >= array.length) return array.length - 1;
+        if (high < 0) return 0;
+        
+        return Math.abs(array[low] - value) < Math.abs(array[high] - value) ? low : high;
+    }
+    
+    /**
+     * Get bilinear interpolated value (more accurate but slower)
+     */
+    public double getValueAtBilinear(double lon, double lat) {
+        if (!dataLoaded) return Double.NaN;
+        
+        // Update cache if needed
+        LocalDateTime currentTime = timeManager.getCurrentDateTime();
+        if (!cacheValid || !currentTime.equals(lastCacheTime)) {
+            updateCache(currentTime);
+        }
+        
+        // Find surrounding grid cells
+        int latIdx1 = findLowerIndex(latValues, lat);
+        int lonIdx1 = findLowerIndex(lonValues, lon);
+        
+        if (latIdx1 == -1 || lonIdx1 == -1 || 
+            latIdx1 >= latSize - 1 || lonIdx1 >= lonSize - 1) {
+            return getCachedValue(lon, lat); // Fall back to nearest neighbor
+        }
+        
+        int latIdx2 = latIdx1 + 1;
+        int lonIdx2 = lonIdx1 + 1;
+        
+        // Get the four surrounding values
+        double q11 = cachedGrid[latIdx1][lonIdx1];
+        double q12 = cachedGrid[latIdx1][lonIdx2];
+        double q21 = cachedGrid[latIdx2][lonIdx1];
+        double q22 = cachedGrid[latIdx2][lonIdx2];
+        
+        // Calculate interpolation weights
+        double lat1 = latValues[latIdx1];
+        double lat2 = latValues[latIdx2];
+        double lon1 = lonValues[lonIdx1];
+        double lon2 = lonValues[lonIdx2];
+        
+        double x = (lon - lon1) / (lon2 - lon1);
+        double y = (lat - lat1) / (lat2 - lat1);
+        
+        // Bilinear interpolation formula
+        double value = q11 * (1 - x) * (1 - y) +
+                      q21 * x * (1 - y) +
+                      q12 * (1 - x) * y +
+                      q22 * x * y;
+        
+        return value;
+    }
+    
+    private int findLowerIndex(double[] array, double value) {
+        if (array == null || array.length < 2) return -1;
+        
+        for (int i = 0; i < array.length - 1; i++) {
+            if (value >= array[i] && value <= array[i + 1]) {
+                return i;
+            }
+        }
+        
+        return -1;
+    }
+    
+    @Override
+    public void update(Project project) {
+        // Invalidate cache when time changes
+        LocalDateTime currentTime = timeManager.getCurrentDateTime();
+        if (lastCacheTime == null || !lastCacheTime.equals(currentTime)) {
+            cacheValid = false;
+        }
+    }
+    
+    /**
+     * Get layer statistics
+     */
+    public ClimateLayerStats getStatistics() {
+        return new ClimateLayerStats(
+            getName(),
+            dataLoaded,
+            timeSize,
+            latSize,
+            lonSize,
+            cacheHits,
+            cacheMisses,
+            interpolationsPerformed,
+            getCacheHitRatio()
+        );
+    }
+    
+    /**
+     * Print detailed statistics
+     */
+    public void printStatistics() {
+        ClimateLayerStats stats = getStatistics();
+        System.out.println(stats.toString());
+    }
+    
+    private double getCacheHitRatio() {
+        long total = cacheHits + cacheMisses;
+        return total > 0 ? (double) cacheHits / total : 0.0;
+    }
+    
+    // Getters for metadata
+    public boolean isDataLoaded() { return dataLoaded; }
+    public int getTimeSize() { return timeSize; }
+    public int getLatSize() { return latSize; }
+    public int getLonSize() { return lonSize; }
+    public double getMinLat() { return latValues != null && latValues.length > 0 ? latValues[0] : Double.NaN; }
+    public double getMaxLat() { return latValues != null && latValues.length > 0 ? latValues[latValues.length-1] : Double.NaN; }
+    public double getMinLon() { return lonValues != null && lonValues.length > 0 ? lonValues[0] : Double.NaN; }
+    public double getMaxLon() { return lonValues != null && lonValues.length > 0 ? lonValues[lonValues.length-1] : Double.NaN; }
+    public double[] getTimeValues() { return timeValues; }
+    public double[] getLatValues() { return latValues; }
+    public double[] getLonValues() { return lonValues; }
+    
+    /**
+     * Statistics container class
+     */
+    public static class ClimateLayerStats {
+        private final String layerName;
+        private final boolean dataLoaded;
+        private final int timeSteps;
+        private final int latPoints;
+        private final int lonPoints;
+        private final long cacheHits;
+        private final long cacheMisses;
+        private final long totalInterpolations;
+        private final double cacheHitRatio;
+        
+        public ClimateLayerStats(String layerName, boolean dataLoaded, 
+                                int timeSteps, int latPoints, int lonPoints,
+                                long cacheHits, long cacheMisses,
+                                long totalInterpolations, double cacheHitRatio) {
+            this.layerName = layerName;
+            this.dataLoaded = dataLoaded;
+            this.timeSteps = timeSteps;
+            this.latPoints = latPoints;
+            this.lonPoints = lonPoints;
+            this.cacheHits = cacheHits;
+            this.cacheMisses = cacheMisses;
+            this.totalInterpolations = totalInterpolations;
+            this.cacheHitRatio = cacheHitRatio;
+        }
+        
+        @Override
+        public String toString() {
+            return String.format(
+                "Climate Layer '%s':\n" +
+                "  Data loaded: %b\n" +
+                "  Dimensions: %d time steps, %d×%d grid\n" +
+                "  Cache: %d hits, %d misses (%.1f%% hit rate)\n" +
+                "  Interpolations performed: %d",
+                layerName, dataLoaded, timeSteps, latPoints, lonPoints,
+                cacheHits, cacheMisses, cacheHitRatio * 100, totalInterpolations
+            );
+        }
+    }
+}package com.monadvsim.app.models.entities;
+
+import java.io.*;
+import java.nio.MappedByteBuffer;
+import java.nio.channels.FileChannel;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+/**
+ * Memory-mapped raster layer for handling large datasets
+ */
+public class MemoryMappedRasterLayer extends RasterLayer {
+    private static final int DOUBLE_BYTES = Double.BYTES;
+    
+    private File dataFile;
+    private MappedByteBuffer[] frameBuffers;
+    private FileChannel fileChannel;
+    private boolean memoryMapped = false;
+    private final ReentrantReadWriteLock fileLock = new ReentrantReadWriteLock();
+    
+    // Memory thresholds (adjust based on available RAM)
+    private static final long MEMORY_THRESHOLD = 100 * 1024 * 1024; // 100MB
+    private static final long MAX_MEMORY_DATA = 500 * 1024 * 1024; // 500MB
+    
+    public MemoryMappedRasterLayer(String name, int width, int height, int frames) {
+        super(name, width, height, frames);
+        
+        // Check if we should use memory mapping
+        long estimatedSize = (long) width * height * frames * DOUBLE_BYTES;
+        if (estimatedSize > MEMORY_THRESHOLD) {
+            enableMemoryMapping();
+        }
+    }
+    
+    private void enableMemoryMapping() {
+        try {
+            // Create temporary file
+            dataFile = File.createTempFile("raster_" + getName(), ".dat");
+            dataFile.deleteOnExit();
+            
+            long fileSize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
+            
+            // Open file channel
+            fileChannel = FileChannel.open(
+                dataFile.toPath(),
+                StandardOpenOption.READ,
+                StandardOpenOption.WRITE,
+                StandardOpenOption.CREATE
+            );
+            
+            // Map file to memory
+            frameBuffers = new MappedByteBuffer[getFrames()];
+            long frameSize = (long) getWidth() * getHeight() * DOUBLE_BYTES;
+            
+            for (int i = 0; i < getFrames(); i++) {
+                long position = i * frameSize;
+                frameBuffers[i] = fileChannel.map(
+                    FileChannel.MapMode.READ_WRITE,
+                    position,
+                    frameSize
+                );
+            }
+            
+            memoryMapped = true;
+            System.out.printf("✓ Memory-mapped raster: %s [%d MB]%n", 
+                getName(), fileSize / (1024 * 1024));
+            
+        } catch (IOException e) {
+            System.err.printf("Failed to enable memory mapping for %s: %s%n", 
+                getName(), e.getMessage());
+            memoryMapped = false;
+            // Fall back to in-memory storage
+            super.initialize(getWidth(), getHeight(), getFrames());
+        }
+    }
+    
+    @Override
+    public double getValueAt(double lon, double lat) {
+        if (!memoryMapped) {
+            return super.getValueAt(lon, lat);
+        }
+        
+        // Calculate pixel coordinates
+        if (getMaxLon() == getMinLon() || getMaxLat() == getMinLat()) {
+            return 0.0;
+        }
+        
+        double xFrac = (lon - getMinLon()) / (getMaxLon() - getMinLon());
+        double yFrac = (lat - getMinLat()) / (getMaxLat() - getMinLat());
+        
+        int x = (int) (xFrac * (getWidth() - 1));
+        int y = (int) (yFrac * (getHeight() - 1));
+        
+        if (x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) {
+            return 0.0;
+        }
+        
+        // Read from memory-mapped buffer
+        fileLock.readLock().lock();
+        try {
+            int index = y * getWidth() + x;
+            return frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+        } finally {
+            fileLock.readLock().unlock();
+        }
+    }
+    
+    @Override
+    public void setData(int frame, int x, int y, double value) {
+        if (!memoryMapped) {
+            super.setData(frame, x, y, value);
+            return;
+        }
+        
+        if (frame < 0 || frame >= getFrames() || 
+            x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) {
+            return;
+        }
+        
+        fileLock.writeLock().lock();
+        try {
+            int index = y * getWidth() + x;
+            frameBuffers[frame].putDouble(index * DOUBLE_BYTES, value);
+        } finally {
+            fileLock.writeLock().unlock();
+        }
+    }
+    
+    @Override
+    public void setActiveFrame(int index) {
+        if (memoryMapped) {
+            // Ensure frame buffer is loaded
+            if (index >= 0 && index < getFrames()) {
+                // Force buffer load by accessing it
+                if (frameBuffers[index] != null) {
+                    frameBuffers[index].load();
+                }
+            }
+        }
+        super.setActiveFrame(index);
+    }
+    
+    @Override
+    public void initialize(int width, int height, int frames) {
+        // Dispose existing resources
+        dispose();
+        
+        // Call parent initialization
+        super.initialize(width, height, frames);
+        
+        // Re-evaluate memory mapping
+        long estimatedSize = (long) width * height * frames * DOUBLE_BYTES;
+        if (estimatedSize > MEMORY_THRESHOLD) {
+            enableMemoryMapping();
+        }
+    }
+    
+    /**
+     * Dispose of resources
+     */
+    public void dispose() {
+        fileLock.writeLock().lock();
+        try {
+            if (memoryMapped && frameBuffers != null) {
+                // Unmap buffers
+                for (MappedByteBuffer buffer : frameBuffers) {
+                    if (buffer != null) {
+                        // Java doesn't have direct unmap, but we can clear the reference
+                        // The cleaner will handle it
+                        buffer.clear();
+                    }
+                }
+                frameBuffers = null;
+            }
+            
+            // Close file channel
+            if (fileChannel != null && fileChannel.isOpen()) {
+                try {
+                    fileChannel.close();
+                } catch (IOException e) {
+                    System.err.println("Error closing file channel: " + e.getMessage());
+                }
+            }
+            
+            // Delete temporary file
+            if (dataFile != null && dataFile.exists()) {
+                try {
+                    Files.deleteIfExists(dataFile.toPath());
+                } catch (IOException e) {
+                    System.err.println("Error deleting temp file: " + e.getMessage());
+                }
+            }
+            
+            memoryMapped = false;
+            
+        } finally {
+            fileLock.writeLock().unlock();
+        }
+    }
+    
+    @Override
+    protected void finalize() throws Throwable {
+        try {
+            dispose();
+        } finally {
+            super.finalize();
+        }
+    }
+    
+    /**
+     * Get memory usage statistics
+     */
+    public Map<String, Object> getMemoryStats() {
+        Map<String, Object> stats = new HashMap<>();
+        
+        if (memoryMapped) {
+            long fileSize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
+            stats.put("storage", "memory-mapped");
+            stats.put("fileSizeMB", fileSize / (1024.0 * 1024.0));
+            stats.put("framesMapped", frameBuffers != null ? frameBuffers.length : 0);
+        } else {
+            stats.put("storage", "in-memory");
+            long memorySize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
+            stats.put("memorySizeMB", memorySize / (1024.0 * 1024.0));
+        }
+        
+        stats.put("width", getWidth());
+        stats.put("height", getHeight());
+        stats.put("frames", getFrames());
+        stats.put("activeFrame", getActiveFrame());
+        
+        return stats;
     }
 }package com.monadvsim.app.models.entities;
 
@@ -404,7 +4351,13 @@ import java.io.Serializable;
 public class Project implements Serializable {
     private String name;
     private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
-    
+    private List<String> tokens;
+    private List<String> layerNames;
+    private double defaultAgentSearchRadius;
+    private double defaultHatchingProbability;
+    private double defaultAgentStep;
+    private int defaultBirthRate; // number of eggs to be layeds
+            
     // The Environment
     private List<Layer> layers;
     
@@ -415,10 +4368,7 @@ public class Project implements Serializable {
         this.layers = new ArrayList<>();
     }
 
-    /**
-     * Updates all time-sensitive layers (like Rasters) 
-     * based on the current simulation time index.
-     */
+    
     public void updateEnvironment(int timeFrameIndex) {
         for (Layer layer : layers) {
             if (layer instanceof RasterLayer rl) {
@@ -426,10 +4376,18 @@ public class Project implements Serializable {
             }
         }
     }
+    
 
-    /**
-     * Helper to retrieve only the Agent layers for the update loop.
-     */
+    public Layer getLayerByName(String layerName){
+        for(Layer l: layers){
+            if (layerName.equals(l.getName())){
+                return l;
+            }
+        }
+        return null;
+    }
+    
+    
     public List<AgentLayer> getAgentLayers() {
         List<AgentLayer> agentLayers = new ArrayList<>();
         for (Layer l : layers) {
@@ -440,9 +4398,7 @@ public class Project implements Serializable {
         return agentLayers;
     }
 
-    /**
-     * Helper to retrieve a specific Raster (e.g., "Population")
-     */
+    
     public RasterLayer getRasterByName(String name) {
         return layers.stream()
                 .filter(l -> l instanceof RasterLayer && l.getName().equalsIgnoreCase(name))
@@ -450,6 +4406,7 @@ public class Project implements Serializable {
                 .findFirst()
                 .orElse(null);
     }
+    
 
     // Standard Getters/Setters
     public List<Layer> getLayers() { return layers; }
@@ -465,47 +4422,126 @@ public class Project implements Serializable {
     public SpatialRegistry getSpatialRegistry() {
         return spatialRegistry;
     }
+
+    public List<String> getTokens() {
+        return tokens;
+    }
+
+    public void setTokens(List<String> tokens) {
+        this.tokens = tokens;
+    }
+
+    public List<String> getLayerNames() {
+        return layerNames;
+    }
+
+    public void setLayerNames(List<String> layerNames) {
+        this.layerNames = layerNames;
+    }
+
+    public double getDefaultAgentSearchRadius() {
+        return defaultAgentSearchRadius;
+    }
+
+    public void setDefaultAgentSearchRadius(double defaultAgentSearchRadius) {
+        this.defaultAgentSearchRadius = defaultAgentSearchRadius;
+    }
+
+    public double getDefaultHatchingProbability() {
+        return defaultHatchingProbability;
+    }
+
+    public void setDefaultHatchingProbability(double defaultHatchingProbability) {
+        this.defaultHatchingProbability = defaultHatchingProbability;
+    }
+
+    public double getDefaultAgentStep() {
+        return defaultAgentStep;
+    }
+
+    public void setDefaultAgentStep(double defaultAgentStep) {
+        this.defaultAgentStep = defaultAgentStep;
+    }
+
+    public int getDefaultBirthRate() {
+        return defaultBirthRate;
+    }
+
+    public void setDefaultBirthRate(int defaultBirthRate) {
+        this.defaultBirthRate = defaultBirthRate;
+    }
+    
+    
+    
+    
+    
 }package com.monadvsim.app.models.entities;
 
 
 
 
+import com.monadvsim.app.models.engine.TimeManager;
 import java.io.Serializable;
 import java.util.UUID;
 
 public abstract class Agent implements Serializable {
     private final String id;
-    protected double x, y; // World coordinates (EPSG:4326)
-    protected boolean alive = true;
-    protected String lifecycleStage; // e.g., "Egg", "Larva", "Adult"
+    private String name;
+    protected double x, y; 
     
-    // Physiological state
-    protected double energy = 1.0;
-    protected double ageInTicks = 0;
-
-    public Agent(double x, double y, String stage) {
+    
+    public Agent(double x, double y) {
         this.id = UUID.randomUUID().toString();
         this.x = x;
         this.y = y;
-        this.lifecycleStage = stage;
+    }
+    
+    
+    public Agent(double x, double y, String name) {
+        this.id = UUID.randomUUID().toString();
+        this.x = x;
+        this.y = y;
+        this.name = name;
+    }
+    
+    
+    public abstract void updateState(Project project, TimeManager timeManager);
+
+    
+    public String getId(){
+        return this.id;
+    }
+    
+    
+    public String getName() {
+        return name;
     }
 
-    /**
-     * The core logic "hook" called by the SimulationEngine.
-     * @param project Access to RasterLayers (Environment) and SpatialRegistry (Neighbors)
-     * @param timeManager Access to current simulation time/date
-     */
-    public abstract void update(Project project, com.monadvsim.app.models.engine.TimeManager timeManager);
+    
+    public void setName(String name) {
+        this.name = name;
+    }
 
-    // Getters and Setters
-    public double getX() { return x; }
-    public double getY() { return y; }
-    public boolean isAlive() { return alive; }
-    public void setAlive(boolean alive) { this.alive = alive; }
-    public String getLifecycleStage() { return lifecycleStage; }
-    public String getId() { return id; }
-    public double getEnergy() { return energy; }
-    public void setEnergy(double energy) { this.energy = energy; }
+    
+    public double getX() {
+        return x;
+    }
+
+    
+    public void setX(double x) {
+        this.x = x;
+    }
+
+    
+    public double getY() {
+        return y;
+    }
+    
+
+    public void setY(double y) {
+        this.y = y;
+    }
+    
 }
 package com.monadvsim.app.models.entities;
 
@@ -607,246 +4643,465 @@ public class QuadTree {
 }
 package com.monadvsim.app.models.entities;
 
+
+
+public enum LifecycleStage {
+    EGG,
+    LARVA,
+    PUPA,
+    ADULT,
+    UNDEFINED
+}
+package com.monadvsim.app.models.entities;
+
+
 import com.monadvsim.app.models.engine.TimeManager;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
 
 public class InertAgent extends Agent {
-    private double waterVolume = 50.0; // percentage 0-100
-    private int larvalCount = 0;
-    private final double capacity = 500.0;
+    
+    private final AtomicReference<Double> waterVolume = new AtomicReference<>(0.0); // percentage 0-100
+    private final AtomicInteger larvalCount = new AtomicInteger(0); // number of larvae in the container
+    private final AtomicReference<Double> capacity = new AtomicReference<>(0.0); // maximum number of larvae that a single container can support
+    private final AtomicInteger eggCount = new AtomicInteger(0); // number of eggs in the container
+    // For thread-safe batch operations
+    private final Object batchLock = new Object();
+    
 
     public InertAgent(double x, double y) {
-        super(x, y, "WaterTank");
+        super(x, y);
     }
     
-    public int calculateHatching(Project project) {
-        RasterLayer rain = project.getRasterByName("Rainfall");
-        RasterLayer temp = project.getRasterByName("Temperature");
-
-        double r = (rain != null) ? rain.getValueAt(x, y) : 0.0;
-        double tC = (temp != null) ? temp.getValueAt(x, y) - 273.15 : 25.0;
-
-        // Hydrology logic
-        waterVolume = Math.max(0, Math.min(100, waterVolume + (r * 1000) - 0.1));
-
-        // BIOLOGICAL FIX: Lower hatch rate to 0.5% (0.005) instead of 5% (0.05)
-        // Also ensure temperature is high enough for larvae to mature
-        if (waterVolume > 10.0 && tC > 18.0 && larvalCount > 0) {
-            int hatch = (int) (larvalCount * 0.005); 
-            larvalCount -= hatch; // This actually depletes the eggs
-            return hatch;
+    
+    public InertAgent(double x, double y, String name) {
+        super(x, y, name);
+    }
+    
+    
+    // Thread-safe operations
+    public double getWaterVolume() {
+        return waterVolume.get();
+    }
+    
+    
+    public void setWaterVolume(double volume) {
+        waterVolume.set(Math.max(0.0, Math.min(100.0, volume)));
+    }
+    
+    
+    public int getLarvalCount() {
+        return larvalCount.get();
+    }
+    
+    
+    public void setLarvalCount(int count) {
+        larvalCount.set(Math.max(0, count));
+    }
+    
+    
+    public int incrementLarvalCount(int delta) {
+        return larvalCount.addAndGet(delta);
+    }
+    
+    
+    public int decrementLarvalCount(int delta) {
+        return larvalCount.updateAndGet(current -> Math.max(0, current - delta));
+    }
+    
+    
+    public double getCapacity() {
+        return capacity.get();
+    }
+    
+    
+    public void setCapacity(double cap) {
+        capacity.set(Math.max(0.0, cap));
+    }
+    
+    
+    public int getEggCount() {
+        return eggCount.get();
+    }
+    
+    
+    public void setEggCount(int count) {
+        eggCount.set(Math.max(0, count));
+    }
+    
+    
+    // Atomic operations for eggs
+    public int addEggs(int eggsToAdd) {
+        return eggCount.addAndGet(eggsToAdd);
+    }
+    
+    
+    public int takeEggs(int eggsToTake) {
+        return eggCount.updateAndGet(current -> {
+            int taken = Math.min(current, eggsToTake);
+            return current - taken;
+        });
+    }
+    
+    
+    // Batch operation for hatching
+    public int hatchEggs(double hatchProbability) {
+        synchronized (batchLock) {
+            int currentEggs = eggCount.get();
+            if (currentEggs == 0) return 0;
+            
+            int eggsToHatch = (int) (currentEggs * hatchProbability);
+            eggsToHatch = Math.max(1, Math.min(eggsToHatch, currentEggs));
+            
+            // Atomically update both counts
+            eggCount.addAndGet(-eggsToHatch);
+            larvalCount.addAndGet(eggsToHatch);
+            
+            return eggsToHatch;
         }
-        return 0;
     }
-
-    public void addEggs(int count) {
-        this.larvalCount = (int) Math.min(capacity, this.larvalCount + count);
-    }
+    
 
     @Override
-    public void update(Project project, TimeManager tm) {
-        // Updated via the Engine's parallel loop for performance
+    public void updateState(Project project, TimeManager timeManager) {
+        
     }
 }package com.monadvsim.app.models.entities;
 
 
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Objects;
+
+
+//for optimal memory usage
+public class GridCell {
+    public final int gridX;
+    public final int gridY;
+    private final ConcurrentLinkedQueue<Agent> agents;
+    
+    
+    public GridCell(int gridX, int gridY) {
+        this.gridX = gridX;
+        this.gridY = gridY;
+        this.agents = new ConcurrentLinkedQueue<>();
+    }
+    
+    
+    public void addAgent(Agent agent) {
+        agents.add(agent);
+    }
+    
+    
+    public void removeAgent(Agent agent) {
+        agents.remove(agent);
+    }
+    
+    
+    public List<Agent> getAgents() {
+        return new ArrayList<>(agents);
+    }
+    
+    
+    public boolean isEmpty() {
+        return agents.isEmpty();
+    }
+    
+    
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        GridCell gridCell = (GridCell) o;
+        return gridX == gridCell.gridX && gridY == gridCell.gridY;
+    }
+    
+    
+    @Override
+    public int hashCode() {
+        return Objects.hash(gridX, gridY);
+    }
+    
+}
+package com.monadvsim.app.models.entities;
+
+
 import java.awt.Shape;
-import java.awt.geom.Point2D;
 import java.util.ArrayList;
 import java.util.List;
 
+
 public class VectorLayer extends Layer {
-    // List of geometries (Boundaries, Buildings, etc.)
+    
     private List<Shape> geometries;
 
+    
     public VectorLayer(String name) {
         super(name);
         this.geometries = new ArrayList<>();
     }
 
-    /**
-     * Spatial Check: Is a specific coordinate inside any of our shapes?
-     * Useful for checking "Are you inside a building?" or "Are you out of bounds?"
-     */
+    
     public boolean contains(double x, double y) {
         for (Shape s : geometries) {
             if (s.contains(x, y)) return true;
         }
         return false;
     }
+    
 
     public void addGeometry(Shape shape) {
         this.geometries.add(shape);
     }
+    
 
     public List<Shape> getGeometries() {
         return geometries;
     }
+    
 
     @Override
-    public void update(long tick, double deltaT) {
-        // Usually static, but can be used for "moving" boundaries if needed.
+    public void update(Project project) {
+        // usually static so do not change between ticks
+    }
+
+    
+    @Override
+    public double getValueAt(double x, double y) {
+        return 0.0;
     }
 }package com.monadvsim.app.models.entities;
 
+
 import com.monadvsim.app.models.engine.TimeManager;
-import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+
 
 public class LivingAgent extends Agent {
-    private boolean alive = true;
-    private boolean isGravid = false;
-    private int age = 0;
+    // Using atomic types for thread-safe state
+    private final AtomicBoolean alive = new AtomicBoolean(true);
+    private final AtomicBoolean gravid = new AtomicBoolean(false);
+    private final AtomicInteger age = new AtomicInteger(0);
+    private final AtomicReference<LifecycleStage> stage = 
+        new AtomicReference<>(LifecycleStage.ADULT);
+    private final AtomicReference<Double> energy = new AtomicReference<>(1.0);
+    // For move operations, we need synchronization
+    private final Object positionLock = new Object();
+    private volatile double volatileX, volatileY;
 
+    
     public LivingAgent(double x, double y) {
-        super(x, y, "Adult");
+        super(x, y);
+        this.volatileX = x;
+        this.volatileY = y;
     }
-
+   
+    
+    public LivingAgent(double x, double y, String name) {
+        super(x, y, name);
+        this.volatileX = x;
+        this.volatileY = y;
+    }
+    
+    
+    // Thread-safe getters and setters
+    public boolean isAlive() {
+        return alive.get();
+    }
+    
+    
+    public boolean setAlive(boolean newAlive) {
+        return alive.compareAndSet(!newAlive, newAlive);
+    }
+    
+    
+    public boolean isGravid() {
+        return gravid.get();
+    }
+    
+    
+    public void setGravid(boolean gravid) {
+        this.gravid.set(gravid);
+    }
+    
+    
+    public int getAge() {
+        return age.get();
+    }
+    
+    
+    public void incrementAge() {
+        age.incrementAndGet();
+    }
+    
+    
+    public void setAge(int newAge) {
+        age.set(newAge);
+    }
+    
+    
+    public LifecycleStage getStage() {
+        return stage.get();
+    }
+    
+    
+    public void setStage(LifecycleStage newStage) {
+        stage.set(newStage);
+    }
+    
+    
+    public double getEnergy() {
+        return energy.get();
+    }
+    
+    
+    public void setEnergy(double newEnergy) {
+        energy.set(Math.max(0.0, newEnergy));
+    }
+    
+    
+    // Thread-safe move operation
+    public void move(double dx, double dy) {
+        synchronized (positionLock) {
+            this.volatileX += dx;
+            this.volatileY += dy;
+            super.setX(this.volatileX);
+            super.setY(this.volatileY);
+        }
+    }
+    
+    
+    // Thread-safe position getters
     @Override
-    public void update(Project project, TimeManager tm) {
-        if (!alive) return;
-        age++;
-        
-        // 1. Environmental Data Ingestion
-        RasterLayer tempLayer = project.getRasterByName("Temperature");
-        double tempC = (tempLayer != null) ? tempLayer.getValueAt(x, y) - 273.15 : 25.0;
-        
-        RasterLayer elevLayer = project.getRasterByName("Elevation");
-        double elevation = (elevLayer != null) ? elevLayer.getValueAt(x, y) : 2300;
-
-        // 2. ADJUSTED MORTALITY LOGIC
-        // We need a higher baseline death rate to prevent millions of agents.
-        // Probability 0.008 per tick results in ~50% survival over 4 days.
-        double deathProb = 0.008; 
-
-        // High elevation stress
-        if (elevation > 2500 && Math.random() < 0.02) {
-            this.alive = false;
-            return;
-        }
-
-        // Extreme temperature or old age (>21 days) kills the agent faster
-        if (tempC > 38 || tempC < 12 || age > 2000) {
-            deathProb = 0.15; 
-        }
-
-        if (Math.random() < deathProb) {
-            this.alive = false;
-            return;
-        }
-
-        // 3. BIOLOGICAL CYCLE
-        if (isGravid) {
-            seekAndLayEggs(project);
-        } else {
-            seekBloodMeal(project);
+    public double getX() {
+        return volatileX; // volatile ensures visibility
+    }
+    
+    
+    @Override
+    public double getY() {
+        return volatileY;
+    }
+    
+    
+    @Override
+    public void setX(double x) {
+        synchronized (positionLock) {
+            this.volatileX = x;
+            super.setX(x);
         }
     }
-
-    private void seekBloodMeal(Project project) {
-        RasterLayer pop = project.getRasterByName("Population");
-        double density = (pop != null) ? pop.getValueAt(x, y) : 0.0;
-
-        // Move toward humans (Biased Walk)
-        this.x += (Math.random() - 0.5) * 0.001 + (density * 0.0001);
-        this.y += (Math.random() - 0.5) * 0.001 + (density * 0.0001);
-
-        // Success rate for blood meal (10% per tick if humans present)
-        if (density > 0.1 && Math.random() < 0.1) {
-            isGravid = true;
+    
+    
+    @Override
+    public void setY(double y) {
+        synchronized (positionLock) {
+            this.volatileY = y;
+            super.setY(y);
         }
     }
-
-    private void seekAndLayEggs(Project project) {
-        if (project.getSpatialRegistry() == null) return;
+    
+    
+    @Override
+    public void updateState(Project project, TimeManager timeManager) {
         
-        // Search radius for breeding sites
-        List<Agent> nearby = project.getSpatialRegistry().getNearbyAgents(x, y, 0.01);
-        for (Agent a : nearby) {
-            if (a instanceof InertAgent tank) {
-                // REDUCED: Laying 10 eggs instead of 50 to keep growth manageable
-                tank.addEggs(10); 
-                isGravid = false;
-                return;
-            }
-        }
-        
-        // Random search move if no tank found
-        this.x += (Math.random() - 0.5) * 0.001;
-        this.y += (Math.random() - 0.5) * 0.001;
     }
-
-    @Override public boolean isAlive() { return alive; }
-    @Override public String getLifecycleStage() { return isGravid ? "Gravid" : "Adult"; }
 }package com.monadvsim.app;
 
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
+import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import java.awt.geom.Rectangle2D;
 import java.time.LocalDateTime;
 import java.util.Random;
 
 public class App {
     public static void main(String[] args) {
+        System.out.print("Hello world");
+        test();
+    }
+    
+    
+    private static void test(){
+        System.out.println("Starting Multi-Agent Simulation with Climate Data");
+        
         try {
-            Project project = new Project("Addis_Ababa_MVS_V2");
+            // 1. Create project
+            Project project = new Project("Mosquito Simulation");
+            project.setDefaultAgentSearchRadius(0.005); // 5 meters
+            project.setDefaultAgentStep(0.0005); // 50 cm in 15 min
+            project.setDefaultBirthRate(20);
             
-            // FIX: Use LocalDateTime to match new TimeManager
-            LocalDateTime simStart = LocalDateTime.of(2024, 1, 1, 0, 0);
-            TimeManager timeManager = new TimeManager(simStart, 500, 15); 
             
-            ProjectPersistenceService persistence = new ProjectPersistenceService();
-
-            double minLon = 38.70, maxLon = 38.80;
-            double minLat = 8.95, maxLat = 9.05;
-
-            // Initialize 5 Layers
-            RasterLayer pop = new RasterLayer("Population", 100, 100, 1);
-            RasterLayer temp = new RasterLayer("Temperature", 100, 100, 3000);
-            RasterLayer rain = new RasterLayer("Rainfall", 100, 100, 3000);
-            RasterLayer elev = new RasterLayer("Elevation", 100, 100, 1);
-            RasterLayer build = new RasterLayer("Buildings", 100, 100, 1);
-
-            RasterLayer[] allRasters = {pop, temp, rain, elev, build};
-            for (RasterLayer r : allRasters) {
-                r.setBounds(minLon, maxLon, minLat, maxLat);
-                project.addLayer(r);
-            }
-
-            persistence.loadRasterData(pop, "prepared_data/pop_addis.tiff");
-            persistence.loadRasterData(elev, "prepared_data/elev_addis.tiff");
-            persistence.loadRasterData(build, "prepared_data/buildings_addis.tiff");
-            persistence.loadClimateNetCDF(temp, rain, "prepared_data/climate_2024_01.nc");
-
-            Rectangle2D worldBounds = new Rectangle2D.Double(minLon, minLat, 0.1, 0.1);
-            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds);
-
-            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes");
-            AgentLayer habitatLayer = new AgentLayer("Water_Tanks");
-            Random rand = new Random();
-
-            for (int i = 0; i < 2000; i++) {
-                double rx = minLon + 0.1 * rand.nextDouble();
-                double ry = minLat + 0.1 * rand.nextDouble();
-                if (build.getValueAt(rx, ry) > 0.5) {
-                    InertAgent tank = new InertAgent(rx, ry);
-                    tank.addEggs(100); 
-                    habitatLayer.addAgent(tank);
-                }
-                if (pop.getValueAt(rx, ry) > 0.5 && i < 500) {
-                    mosquitoLayer.addAgent(new LivingAgent(rx, ry));
-                }
-            }
+            // 2. Set up time manager (simulate 30 days at 15-minute intervals)
+            LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
+            int totalTicks = 30 * 24 * 4; // 30 days * 24 hours * 4 (15-min intervals)
+            TimeManager timeManager = new TimeManager(startDate, totalTicks, 15);
             
-            project.addLayer(mosquitoLayer);
-            project.addLayer(habitatLayer);
-
-            SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
-            engine.run(); // Executes the simulation
-
-            persistence.exportToCSV(project, "output/synthetic_surveillance_results.csv");
-            System.out.println("=== Simulation Complete ===");
-
+            // 3. Create spatial registry
+            Rectangle2D worldBounds = new Rectangle2D.Double(-180, -90, 360, 180);
+            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 1.0); // 1-degree cells
+            
+            // 4. Load climate data
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+            String netcdfFile = "prepared_data/climate_2023_50_km_6.nc";
+            
+            ClimateDatasetManager climateManager = persistenceService.loadClimateData(
+                project, netcdfFile, timeManager);
+            
+            // 5. Create agent layers with climate-aware rules
+//            RuleEngine ruleEngine = new RuleEngine();
+//            AgentLifecycleManager lifecycleManager = new AgentLifecycleManager(spatialRegistry);
+//            
+//            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
+//            
+//            // Add climate-dependent rules
+//            mosquitoLayer.addRule(
+//                "temperature > 298 && precipitation < 0.001", // ~25°C and dry
+//                "reproduce",
+//                1
+//            );
+//            
+//            mosquitoLayer.addRule(
+//                "temperature < 283 || temperature > 313", // <10°C or >40°C
+//                "die",
+//                2
+//            );
+//            
+//            mosquitoLayer.addRule(
+//                "wind_speed > 10", // High wind
+//                "move_shelter",
+//                3
+//            );
+//            
+//            project.addLayer(mosquitoLayer);
+//            project.setSpatialRegistry(spatialRegistry);
+            
+//            // 6. Create simulation engine
+//            SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
+//            
+//            // 7. Run simulation in a separate thread
+//            Thread simulationThread = new Thread(engine);
+//            simulationThread.start();
+//            
+//            // 8. Add shutdown hook
+//            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+//                System.out.println("Shutting down simulation...");
+//                engine.stop();
+//                try {
+//                    simulationThread.join(5000);
+//                } catch (InterruptedException e) {
+//                    Thread.currentThread().interrupt();
+//                }
+//            }));
+            
         } catch (Exception e) {
+            System.err.println("Error: " + e.getMessage());
             e.printStackTrace();
         }
     }

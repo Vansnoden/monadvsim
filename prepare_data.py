@@ -107,9 +107,9 @@ def download_climate_timeseries(lat, lon, buffer_km, year, month, output_path):
 if __name__ == "__main__":
     # Addis Ababa Coordinates
     LAT, LON = 9.02650000, 38.73119444
-    BUFFER = 100.0 # 100km radius
-    YEAR = 2026
-    MONTH = 1
+    BUFFER = 50.0 # 50km radius
+    YEAR = 2023
+    MONTH = 6
     DATA_DIR = "prepared_data"
 
 
