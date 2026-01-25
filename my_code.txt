@@ -1749,9 +1749,16 @@ import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import com.monadvsim.app.models.utils.ResourceManager;
+import com.monadvsim.app.models.utils.ResourceManager.GridCoverageWrapper;
+import java.awt.image.RenderedImage;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
+import org.geotools.coverage.grid.GridCoverage2D;
+import org.geotools.coverage.grid.io.AbstractGridFormat;
+import org.geotools.coverage.grid.io.GridCoverage2DReader;
+import org.geotools.coverage.grid.io.GridFormatFinder;
+import org.geotools.geometry.jts.ReferencedEnvelope;
 
 public class ProjectPersistenceService {
     
@@ -1759,18 +1766,115 @@ public class ProjectPersistenceService {
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
-        // Here you would use a library like GeoTools or GDAL.
-        // For your PhD MVS, we ensure the layer is flagged as 'loaded' with data.
-        System.out.println("✅ Ingested Spatial Layer: " + layer.getName() + " [" + filePath + "]");
+        System.out.println("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
         
-        // Safety Fallback: fill with 1.0 so the simulation doesn't have "dead zones"
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new FileNotFoundException("File not found: " + filePath);
+        }
+        
+        try {
+            // Find appropriate reader for the raster format
+            AbstractGridFormat format = GridFormatFinder.findFormat(file);
+            if (format == null) {
+                throw new IOException("No suitable raster format found for: " + filePath);
+            }
+            
+            GridCoverage2DReader reader = format.getReader(file);
+            if (reader == null) {
+                throw new IOException("Unable to create reader for: " + filePath);
+            }
+            
+            // Read the coverage
+            GridCoverage2D coverage = reader.read(null);
+            if (coverage == null) {
+                throw new IOException("Unable to read coverage from: " + filePath);
+            }
+            
+            // Get the raster dimensions
+            RenderedImage image = coverage.getRenderedImage();
+            int width = image.getWidth();
+            int height = image.getHeight();
+            
+            System.out.printf("  Raster dimensions: %d x %d%n", width, height);
+            
+            // Get the geographic bounds
+            ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
+            double minX = envelope.getMinX();
+            double maxX = envelope.getMaxX();
+            double minY = envelope.getMinY();
+            double maxY = envelope.getMaxY();
+            
+            System.out.printf("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
+                minX, minY, maxX, maxY);
+            
+            // Initialize the layer with correct dimensions
+            layer.initialize(width, height, 1); // Static raster has 1 frame
+            layer.setBounds(minX, maxX, minY, maxY);
+            
+            // Read the raster data
+            readRasterData(layer, image, width, height);
+            
+            GridCoverageWrapper wrapper = new GridCoverageWrapper(coverage, filePath);
+            // Track resource for cleanup
+            resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
+            
+            System.out.println("✅ Successfully loaded raster: " + layer.getName());
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error loading raster: " + filePath + " - " + e.getMessage());
+            e.printStackTrace();
+            
+            // Fallback: create a 100x100 grid with default values
+            System.out.println("⚠️ Using fallback 100x100 grid for: " + layer.getName());
+            fallbackRaster(layer);
+        }
+    }
+    
+    
+    private void fallbackRaster(RasterLayer layer) {
+        // Create a simple 100x100 grid with some variation
+        layer.initialize(100, 100, 1);
+        layer.setBounds(-180, 180, -90, 90); // World bounds
+        
         for (int x = 0; x < 100; x++) {
             for (int y = 0; y < 100; y++) {
-                layer.setData(0, x, y, 1.0);
+                // Create some artificial data pattern
+                double value = 1.0 + Math.sin(x * 0.1) * Math.cos(y * 0.1) * 0.5;
+                layer.setData(0, x, y, value);
             }
         }
     }
 
+    
+    private void readRasterData(RasterLayer layer, RenderedImage image, int width, int height) {
+        // Get the raster data
+        java.awt.image.Raster raster = image.getData();
+        
+        // Read pixel values
+        double[] pixel = new double[1]; // Assuming single band for now
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                try {
+                    raster.getPixel(x, y, pixel);
+                    layer.setData(0, x, y, pixel[0]);
+                } catch (Exception e) {
+                    // If there's an error reading a pixel, use 0.0
+                    layer.setData(0, x, y, 0.0);
+                }
+            }
+        }
+        
+        // Print sample values for verification
+        System.out.printf("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
+            layer.getDataGrid()[0][0][0],
+            layer.getDataGrid()[0][width-1][0],
+            layer.getDataGrid()[0][0][height-1],
+            layer.getDataGrid()[0][width-1][height-1]
+        );
+    }
+    
+    
     // New method to handle dual-variable NetCDF (Temp + Rain)
     public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
         // This method should map '2m_temperature' -> tempLayer
@@ -2341,7 +2445,7 @@ public final class ResourceManager implements Closeable {
     /**
      * Register a resource for tracking
      */
-    public <T extends Closeable> T track(String resourceType, T resource, String description) {
+    public <T extends AutoCloseable> T track(String resourceType, T resource, String description) {
         String id = UUID.randomUUID().toString();
         ResourceTracker tracker = new ResourceTracker(id, resourceType, description, System.currentTimeMillis());
         
@@ -5198,8 +5302,22 @@ public class App {
             
             // load static rasters
             String elevation_50_km_file = "prepared_data/elevation_50_km.tiff";
+            String buildings_50_km_file = "prepared_data/buildings_50_km.tiff";
+            String population_50_km_file = "prepared_data/pop_density_50_km.tiff";
             RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
-            persistenceService.loadRasterData(elev, elevation_50_km_file);
+            RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
+            RasterLayer population = new MemoryMappedRasterLayer("Population", 1, 1, 1);
+            try {
+                persistenceService.loadRasterData(elev, elevation_50_km_file);
+                persistenceService.loadRasterData(buildings, buildings_50_km_file);
+                persistenceService.loadRasterData(population, population_50_km_file);
+                project.addLayer(elev);
+                project.addLayer(buildings);
+                project.addLayer(population);
+            } catch (Exception e) {
+                System.err.println("-> Failed to load raster layers: " + e.getMessage());
+                // Continue with simulation without elevation
+            }
             
             
             // Load climate data
@@ -5217,44 +5335,44 @@ public class App {
             
             
             
+            // Create agent layers with climate-aware rules
+            RuleEngine ruleEngine = new RuleEngine();
+            AgentLifecycleManager lifecycleManager = new AgentLifecycleManager(spatialRegistry);
+
+            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
+            
+            // Add climate-dependent rules
+            mosquitoLayer.addRule(
+                "temperature > 298 && precipitation < 0.001", // ~25°C and dry
+                "reproduce",
+                1
+            );
+    
+            mosquitoLayer.addRule(
+                "temperature < 283 || temperature > 313", // <10°C or >40°C
+                "die",
+                2
+            );
+            
+            project.addLayer(mosquitoLayer);
+            
+            AgentLayer habitatLayer = new AgentLayer("WaterTanks", ruleEngine);
+            
+            project.addLayer(habitatLayer);
+            project.setSpatialRegistry(spatialRegistry);
+            
+            seedInitialPopulation(mosquitoLayer, 
+                    habitatLayer, buildings, population, spatialRegistry);
             
             
-            // 5. Create agent layers with climate-aware rules
-//            RuleEngine ruleEngine = new RuleEngine();
-//            AgentLifecycleManager lifecycleManager = new AgentLifecycleManager(spatialRegistry);
-//            
-//            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
-//            
-//            // Add climate-dependent rules
-//            mosquitoLayer.addRule(
-//                "temperature > 298 && precipitation < 0.001", // ~25°C and dry
-//                "reproduce",
-//                1
-//            );
-//            
-//            mosquitoLayer.addRule(
-//                "temperature < 283 || temperature > 313", // <10°C or >40°C
-//                "die",
-//                2
-//            );
-//            
-//            mosquitoLayer.addRule(
-//                "wind_speed > 10", // High wind
-//                "move_shelter",
-//                3
-//            );
-//            
-//            project.addLayer(mosquitoLayer);
-//            project.setSpatialRegistry(spatialRegistry);
-            
-//            // 6. Create simulation engine
+//            // Create simulation engine
 //            SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
 //            
-//            // 7. Run simulation in a separate thread
+//            // Run simulation in a separate thread
 //            Thread simulationThread = new Thread(engine);
 //            simulationThread.start();
 //            
-//            // 8. Add shutdown hook
+//            // Add shutdown hook
 //            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 //                System.out.println("Shutting down simulation...");
 //                engine.stop();
@@ -5269,6 +5387,59 @@ public class App {
             System.err.println("Error: " + e.getMessage());
             e.printStackTrace();
         }
+    }
+    
+    
+    private static void seedInitialPopulation(AgentLayer habitatLayer, 
+                                             AgentLayer mosquitoLayer,
+                                             RasterLayer buildings,
+                                             RasterLayer population,
+                                             SpatialRegistry spatialRegistry) {
+        System.out.println("Seeding initial population with immediate spatial registration...");
+        
+        Random rand = new Random();
+        int tanksToSeed = 1000;
+        int mosquitoesToSeed = 500;
+        
+        double minLon = 38.70, minLat = 8.95;
+        double widthLon = 0.1, heightLat = 0.1;
+        
+        // Seed water tanks
+        for (int i = 0; i < tanksToSeed; i++) {
+            double rx = minLon + (widthLon * rand.nextDouble());
+            double ry = minLat + (heightLat * rand.nextDouble());
+            
+            // Only in built-up areas
+            if (buildings.getValueAt(rx, ry) > 0.5) {
+                InertAgent tank = new InertAgent(rx, ry);
+                tank.setLarvalCount(rand.nextInt(50) + 10);
+                tank.setCapacity(200);
+                
+                // Add to layer AND register immediately in spatial registry
+                habitatLayer.addAgent(tank);
+                spatialRegistry.registerAgent(tank);
+            }
+        }
+        
+        // Seed mosquitoes
+        for (int i = 0; i < mosquitoesToSeed; i++) {
+            double rx = minLon + (widthLon * rand.nextDouble());
+            double ry = minLat + (heightLat * rand.nextDouble());
+            
+            // Only in populated areas
+            if (population.getValueAt(rx, ry) > 0.3) {
+                LivingAgent mosquito = new LivingAgent(rx, ry);
+                mosquito.setAge(rand.nextInt(500));
+                mosquito.setGravid(rand.nextDouble() < 0.3);
+                
+                // Add to layer AND register immediately
+                mosquitoLayer.addAgent(mosquito);
+                spatialRegistry.registerAgent(mosquito);
+            }
+        }
+        
+        System.out.printf("Seeded: %d tanks, %d mosquitoes%n", 
+            habitatLayer.getAgents().size(), mosquitoLayer.getAgents().size());
     }
 }package com.monadvsim.app;
 

@@ -30,18 +30,18 @@ def download_gee_data(lat, lon, buffer_km, output_folder):
 
     # Building Footprints (Google Open Buildings)
     # We filter by confidence to reduce feature count and improve raster validity
-    buildings = ee.FeatureCollection("GOOGLE/Research/open-buildings/v3/polygons") \
-                  .filterBounds(region_of_interest) \
-                  .filter(ee.Filter.gte('confidence', 0.65))
-    build_img = buildings.reduceToImage(
-        properties=['area_in_meters'], 
-        reducer=ee.Reducer.count()
-    ).unmask(0).reproject(crs='EPSG:4326', scale=100).clip(region_of_interest)
+    # buildings = ee.FeatureCollection("GOOGLE/Research/open-buildings/v3/polygons") \
+    #               .filterBounds(region_of_interest) \
+    #               .filter(ee.Filter.gte('confidence', 0.65))
+    # build_img = buildings.reduceToImage(
+    #     properties=['area_in_meters'], 
+    #     reducer=ee.Reducer.count()
+    # ).unmask(0).reproject(crs='EPSG:4326', scale=100).clip(region_of_interest)
 
     datasets = {
         f"pop_density_{int(buffer_km)}_km.tiff": pop_img,
         f"elevation_{int(buffer_km)}_km.tiff": elev_img,
-        f"buildings_{int(buffer_km)}_km.tiff": build_img
+        # f"buildings_{int(buffer_km)}_km.tiff": build_img
     }
 
     for name, img in datasets.items():

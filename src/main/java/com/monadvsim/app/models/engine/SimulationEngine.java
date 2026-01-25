@@ -2,6 +2,7 @@ package com.monadvsim.app.models.engine;
 
 
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
 import java.util.*;
@@ -168,19 +169,34 @@ public class SimulationEngine implements Runnable {
     private void reportTickProgress(long tickStart) {
         long tickDuration = System.nanoTime() - tickStart;
         
-        if (timeManager.getTickCount() % 10 == 0) {
-            reportProgress();
-            
-            // Report spatial registry statistics
-            if (timeManager.getTickCount() % 100 == 0) {
-                reportSpatialStatistics();
-            }
+//        if (timeManager.getTickCount() % 10 == 0) {
+//            reportProgress();
+//            
+//            // Report spatial registry statistics
+//            if (timeManager.getTickCount() % 100 == 0) {
+//                reportSpatialStatistics();
+//            }
+//        }
+        
+        
+        if (timeManager.getTickCount() % 100 == 0) { // Every 100 ticks
+            exportSnapshot(project);
         }
         
         // Update performance metrics
         updatePerformanceMetrics(tickDuration);
     }
     
+
+    private void exportSnapshot(Project project) {
+        try {
+            String filename = String.format("results/snapshot_tick_%d.csv", timeManager.getTickCount());
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+            persistenceService.exportToCSV(project, filename);
+        } catch (Exception e) {
+            System.err.println("Error exporting snapshot: " + e.getMessage());
+        }
+    }
     
     private void reportSpatialStatistics() {
         SpatialRegistry registry = 
