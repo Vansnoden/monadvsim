@@ -4,9 +4,16 @@ import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import com.monadvsim.app.models.utils.ResourceManager;
+import com.monadvsim.app.models.utils.ResourceManager.GridCoverageWrapper;
+import java.awt.image.RenderedImage;
 import java.io.*;
 import java.util.ArrayList;
 import java.util.List;
+import org.geotools.coverage.grid.GridCoverage2D;
+import org.geotools.coverage.grid.io.AbstractGridFormat;
+import org.geotools.coverage.grid.io.GridCoverage2DReader;
+import org.geotools.coverage.grid.io.GridFormatFinder;
+import org.geotools.geometry.jts.ReferencedEnvelope;
 
 public class ProjectPersistenceService {
     
@@ -14,18 +21,115 @@ public class ProjectPersistenceService {
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
-        // Here you would use a library like GeoTools or GDAL.
-        // For your PhD MVS, we ensure the layer is flagged as 'loaded' with data.
-        System.out.println("✅ Ingested Spatial Layer: " + layer.getName() + " [" + filePath + "]");
+        System.out.println("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
         
-        // Safety Fallback: fill with 1.0 so the simulation doesn't have "dead zones"
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new FileNotFoundException("File not found: " + filePath);
+        }
+        
+        try {
+            // Find appropriate reader for the raster format
+            AbstractGridFormat format = GridFormatFinder.findFormat(file);
+            if (format == null) {
+                throw new IOException("No suitable raster format found for: " + filePath);
+            }
+            
+            GridCoverage2DReader reader = format.getReader(file);
+            if (reader == null) {
+                throw new IOException("Unable to create reader for: " + filePath);
+            }
+            
+            // Read the coverage
+            GridCoverage2D coverage = reader.read(null);
+            if (coverage == null) {
+                throw new IOException("Unable to read coverage from: " + filePath);
+            }
+            
+            // Get the raster dimensions
+            RenderedImage image = coverage.getRenderedImage();
+            int width = image.getWidth();
+            int height = image.getHeight();
+            
+            System.out.printf("  Raster dimensions: %d x %d%n", width, height);
+            
+            // Get the geographic bounds
+            ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
+            double minX = envelope.getMinX();
+            double maxX = envelope.getMaxX();
+            double minY = envelope.getMinY();
+            double maxY = envelope.getMaxY();
+            
+            System.out.printf("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
+                minX, minY, maxX, maxY);
+            
+            // Initialize the layer with correct dimensions
+            layer.initialize(width, height, 1); // Static raster has 1 frame
+            layer.setBounds(minX, maxX, minY, maxY);
+            
+            // Read the raster data
+            readRasterData(layer, image, width, height);
+            
+            GridCoverageWrapper wrapper = new GridCoverageWrapper(coverage, filePath);
+            // Track resource for cleanup
+            resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
+            
+            System.out.println("✅ Successfully loaded raster: " + layer.getName());
+            
+        } catch (Exception e) {
+            System.err.println("❌ Error loading raster: " + filePath + " - " + e.getMessage());
+            e.printStackTrace();
+            
+            // Fallback: create a 100x100 grid with default values
+            System.out.println("⚠️ Using fallback 100x100 grid for: " + layer.getName());
+            fallbackRaster(layer);
+        }
+    }
+    
+    
+    private void fallbackRaster(RasterLayer layer) {
+        // Create a simple 100x100 grid with some variation
+        layer.initialize(100, 100, 1);
+        layer.setBounds(-180, 180, -90, 90); // World bounds
+        
         for (int x = 0; x < 100; x++) {
             for (int y = 0; y < 100; y++) {
-                layer.setData(0, x, y, 1.0);
+                // Create some artificial data pattern
+                double value = 1.0 + Math.sin(x * 0.1) * Math.cos(y * 0.1) * 0.5;
+                layer.setData(0, x, y, value);
             }
         }
     }
 
+    
+    private void readRasterData(RasterLayer layer, RenderedImage image, int width, int height) {
+        // Get the raster data
+        java.awt.image.Raster raster = image.getData();
+        
+        // Read pixel values
+        double[] pixel = new double[1]; // Assuming single band for now
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                try {
+                    raster.getPixel(x, y, pixel);
+                    layer.setData(0, x, y, pixel[0]);
+                } catch (Exception e) {
+                    // If there's an error reading a pixel, use 0.0
+                    layer.setData(0, x, y, 0.0);
+                }
+            }
+        }
+        
+        // Print sample values for verification
+        System.out.printf("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
+            layer.getDataGrid()[0][0][0],
+            layer.getDataGrid()[0][width-1][0],
+            layer.getDataGrid()[0][0][height-1],
+            layer.getDataGrid()[0][width-1][height-1]
+        );
+    }
+    
+    
     // New method to handle dual-variable NetCDF (Temp + Rain)
     public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
         // This method should map '2m_temperature' -> tempLayer

@@ -3,6 +3,7 @@ package com.monadvsim.app.models.utils;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
+import java.awt.geom.Rectangle2D;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -76,6 +77,21 @@ public class ClimateDatasetManager {
                 }
             }
         }
+    }
+    
+    // get world bounds
+    public Rectangle2D getBounds() {
+        if (layers.isEmpty()) {
+            return null;
+        }
+
+        InterpolatedRasterLayer firstLayer = layers.values().iterator().next();
+        return new Rectangle2D.Double(
+            firstLayer.getMinLon(),
+            firstLayer.getMinLat(),
+            firstLayer.getMaxLon() - firstLayer.getMinLon(),
+            firstLayer.getMaxLat() - firstLayer.getMinLat()
+        );
     }
     
     /**

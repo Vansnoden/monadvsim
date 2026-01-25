@@ -2585,6 +2585,7 @@ package com.monadvsim.app.models.utils;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
+import java.awt.geom.Rectangle2D;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
@@ -2658,6 +2659,21 @@ public class ClimateDatasetManager {
                 }
             }
         }
+    }
+    
+    // get world bounds
+    public Rectangle2D getBounds() {
+        if (layers.isEmpty()) {
+            return null;
+        }
+
+        InterpolatedRasterLayer firstLayer = layers.values().iterator().next();
+        return new Rectangle2D.Double(
+            firstLayer.getMinLon(),
+            firstLayer.getMinLat(),
+            firstLayer.getMaxLon() - firstLayer.getMinLon(),
+            firstLayer.getMaxLat() - firstLayer.getMinLat()
+        );
     }
     
     /**
@@ -5167,26 +5183,38 @@ public class App {
         try {
             // 1. Create project
             Project project = new Project("Mosquito Simulation");
-            project.setDefaultAgentSearchRadius(0.005); // 5 meters
-            project.setDefaultAgentStep(0.0005); // 50 cm in 15 min
+            // 1 degree of latitude is about 111 km
+            project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
+            project.setDefaultAgentStep(0.000005); // about 55.5 cm
             project.setDefaultBirthRate(20);
             
             
-            // 2. Set up time manager (simulate 30 days at 15-minute intervals)
+            // Set up time manager (simulate 30 days at 15-minute intervals)
             LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
             int totalTicks = 30 * 24 * 4; // 30 days * 24 hours * 4 (15-min intervals)
             TimeManager timeManager = new TimeManager(startDate, totalTicks, 15);
             
-            // 3. Create spatial registry
-            Rectangle2D worldBounds = new Rectangle2D.Double(-180, -90, 360, 180);
-            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 1.0); // 1-degree cells
-            
-            // 4. Load climate data
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+            
+            // load static rasters
+            String elevation_50_km_file = "prepared_data/elevation_50_km.tiff";
+            RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
+            persistenceService.loadRasterData(elev, elevation_50_km_file);
+            
+            
+            // Load climate data
             String netcdfFile = "prepared_data/climate_2023_50_km_6.nc";
             
             ClimateDatasetManager climateManager = persistenceService.loadClimateData(
-                project, netcdfFile, timeManager);
+                project, netcdfFile, timeManager); // automatically adds climate layers
+            
+            // Create spatial registry
+            Rectangle2D worldBounds = climateManager.getBounds();
+            if (worldBounds == null) {
+                worldBounds = new Rectangle2D.Double(-180, -90, 360, 180); // global  bounds default
+            }
+            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 1.0); // 1-degree cells
+            
             
             
             

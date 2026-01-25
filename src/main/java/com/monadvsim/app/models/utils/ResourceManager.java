@@ -50,7 +50,7 @@ public final class ResourceManager implements Closeable {
     /**
      * Register a resource for tracking
      */
-    public <T extends Closeable> T track(String resourceType, T resource, String description) {
+    public <T extends AutoCloseable> T track(String resourceType, T resource, String description) {
         String id = UUID.randomUUID().toString();
         ResourceTracker tracker = new ResourceTracker(id, resourceType, description, System.currentTimeMillis());
         
