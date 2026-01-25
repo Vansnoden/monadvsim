@@ -21,3 +21,6 @@ buildNumber.properties
 *.nc
 *.tiff
 *.tif
+*.tiff.aux.xml
+*.tif.aux.xml
+
