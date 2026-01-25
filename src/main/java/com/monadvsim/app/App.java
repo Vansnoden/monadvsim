@@ -41,13 +41,13 @@ public class App {
             String population_50_km_file = "prepared_data/pop_density_50_km.tiff";
             try {
                 RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
-                RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
+//                RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
                 RasterLayer population = new MemoryMappedRasterLayer("Population", 1, 1, 1);
                 persistenceService.loadRasterData(elev, elevation_50_km_file);
-                persistenceService.loadRasterData(buildings, buildings_50_km_file);
+//                persistenceService.loadRasterData(buildings, buildings_50_km_file);
                 persistenceService.loadRasterData(population, population_50_km_file);
                 project.addLayer(elev);
-                project.addLayer(buildings);
+//                project.addLayer(buildings);
                 project.addLayer(population);
             } catch (Exception e) {
                 System.err.println("-> Failed to load raster layers: " + e.getMessage());
