@@ -1,9 +1,12 @@
 package com.monadvsim.app.models.services;
 
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.utils.ResourceManager;
 import java.io.*;
 
 public class ProjectPersistenceService {
+    
+    private final ResourceManager resourceManager = ResourceManager.getInstance();
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
@@ -48,10 +51,16 @@ public class ProjectPersistenceService {
                     double t = (temp != null) ? temp.getValueAt(agent.getX(), agent.getY()) - 273.15 : 25.0;
                     double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0; // m to mm
                     double p = (pop != null) ? pop.getValueAt(agent.getX(), agent.getY()) : 0.0;
+                    LifecycleStage stage = LifecycleStage.UNDEFINED;
+                    boolean alive = false;
+                    if (agent instanceof LivingAgent la){ 
+                        alive = la.isAlive();
+                        stage = la.getStage();
+                    }
 
                     writer.printf("%s,%.6f,%.6f,%s,%b,%.2f,%.2f,%.4f%n",
                         agent.getId(), agent.getX(), agent.getY(),
-                        agent.getLifecycleStage(), agent.isAlive(), p, t, r);
+                        stage, alive, p, t, r);
                 }
             }
         }

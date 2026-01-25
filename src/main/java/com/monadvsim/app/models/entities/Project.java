@@ -9,7 +9,13 @@ import java.io.Serializable;
 public class Project implements Serializable {
     private String name;
     private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
-    
+    private List<String> tokens;
+    private List<String> layerNames;
+    private double defaultAgentSearchRadius;
+    private double defaultHatchingProbability;
+    private double defaultAgentStep;
+    private int defaultBirthRate; // number of eggs to be layeds
+            
     // The Environment
     private List<Layer> layers;
     
@@ -20,10 +26,7 @@ public class Project implements Serializable {
         this.layers = new ArrayList<>();
     }
 
-    /**
-     * Updates all time-sensitive layers (like Rasters) 
-     * based on the current simulation time index.
-     */
+    
     public void updateEnvironment(int timeFrameIndex) {
         for (Layer layer : layers) {
             if (layer instanceof RasterLayer rl) {
@@ -31,10 +34,18 @@ public class Project implements Serializable {
             }
         }
     }
+    
 
-    /**
-     * Helper to retrieve only the Agent layers for the update loop.
-     */
+    public Layer getLayerByName(String layerName){
+        for(Layer l: layers){
+            if (layerName.equals(l.getName())){
+                return l;
+            }
+        }
+        return null;
+    }
+    
+    
     public List<AgentLayer> getAgentLayers() {
         List<AgentLayer> agentLayers = new ArrayList<>();
         for (Layer l : layers) {
@@ -45,9 +56,7 @@ public class Project implements Serializable {
         return agentLayers;
     }
 
-    /**
-     * Helper to retrieve a specific Raster (e.g., "Population")
-     */
+    
     public RasterLayer getRasterByName(String name) {
         return layers.stream()
                 .filter(l -> l instanceof RasterLayer && l.getName().equalsIgnoreCase(name))
@@ -55,6 +64,7 @@ public class Project implements Serializable {
                 .findFirst()
                 .orElse(null);
     }
+    
 
     // Standard Getters/Setters
     public List<Layer> getLayers() { return layers; }
@@ -70,4 +80,57 @@ public class Project implements Serializable {
     public SpatialRegistry getSpatialRegistry() {
         return spatialRegistry;
     }
+
+    public List<String> getTokens() {
+        return tokens;
+    }
+
+    public void setTokens(List<String> tokens) {
+        this.tokens = tokens;
+    }
+
+    public List<String> getLayerNames() {
+        return layerNames;
+    }
+
+    public void setLayerNames(List<String> layerNames) {
+        this.layerNames = layerNames;
+    }
+
+    public double getDefaultAgentSearchRadius() {
+        return defaultAgentSearchRadius;
+    }
+
+    public void setDefaultAgentSearchRadius(double defaultAgentSearchRadius) {
+        this.defaultAgentSearchRadius = defaultAgentSearchRadius;
+    }
+
+    public double getDefaultHatchingProbability() {
+        return defaultHatchingProbability;
+    }
+
+    public void setDefaultHatchingProbability(double defaultHatchingProbability) {
+        this.defaultHatchingProbability = defaultHatchingProbability;
+    }
+
+    public double getDefaultAgentStep() {
+        return defaultAgentStep;
+    }
+
+    public void setDefaultAgentStep(double defaultAgentStep) {
+        this.defaultAgentStep = defaultAgentStep;
+    }
+
+    public int getDefaultBirthRate() {
+        return defaultBirthRate;
+    }
+
+    public void setDefaultBirthRate(int defaultBirthRate) {
+        this.defaultBirthRate = defaultBirthRate;
+    }
+    
+    
+    
+    
+    
 }

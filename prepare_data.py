@@ -36,9 +36,9 @@ def download_gee_data(lat, lon, buffer_km, output_folder):
                          .unmask(0).clip(region_of_interest)
 
     datasets = {
-        "pop_density.tiff": pop_img,
-        "elevation.tiff": elev_img,
-        "buildings.tiff": build_img
+        f"pop_density_{int(buffer_km)}_km.tiff": pop_img,
+        f"elevation_{int(buffer_km)}_km.tiff": elev_img,
+        f"buildings_{int(buffer_km)}_km.tiff": build_img
     }
 
     for name, img in datasets.items():
@@ -107,7 +107,7 @@ def download_climate_timeseries(lat, lon, buffer_km, year, month, output_path):
 if __name__ == "__main__":
     # Addis Ababa Coordinates
     LAT, LON = 9.02650000, 38.73119444
-    BUFFER = 5.0 # 5km radius
+    BUFFER = 100.0 # 100km radius
     YEAR = 2026
     MONTH = 1
     DATA_DIR = "prepared_data"
@@ -116,4 +116,4 @@ if __name__ == "__main__":
     download_gee_data(LAT, LON, BUFFER, DATA_DIR)
     download_climate_timeseries(LAT, LON, BUFFER, 
                                 YEAR, MONTH, 
-                                output_path=f"{DATA_DIR}/climate_{YEAR}_{MONTH}.nc")
+                                output_path=f"{DATA_DIR}/climate_{YEAR}_{int(BUFFER)}_km_{MONTH}.nc")

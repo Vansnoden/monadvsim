@@ -1,42 +1,116 @@
 package com.monadvsim.app.models.entities;
 
+
 import com.monadvsim.app.models.engine.TimeManager;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+
 
 public class InertAgent extends Agent {
-    private double waterVolume = 50.0; // percentage 0-100
-    private int larvalCount = 0;
-    private final double capacity = 500.0;
+    
+    private final AtomicReference<Double> waterVolume = new AtomicReference<>(0.0); // percentage 0-100
+    private final AtomicInteger larvalCount = new AtomicInteger(0); // number of larvae in the container
+    private final AtomicReference<Double> capacity = new AtomicReference<>(0.0); // maximum number of larvae that a single container can support
+    private final AtomicInteger eggCount = new AtomicInteger(0); // number of eggs in the container
+    // For thread-safe batch operations
+    private final Object batchLock = new Object();
+    
 
     public InertAgent(double x, double y) {
-        super(x, y, "WaterTank");
+        super(x, y);
     }
     
-    public int calculateHatching(Project project) {
-        RasterLayer rain = project.getRasterByName("Rainfall");
-        RasterLayer temp = project.getRasterByName("Temperature");
-
-        double r = (rain != null) ? rain.getValueAt(x, y) : 0.0;
-        double tC = (temp != null) ? temp.getValueAt(x, y) - 273.15 : 25.0;
-
-        // Hydrology logic
-        waterVolume = Math.max(0, Math.min(100, waterVolume + (r * 1000) - 0.1));
-
-        // BIOLOGICAL FIX: Lower hatch rate to 0.5% (0.005) instead of 5% (0.05)
-        // Also ensure temperature is high enough for larvae to mature
-        if (waterVolume > 10.0 && tC > 18.0 && larvalCount > 0) {
-            int hatch = (int) (larvalCount * 0.005); 
-            larvalCount -= hatch; // This actually depletes the eggs
-            return hatch;
+    
+    public InertAgent(double x, double y, String name) {
+        super(x, y, name);
+    }
+    
+    
+    // Thread-safe operations
+    public double getWaterVolume() {
+        return waterVolume.get();
+    }
+    
+    
+    public void setWaterVolume(double volume) {
+        waterVolume.set(Math.max(0.0, Math.min(100.0, volume)));
+    }
+    
+    
+    public int getLarvalCount() {
+        return larvalCount.get();
+    }
+    
+    
+    public void setLarvalCount(int count) {
+        larvalCount.set(Math.max(0, count));
+    }
+    
+    
+    public int incrementLarvalCount(int delta) {
+        return larvalCount.addAndGet(delta);
+    }
+    
+    
+    public int decrementLarvalCount(int delta) {
+        return larvalCount.updateAndGet(current -> Math.max(0, current - delta));
+    }
+    
+    
+    public double getCapacity() {
+        return capacity.get();
+    }
+    
+    
+    public void setCapacity(double cap) {
+        capacity.set(Math.max(0.0, cap));
+    }
+    
+    
+    public int getEggCount() {
+        return eggCount.get();
+    }
+    
+    
+    public void setEggCount(int count) {
+        eggCount.set(Math.max(0, count));
+    }
+    
+    
+    // Atomic operations for eggs
+    public int addEggs(int eggsToAdd) {
+        return eggCount.addAndGet(eggsToAdd);
+    }
+    
+    
+    public int takeEggs(int eggsToTake) {
+        return eggCount.updateAndGet(current -> {
+            int taken = Math.min(current, eggsToTake);
+            return current - taken;
+        });
+    }
+    
+    
+    // Batch operation for hatching
+    public int hatchEggs(double hatchProbability) {
+        synchronized (batchLock) {
+            int currentEggs = eggCount.get();
+            if (currentEggs == 0) return 0;
+            
+            int eggsToHatch = (int) (currentEggs * hatchProbability);
+            eggsToHatch = Math.max(1, Math.min(eggsToHatch, currentEggs));
+            
+            // Atomically update both counts
+            eggCount.addAndGet(-eggsToHatch);
+            larvalCount.addAndGet(eggsToHatch);
+            
+            return eggsToHatch;
         }
-        return 0;
     }
-
-    public void addEggs(int count) {
-        this.larvalCount = (int) Math.min(capacity, this.larvalCount + count);
-    }
+    
 
     @Override
-    public void update(Project project, TimeManager tm) {
-        // Updated via the Engine's parallel loop for performance
+    public void updateState(Project project, TimeManager timeManager) {
+        
     }
 }
