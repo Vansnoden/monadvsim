@@ -113,21 +113,26 @@
         </dependency>
         <!--Custom Scripting-->
         <dependency>
-            <groupId>org.graalvm.polyglot</groupId>
-            <artifactId>polyglot</artifactId>
+            <groupId>org.graalvm.sdk</groupId>
+            <artifactId>graal-sdk</artifactId>
             <version>23.1.2</version>
         </dependency>
         <dependency>
-            <groupId>org.graalvm.polyglot</groupId>
+            <groupId>org.graalvm.js</groupId>
             <artifactId>js</artifactId>
             <version>23.1.2</version>
-            <type>pom</type>
         </dependency>
         <dependency>
             <groupId>org.graalvm.js</groupId>
             <artifactId>js-scriptengine</artifactId>
             <version>23.1.2</version>
         </dependency>
+        <dependency>
+            <groupId>org.graalvm.truffle</groupId>
+            <artifactId>truffle-api</artifactId>
+            <version>23.1.2</version>
+        </dependency>
+        
         <dependency>
             <groupId>javax.media</groupId>
             <artifactId>jai_core</artifactId>
@@ -203,6 +208,12 @@
                     <arguments>
                         <argument>--add-opens</argument>
                         <argument>java.base/java.lang=ALL-UNNAMED</argument>
+                        <argument>--add-opens</argument>
+                        <argument>java.base/java.math=ALL-UNNAMED</argument>
+                        <argument>--add-opens</argument>
+                        <argument>java.base/java.util=ALL-UNNAMED</argument>
+                        <argument>--add-opens</argument>
+                        <argument>java.base/java.io=ALL-UNNAMED</argument>
                     </arguments>
                 </configuration>
             </plugin>

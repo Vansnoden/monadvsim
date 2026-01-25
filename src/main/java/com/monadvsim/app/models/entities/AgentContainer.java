@@ -152,9 +152,34 @@ public class AgentContainer {
     
     
     // Process agents with partition-level batching
-    public void processWithBatching(Consumer<List<Agent>> batchProcessor, 
-                                   int batchSize) {
-        partitions.parallelStream().forEach(partition -> {
+//    public void processWithBatching(Consumer<List<Agent>> batchProcessor, 
+//                                   int batchSize) {
+//        partitions.parallelStream().forEach(partition -> {
+//            List<Agent> batch = new ArrayList<>(batchSize);
+//            for (Agent agent : partition) {
+//                batch.add(agent);
+//                if (batch.size() >= batchSize) {
+//                    batchProcessor.accept(batch);
+//                    batch.clear();
+//                }
+//            }
+//            if (!batch.isEmpty()) {
+//                batchProcessor.accept(batch);
+//            }
+//        });
+//    }
+    
+    
+    public void processWithBatching(Consumer<List<Agent>> batchProcessor, int batchSize) {
+        // Create a snapshot of partitions to avoid concurrent modification
+        List<List<Agent>> partitionSnapshots = new ArrayList<>();
+
+        for (int i = 0; i < partitionCount; i++) {
+            partitionSnapshots.add(new ArrayList<>(partitions.get(i)));
+        }
+
+        // Process snapshots instead of live partitions
+        partitionSnapshots.parallelStream().forEach(partition -> {
             List<Agent> batch = new ArrayList<>(batchSize);
             for (Agent agent : partition) {
                 batch.add(agent);
