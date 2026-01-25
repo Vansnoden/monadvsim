@@ -63,44 +63,43 @@ public class App {
             
             
             
+            // Create agent layers with climate-aware rules
+            RuleEngine ruleEngine = new RuleEngine();
+            AgentLifecycleManager lifecycleManager = new AgentLifecycleManager(spatialRegistry);
+
+            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
             
+            // Add climate-dependent rules
+            mosquitoLayer.addRule(
+                "temperature > 298 && precipitation < 0.001", // ~25°C and dry
+                "reproduce",
+                1
+            );
+    
+            mosquitoLayer.addRule(
+                "temperature < 283 || temperature > 313", // <10°C or >40°C
+                "die",
+                2
+            );
             
-            // 5. Create agent layers with climate-aware rules
-//            RuleEngine ruleEngine = new RuleEngine();
-//            AgentLifecycleManager lifecycleManager = new AgentLifecycleManager(spatialRegistry);
-//            
-//            AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
-//            
-//            // Add climate-dependent rules
-//            mosquitoLayer.addRule(
-//                "temperature > 298 && precipitation < 0.001", // ~25°C and dry
-//                "reproduce",
-//                1
-//            );
-//            
-//            mosquitoLayer.addRule(
-//                "temperature < 283 || temperature > 313", // <10°C or >40°C
-//                "die",
-//                2
-//            );
-//            
 //            mosquitoLayer.addRule(
 //                "wind_speed > 10", // High wind
 //                "move_shelter",
 //                3
 //            );
-//            
-//            project.addLayer(mosquitoLayer);
-//            project.setSpatialRegistry(spatialRegistry);
             
-//            // 6. Create simulation engine
+            project.addLayer(mosquitoLayer);
+            project.setSpatialRegistry(spatialRegistry);
+            
+            
+//            // Create simulation engine
 //            SimulationEngine engine = new SimulationEngine(project, timeManager, spatialRegistry);
 //            
-//            // 7. Run simulation in a separate thread
+//            // Run simulation in a separate thread
 //            Thread simulationThread = new Thread(engine);
 //            simulationThread.start();
 //            
-//            // 8. Add shutdown hook
+//            // Add shutdown hook
 //            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
 //                System.out.println("Shutting down simulation...");
 //                engine.stop();
