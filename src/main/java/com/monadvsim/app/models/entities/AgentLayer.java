@@ -4,6 +4,7 @@ package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.engine.AgentLifecycleManager;
 import com.monadvsim.app.models.engine.RuleEngine;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -142,13 +143,16 @@ public class AgentLayer extends Layer {
         // Clear thread-local newborns
         immediateNewborns.remove();
 
-        // Process agents in parallel partitions
         // Use thread-safe collection for futures
-        List<CompletableFuture<Void>> futures = new CopyOnWriteArrayList<>();  // CHANGED THIS LINE
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
 
+        // Process agents in parallel partitions
         agentContainer.processWithBatching(batch -> {
+            // Create a copy of the batch to avoid concurrent modification
+            List<Agent> batchCopy = new ArrayList<>(batch);
+
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                for (Agent agent : batch) {
+                for (Agent agent : batchCopy) {
                     processAgentRules(agent, project);
                 }
             }, ruleExecutor);
@@ -161,49 +165,60 @@ public class AgentLayer extends Layer {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException | ExecutionException e) {
             System.err.println("Error processing agent rules: " + e.getMessage());
-            e.printStackTrace();  // ADDED THIS LINE FOR BETTER DEBUGGING
+            e.printStackTrace();
+            Thread.currentThread().interrupt();
         }
     }
     
     
     private void processAgentRules(Agent agent, Project project) {
-        // Check if agent is alive (for LivingAgent)
-        if (agent instanceof LivingAgent la && !la.isAlive()) {
-            // Schedule for death
-            lifecycleManager.scheduleDeath(agent.getId());
-            deathsThisTick.incrementAndGet();
-            return;
-        }
-        
-        // Age increment for LivingAgent
-        if (agent instanceof LivingAgent la) {
-            la.incrementAge();
-        }
-        
-        // Evaluate rules
-        for (RuleDefinition rule : rules) {
-            rulesEvaluated.incrementAndGet();
-            
-            if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                // Execute rule - this may create immediate newborns
-                ruleEngine.execute(rule.action(), agent, project, this);
-                
-                // Check if agent died during rule execution
-                if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+        try {
+            // Check if agent is alive (for LivingAgent)
+            if (agent instanceof LivingAgent la && !la.isAlive()) {
+                // Schedule for death
+                lifecycleManager.scheduleDeath(agent.getId());
+                deathsThisTick.incrementAndGet();
+                return;
+            }
+
+            // Age increment for LivingAgent
+            if (agent instanceof LivingAgent la) {
+                la.incrementAge();
+
+                // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks)
+                if (la.getAge() > project.getDefaultMaxAgentAge()) {
+                    la.setAlive(false);
                     lifecycleManager.scheduleDeath(agent.getId());
                     deathsThisTick.incrementAndGet();
-                    break; // Stop processing rules for dead agent
-                }
-                
-                // Stop after terminal actions
-                if (isTerminalAction(rule.action())) {
-                    break;
+                    return;
                 }
             }
-        }
-        // Schedule position update if agent moved
-        if (agentHasMoved(agent)) {
-            lifecycleManager.scheduleMove(agent);
+
+            // Evaluate rules
+            for (RuleDefinition rule : rules) {
+                rulesEvaluated.incrementAndGet();
+
+                if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                    // Execute rule - this may create immediate newborns
+                    ruleEngine.execute(rule.action(), agent, project, this);
+                    actionsExecuted.incrementAndGet();
+
+                    // Check if agent died during rule execution
+                    if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                        lifecycleManager.scheduleDeath(agent.getId());
+                        deathsThisTick.incrementAndGet();
+                        break; // Stop processing rules for dead agent
+                    }
+
+                    // Stop after terminal actions
+                    if (isTerminalAction(rule.action())) {
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+            e.printStackTrace();
         }
     }
     
@@ -219,9 +234,12 @@ public class AgentLayer extends Layer {
         // Get thread-local newborns and add to container
         List<Agent> newborns = immediateNewborns.get();
         if (!newborns.isEmpty()) {
-            agentContainer.addAgents(newborns);
-            birthsThisTick.addAndGet(newborns.size());
-            newborns.clear();
+            synchronized (newborns) {
+                List<Agent> newbornsCopy = new ArrayList<>(newborns);
+                agentContainer.addAgents(newbornsCopy);
+                birthsThisTick.addAndGet(newbornsCopy.size());
+                newborns.clear();
+            }
         }
     }
     
@@ -233,14 +251,19 @@ public class AgentLayer extends Layer {
     }
     
     
-    // Create a new agent immediately (for use within rule execution)
     public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
-        Agent agent = lifecycleManager.immediateBirth(agentClass, x, y);
-        
-        // Add to thread-local list for container update
+        // Create agent using lifecycle manager
+        Agent agent = lifecycleManager.createAgent(agentClass, x, y);
+
+        // Add to spatial registry immediately
+        lifecycleManager.scheduleBirth(agent);
+
+        // Also add to container for this layer
         List<Agent> newborns = immediateNewborns.get();
-        newborns.add(agent);
-        
+        synchronized (newborns) {
+            newborns.add(agent);
+        }
+
         return agent;
     }
     
@@ -260,16 +283,13 @@ public class AgentLayer extends Layer {
                action.equalsIgnoreCase("lay_eggs");
     }
     
-    
     private void logUpdatePerformance(long startTime) {
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
-        
-        if (durationMs > 50) { // Log if > 50ms
-            System.out.printf("[%s] Update: %.2f ms | %d agents | %d births | %d deaths%n",
-                getName(), durationMs, agentContainer.size(), 
-                birthsThisTick.get(), deathsThisTick.get());
-        }
+
+        System.out.printf("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
+            getName(), durationMs, agentContainer.size(), 
+            birthsThisTick.get(), deathsThisTick.get(), rulesEvaluated.get());
     }
     
     
@@ -408,6 +428,11 @@ public class AgentLayer extends Layer {
     @Override
     public double getValueAt(double x, double y) {
         return 0.0;
+    }
+    
+    // Add this setter method to AgentLayer class:
+    public void setLifecycleManager(AgentLifecycleManager lifecycleManager) {
+        this.lifecycleManager = lifecycleManager;
     }
     
 }

@@ -11,6 +11,7 @@ public class Project implements Serializable {
     private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
     private List<String> tokens;
     private List<String> layerNames;
+    private int defaultMaxAgentAge;
     private double defaultAgentSearchRadius;
     private double defaultHatchingProbability;
     private double defaultAgentStep;
@@ -128,9 +129,13 @@ public class Project implements Serializable {
     public void setDefaultBirthRate(int defaultBirthRate) {
         this.defaultBirthRate = defaultBirthRate;
     }
-    
-    
-    
-    
+
+    public int getDefaultMaxAgentAge() {
+        return defaultMaxAgentAge;
+    }
+
+    public void setDefaultMaxAgentAge(int defaultMaxAgentAge) {
+        this.defaultMaxAgentAge = defaultMaxAgentAge;
+    }
     
 }

@@ -69,6 +69,7 @@ public class App {
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
             project.setDefaultAgentStep(0.000005); // about 55.5 cm
             project.setDefaultBirthRate(20);
+            project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
             
             
             // Set up time manager (simulate 30 days at 15-minute intervals)
@@ -81,7 +82,7 @@ public class App {
             // load static rasters
             String elevation_50_km_file = "prepared_data/elevation_50_km.tiff";
             String buildings_50_km_file = "prepared_data/buildings_50_km.tif";
-            String population_50_km_file = "prepared_data/pop_density_50_km.tiff";
+            String population_50_km_file = "prepared_data/pop_density_50_km.tif";
             
             RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
             RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
@@ -144,6 +145,9 @@ public class App {
             AgentLayer mosquitoLayer = new AgentLayer("Mosquitoes", ruleEngine, lifecycleManager);
             AgentLayer habitatLayer = new AgentLayer("WaterTanks", ruleEngine, lifecycleManager);
             
+            mosquitoLayer.setLifecycleManager(lifecycleManager);
+            habitatLayer.setLifecycleManager(lifecycleManager);
+            
             // Add rules for mosquitoes
             // Note: Temperature is in Kelvin in ERA5 data (0°C = 273.15K, 25°C = 298.15K)
             mosquitoLayer.addRule(
@@ -167,11 +171,11 @@ public class App {
                 10 // High priority - death should happen first
             );
             
-            mosquitoLayer.addRule(
-                "age > 1000",
-                "die",
-                9 // Die from old age
-            );
+//            mosquitoLayer.addRule(
+//                "age > 1000",
+//                "die",
+//                9 // Die from old age
+//            );
             
             // Add rules for water tanks (habitats)
             habitatLayer.addRule(
@@ -213,7 +217,8 @@ public class App {
             // Seed initial population
             System.out.println("Seeding initial population...");
             seedInitialPopulation(habitatLayer, 
-                    mosquitoLayer, buildings, population, spatialRegistry);
+                    mosquitoLayer, buildings, population, spatialRegistry,
+                    worldBounds);
             
             System.out.printf("Initial agents: %d tanks, %d mosquitoes%n",
                 habitatLayer.getAgents().size(), mosquitoLayer.getAgents().size());
@@ -336,14 +341,16 @@ public class App {
                                              AgentLayer mosquitoLayer,
                                              RasterLayer buildings,
                                              RasterLayer population,
-                                             SpatialRegistry spatialRegistry) {
+                                             SpatialRegistry spatialRegistry,
+                                             Rectangle2D worldBounds) {
         System.out.println("Seeding initial population with immediate spatial registration...");
         
         Random rand = new Random();
         int tanksToSeed = 100;
-        int mosquitoesToSeed = 50;
+        int mosquitoesToSeed = 50000;
         
-        double minLon = 38.70, minLat = 8.95;
+        
+        double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
         double widthLon = 0.1, heightLat = 0.1;
         
         // Seed water tanks

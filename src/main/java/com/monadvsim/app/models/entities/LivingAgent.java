@@ -11,7 +11,7 @@ public class LivingAgent extends Agent {
     // Using atomic types for thread-safe state
     private final AtomicBoolean alive = new AtomicBoolean(true);
     private final AtomicBoolean gravid = new AtomicBoolean(false);
-    private final AtomicInteger age = new AtomicInteger(0);
+    private final AtomicInteger age = new AtomicInteger(1);
     private final AtomicReference<LifecycleStage> stage = 
         new AtomicReference<>(LifecycleStage.ADULT);
     private final AtomicReference<Double> energy = new AtomicReference<>(1.0);

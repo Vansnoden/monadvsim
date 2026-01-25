@@ -49,8 +49,10 @@ public class AgentContainer {
     
     // Batch add multiple agents
     public void addAgents(Collection<Agent> agents) {
-        newAgents.addAll(agents);
-        size.addAndGet(agents.size());
+        synchronized (newAgents) {
+            newAgents.addAll(agents);
+            size.addAndGet(agents.size());
+        }
     }
     
     
@@ -151,49 +153,38 @@ public class AgentContainer {
     }
     
     
-    // Process agents with partition-level batching
-//    public void processWithBatching(Consumer<List<Agent>> batchProcessor, 
-//                                   int batchSize) {
-//        partitions.parallelStream().forEach(partition -> {
-//            List<Agent> batch = new ArrayList<>(batchSize);
-//            for (Agent agent : partition) {
-//                batch.add(agent);
-//                if (batch.size() >= batchSize) {
-//                    batchProcessor.accept(batch);
-//                    batch.clear();
-//                }
-//            }
-//            if (!batch.isEmpty()) {
-//                batchProcessor.accept(batch);
-//            }
-//        });
-//    }
-    
-    
     public void processWithBatching(Consumer<List<Agent>> batchProcessor, int batchSize) {
-        // Create a snapshot of partitions to avoid concurrent modification
-        List<List<Agent>> partitionSnapshots = new ArrayList<>();
+        // Create thread-local copies of each partition
+        List<List<Agent>> threadSafePartitions = new ArrayList<>(partitionCount);
 
+        // Take snapshots of each partition (thread-safe)
         for (int i = 0; i < partitionCount; i++) {
-            partitionSnapshots.add(new ArrayList<>(partitions.get(i)));
+            // Create a deep copy of the current partition
+            List<Agent> snapshot = new ArrayList<>(partitions.get(i));
+            threadSafePartitions.add(snapshot);
         }
 
         // Process snapshots instead of live partitions
-        partitionSnapshots.parallelStream().forEach(partition -> {
-            List<Agent> batch = new ArrayList<>(batchSize);
+        threadSafePartitions.parallelStream().forEach(partition -> {
+            if (partition.isEmpty()) return;
+
+            // Process in batches
+            List<Agent> batch = new ArrayList<>(Math.min(batchSize, partition.size()));
             for (Agent agent : partition) {
                 batch.add(agent);
                 if (batch.size() >= batchSize) {
-                    batchProcessor.accept(batch);
+                    // Pass a copy of the batch
+                    batchProcessor.accept(new ArrayList<>(batch));
                     batch.clear();
                 }
             }
+            // Process remaining agents
             if (!batch.isEmpty()) {
-                batchProcessor.accept(batch);
+                batchProcessor.accept(new ArrayList<>(batch));
             }
         });
     }
-    
+
     
     // Getters
     public int size() {
