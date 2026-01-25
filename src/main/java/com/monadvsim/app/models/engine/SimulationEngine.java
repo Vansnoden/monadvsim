@@ -5,6 +5,7 @@ import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
+import java.io.File;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -187,9 +188,16 @@ public class SimulationEngine implements Runnable {
         updatePerformanceMetrics(tickDuration);
     }
     
-
     private void exportSnapshot(Project project) {
         try {
+            // Create results directory if it doesn't exist
+            String dirPath = "results";
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+                System.out.println("Created directory: " + dirPath);
+            }
+
             String filename = String.format("results/snapshot_tick_%d.csv", timeManager.getTickCount());
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
             persistenceService.exportToCSV(project, filename);

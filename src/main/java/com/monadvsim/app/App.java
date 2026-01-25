@@ -5,6 +5,7 @@ import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import java.awt.geom.Rectangle2D;
+import java.io.File;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -21,10 +22,17 @@ public class App {
         System.out.print("Hello world");
         test();
         try {
-            // Run the simulation
+            // init snapshot output file
+            File resultsDir = new File("results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+                System.out.println("Created results directory");
+            }
+            
+            // Configure simulation
             test();
             
-            // Keep the main thread alive to handle shutdown
+            // Run simualtion
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\nShutdown signal received...");
                 if (simulationEngine != null) {

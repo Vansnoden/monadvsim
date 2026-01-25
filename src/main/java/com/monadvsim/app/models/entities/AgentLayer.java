@@ -105,26 +105,34 @@ public class AgentLayer extends Layer {
     @Override
     public void update(Project project) {
         long startTime = System.nanoTime();
-        
-        // Reset per-tick counters
-        birthsThisTick.set(0);
-        deathsThisTick.set(0);
-        
-        // Apply pending agent operations from previous tick
-        agentContainer.applyPendingOperations();
-        
-        // Process all agents with rules
-        processAgentsWithRules(project);
-    
-        // Process immediate newborns created during rule execution
-        processImmediateNewborns();
-        
-        // Clean up dead agents
-        cleanupDeadAgents();
-        
-        // Process scheduled lifecycle events
-        lifecycleManager.processLifecycleEvents();
-        
+
+        try {
+            // Reset per-tick counters
+            birthsThisTick.set(0);
+            deathsThisTick.set(0);
+
+            // Apply pending agent operations from previous tick
+            agentContainer.applyPendingOperations();
+
+            // Process all agents with rules
+            processAgentsWithRules(project);
+
+            // Process immediate newborns created during rule execution
+            processImmediateNewborns();
+
+            // Clean up dead agents
+            cleanupDeadAgents();
+
+            // Process scheduled lifecycle events
+            lifecycleManager.processLifecycleEvents();
+
+        } catch (Exception e) {
+            System.err.println("Critical error in AgentLayer.update() for "
+                    + "layer " + getName() + ": " + e.getMessage());
+            e.printStackTrace();
+            throw new RuntimeException("Failed to update layer " + getName(), e);
+        }
+
         // Log performance
         logUpdatePerformance(startTime);
     }
@@ -133,25 +141,27 @@ public class AgentLayer extends Layer {
     private void processAgentsWithRules(Project project) {
         // Clear thread-local newborns
         immediateNewborns.remove();
-        
+
         // Process agents in parallel partitions
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        
+        // Use thread-safe collection for futures
+        List<CompletableFuture<Void>> futures = new CopyOnWriteArrayList<>();  // CHANGED THIS LINE
+
         agentContainer.processWithBatching(batch -> {
             CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
                 for (Agent agent : batch) {
                     processAgentRules(agent, project);
                 }
             }, ruleExecutor);
-            
+
             futures.add(future);
         }, 100); // Process in batches of 100
-        
+
         // Wait for all batches to complete
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException | ExecutionException e) {
             System.err.println("Error processing agent rules: " + e.getMessage());
+            e.printStackTrace();  // ADDED THIS LINE FOR BETTER DEBUGGING
         }
     }
     
