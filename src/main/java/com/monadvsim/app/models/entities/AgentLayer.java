@@ -154,7 +154,7 @@ public class AgentLayer extends Layer {
         agentContainer.processWithBatching(batch -> {
             // Check if we've exceeded time limit
             if (System.nanoTime() > timeLimit) {
-                System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
+//                System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
                 return;
             }
 
@@ -163,7 +163,7 @@ public class AgentLayer extends Layer {
 
                 // Check time limit after each agent
                 if (System.nanoTime() > timeLimit) {
-                    System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
+//                    System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
                     break;
                 }
             }

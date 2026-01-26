@@ -6,7 +6,10 @@ import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import java.awt.geom.Rectangle2D;
 import java.io.File;
+import java.io.FileWriter;
+import java.io.PrintWriter;
 import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -16,10 +19,15 @@ public class App {
     
     private static SimulationEngine simulationEngine;
     private static Thread simulationThread;
+    // Helper method to track simulation start time
+    private static long simulationStartTime = System.currentTimeMillis();
+    private static Project currentProject;
+    private static SpatialRegistry currentSpatialRegistry;
+      
     
     
     public static void main(String[] args) {
-        System.out.print("Hello world");
+        System.out.println("Hello world - Starting Multi-Agent Simulation System");
         try {
             // init snapshot output file
             File resultsDir = new File("results");
@@ -28,10 +36,10 @@ public class App {
                 System.out.println("Created results directory");
             }
             
-            // Configure simulation
+            // Configure and run simulation
             test();
             
-            // Run simualtion
+            // Run simulation
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\nShutdown signal received...");
                 if (simulationEngine != null) {
@@ -44,6 +52,8 @@ public class App {
                         Thread.currentThread().interrupt();
                     }
                 }
+                // Save final statistics on shutdown
+                saveFinalStatisticsToFile(currentProject, currentSpatialRegistry, simulationEngine);
             }));
             
             // Wait for simulation to complete if running in foreground
@@ -64,12 +74,14 @@ public class App {
         try {
             // 1. Create project
             Project project = new Project("Mosquito Simulation");
+            currentProject = project; // Store for later use
+            
             // 1 degree of latitude is about 111 km
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
             project.setDefaultAgentStep(0.00005); // about ~5.5 meters per move
             project.setDefaultBirthRate(20);
             project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
-            
+            project.setDefaultHatchingProbability(0.8);
             
             // Set up time manager (simulate 30 days at 15-minute intervals)
             LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
@@ -128,6 +140,7 @@ public class App {
 
             SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 0.001); // 0.001 degree, Smaller cells for better spatial resolution
             project.setSpatialRegistry(spatialRegistry);
+            currentSpatialRegistry = spatialRegistry; // Store for later use
             
             
             // Create Rule engine and lifecycle manager
@@ -284,9 +297,18 @@ public class App {
                     // After simulation completes, export results
                     System.out.println("Simulation completed, exporting results...");
                     
+                    // Save final statistics to file
+                    saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+                    
                 } catch (Exception e) {
                     System.err.println("Error in simulation thread: " + e.getMessage());
                     e.printStackTrace();
+                    // Try to save statistics even on error
+                    try {
+                        saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+                    } catch (Exception ex) {
+                        System.err.println("Failed to save statistics: " + ex.getMessage());
+                    }
                 }
             });
             
@@ -294,11 +316,11 @@ public class App {
             simulationThread.setDaemon(false);
             simulationThread.start();
             
-            startWatchdog(simulationEngine, simulationThread);
+            startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
             
             System.out.println("Simulation started! Press Ctrl+C to stop.");
             
-            // 15. Monitor simulation progress
+            // Monitor simulation progress
             monitorSimulation(simulationEngine, project);
             
         } catch (Exception e) {
@@ -593,41 +615,266 @@ public class App {
     }
     
     
-    private static void startWatchdog(SimulationEngine engine, Thread simulationThread) {
+    // Update the startWatchdog method to include project and spatialRegistry
+    private static void startWatchdog(SimulationEngine engine, Thread simulationThread, 
+                                     Project project, SpatialRegistry spatialRegistry) {
         Thread watchdog = new Thread(() -> {
             try {
                 int stuckCount = 0;
                 long lastTick = 0;
-
-                while (simulationThread.isAlive()) {
+                long lastTickTime = System.currentTimeMillis();
+                
+                while (simulationThread.isAlive() && !simulationThread.isInterrupted()) {
                     Thread.sleep(10000); // Check every 10 seconds
-
-                    Map<String, Object> state = engine.getState();
-                    long currentTick = (Long) state.get("tick");
-
-                    if (currentTick == lastTick) {
-                        stuckCount++;
-                        System.err.println("WARNING: Simulation may be stuck at tick " + currentTick + 
-                                         " (stuck count: " + stuckCount + ")");
-
-                        if (stuckCount > 3) { // Stuck for 30+ seconds
-                            System.err.println("CRITICAL: Simulation appears stuck, forcing shutdown");
-                            engine.stop();
+                    
+                    try {
+                        Map<String, Object> state = engine.getState();
+                        long currentTick = (Long) state.get("tick");
+                        long currentTime = System.currentTimeMillis();
+                        
+                        if (currentTick == lastTick) {
+                            stuckCount++;
+                            long stuckSeconds = (currentTime - lastTickTime) / 1000;
+                            
+                            System.err.println("WARNING: Simulation may be stuck at tick " + currentTick + 
+                                             " (stuck for " + stuckSeconds + " seconds, count: " + stuckCount + ")");
+                            
+                            if (stuckCount > 3) { // Stuck for 30+ seconds
+                                System.err.println("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
+                                
+                                // Save statistics before shutting down
+                                saveFinalStatisticsToFile(project, spatialRegistry, engine);
+                                
+                                engine.stop();
+                                simulationThread.interrupt();
+                                
+                                // Give it a chance to shut down gracefully
+                                Thread.sleep(5000);
+                                
+                                if (simulationThread.isAlive()) {
+                                    System.err.println("Simulation thread still alive, forcing termination");
+                                    System.exit(1);
+                                }
+                                break;
+                            }
+                        } else {
+                            stuckCount = 0;
+                            lastTick = currentTick;
+                            lastTickTime = currentTime;
+                        }
+                        
+                    } catch (Exception e) {
+                        System.err.println("Error in watchdog while checking state: " + e.getMessage());
+                        if (stuckCount++ > 5) {
+                            System.err.println("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
+                            saveFinalStatisticsToFile(project, spatialRegistry, engine);
                             simulationThread.interrupt();
                             break;
                         }
-                    } else {
-                        stuckCount = 0;
-                        lastTick = currentTick;
                     }
                 }
+                
+                System.out.println("Watchdog thread exiting");
+                
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                System.out.println("Watchdog thread interrupted");
             }
         });
-
+        
         watchdog.setDaemon(true);
         watchdog.setName("Simulation-Watchdog");
+        watchdog.setPriority(Thread.MIN_PRIORITY);
         watchdog.start();
+        
+        System.out.println("✅ Watchdog thread started");
+    }
+    
+    
+    /**
+     * Saves final detailed statistics to a file
+     */
+    private static void saveFinalStatisticsToFile(Project project, SpatialRegistry spatialRegistry, SimulationEngine engine) {
+        if (project == null || spatialRegistry == null) {
+            System.err.println("Cannot save statistics: project or spatial registry is null");
+            return;
+        }
+        
+        try {
+            // Create results directory
+            File resultsDir = new File("results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+            }
+            
+            // Generate filename with timestamp
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
+            String filename = String.format("results/%s_final_statistics_%s.txt", safeProjectName, timestamp);
+            
+            try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
+                writer.println("=".repeat(80));
+                writer.println("FINAL SIMULATION STATISTICS");
+                writer.println("=".repeat(80));
+                writer.println();
+                
+                // Simulation metadata
+                writer.println("SIMULATION METADATA");
+                writer.println("-".repeat(40));
+                writer.printf("Project Name: %s%n", project.getName());
+                writer.printf("Timestamp: %s%n", LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")));
+                writer.printf("Total Runtime: %.2f seconds%n", engine != null ? 
+                    (System.currentTimeMillis() - getSimulationStartTime()) / 1000.0 : 0);
+                writer.println();
+                
+                // Agent Statistics
+                writer.println("AGENT STATISTICS");
+                writer.println("-".repeat(40));
+                int totalAgents = 0;
+                for (AgentLayer layer : project.getAgentLayers()) {
+                    int layerAgents = layer.getAgents().size();
+                    writer.printf("%-20s: %,9d agents%n", layer.getName(), layerAgents);
+                    totalAgents += layerAgents;
+                    
+                    // Get detailed layer statistics if available
+                    Map<String, Object> layerStats = layer.getStatistics();
+                    if (layerStats != null && !layerStats.isEmpty()) {
+                        for (Map.Entry<String, Object> entry : layerStats.entrySet()) {
+                            if (!entry.getKey().equals("agentCount")) {
+                                writer.printf("  %-18s: %s%n", entry.getKey(), entry.getValue());
+                            }
+                        }
+                    }
+                }
+                writer.printf("%-20s: %,9d agents%n", "TOTAL", totalAgents);
+                writer.println();
+                
+                // Spatial Registry Statistics
+                writer.println("SPATIAL REGISTRY STATISTICS");
+                writer.println("-".repeat(40));
+                Map<String, Object> spatialStats = spatialRegistry.getStatistics();
+                if (spatialStats != null) {
+                    for (Map.Entry<String, Object> entry : spatialStats.entrySet()) {
+                        writer.printf("%-25s: %s%n", entry.getKey(), entry.getValue());
+                    }
+                }
+                writer.println();
+                
+                // Layer Statistics
+                writer.println("LAYER STATISTICS");
+                writer.println("-".repeat(40));
+                int rasterLayers = 0;
+                int agentLayers = 0;
+                int otherLayers = 0;
+                
+                for (Layer layer : project.getLayers()) {
+                    if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
+                        rasterLayers++;
+                    } else if (layer instanceof AgentLayer) {
+                        agentLayers++;
+                    } else {
+                        otherLayers++;
+                    }
+                }
+                
+                writer.printf("Raster Layers: %d%n", rasterLayers);
+                writer.printf("Agent Layers: %d%n", agentLayers);
+                writer.printf("Other Layers: %d%n", otherLayers);
+                writer.printf("Total Layers: %d%n", project.getLayers().size());
+                writer.println();
+                
+                // Memory Usage
+                writer.println("SYSTEM RESOURCES");
+                writer.println("-".repeat(40));
+                Runtime runtime = Runtime.getRuntime();
+                long usedMB = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024);
+                long totalMB = runtime.totalMemory() / (1024 * 1024);
+                long maxMB = runtime.maxMemory() / (1024 * 1024);
+                
+                writer.printf("Memory Used: %d MB%n", usedMB);
+                writer.printf("Memory Total: %d MB%n", totalMB);
+                writer.printf("Memory Max: %d MB%n", maxMB);
+                writer.printf("Memory Usage: %.1f%%%n", (usedMB * 100.0) / totalMB);
+                writer.println();
+                
+                // Performance Metrics (from SimulationEngine if available)
+                if (engine != null) {
+                    writer.println("PERFORMANCE METRICS");
+                    writer.println("-".repeat(40));
+                    Map<String, Object> engineStats = engine.getState();
+                    for (Map.Entry<String, Object> entry : engineStats.entrySet()) {
+                        writer.printf("%-25s: %s%n", entry.getKey(), entry.getValue());
+                    }
+                    
+                    // Get detailed statistics if available
+                    try {
+                        Map<String, Object> detailedStats = engine.getDetailedStatistics();
+                        if (detailedStats != null && !detailedStats.isEmpty()) {
+                            writer.println();
+                            writer.println("DETAILED STATISTICS");
+                            writer.println("-".repeat(40));
+                            for (Map.Entry<String, Object> entry : detailedStats.entrySet()) {
+                                writer.printf("%-30s: %s%n", entry.getKey(), entry.getValue());
+                            }
+                        }
+                    } catch (Exception e) {
+                        writer.println("Detailed statistics not available");
+                    }
+                }
+                
+                // Environment Statistics
+                writer.println();
+                writer.println("ENVIRONMENT STATISTICS");
+                writer.println("-".repeat(40));
+                writer.printf("Default Search Radius: %.6f degrees (approx. %.1f meters)%n", 
+                    project.getDefaultAgentSearchRadius(),
+                    project.getDefaultAgentSearchRadius() * 111320);
+                writer.printf("Default Agent Step: %.6f degrees (approx. %.1f meters)%n",
+                    project.getDefaultAgentStep(),
+                    project.getDefaultAgentStep() * 111320);
+                writer.printf("Default Hatching Probability: %.3f%n", project.getDefaultHatchingProbability());
+                writer.printf("Default Birth Rate: %d eggs%n", project.getDefaultBirthRate());
+                writer.printf("Default Max Agent Age: %d ticks (%.1f days)%n", 
+                    project.getDefaultMaxAgentAge(),
+                    project.getDefaultMaxAgentAge() / 96.0); // 96 ticks per day (15-min intervals)
+                
+                // Simulation Summary
+                writer.println();
+                writer.println("=".repeat(80));
+                writer.println("SIMULATION SUMMARY");
+                writer.println("=".repeat(80));
+                writer.printf("Total Agents Processed: %,d%n", totalAgents);
+                writer.printf("Simulation Completed: %s%n", 
+                    engine != null && !engine.getState().get("running").equals(true) ? "YES" : "NO");
+                
+                if (engine != null) {
+                    Map<String, Object> state = engine.getState();
+                    writer.printf("Final Tick: %d%n", state.get("tick"));
+                    writer.printf("Average Tick Time: %.2f ms%n", state.get("avgTickTime"));
+                    double fps = 1000.0 / (Double) state.get("avgTickTime");
+                    writer.printf("Effective FPS: %.1f%n", fps);
+                }
+                
+                writer.println("=".repeat(80));
+                writer.println("Statistics saved to: " + new File(filename).getAbsolutePath());
+                
+                System.out.println("✅ Final statistics saved to: " + filename);
+                
+            } catch (Exception e) {
+                System.err.println("Error writing statistics file: " + e.getMessage());
+                // Fallback to console
+                System.out.println("\nFailed to write statistics file, printing to console:");
+                printFinalStatistics(project, spatialRegistry);
+            }
+            
+        } catch (Exception e) {
+            System.err.println("Error saving final statistics: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+    
+    
+    private static long getSimulationStartTime() {
+        return simulationStartTime;
     }
 }
