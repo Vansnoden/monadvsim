@@ -387,8 +387,8 @@ public class App {
         System.out.println("Seeding initial population...");
 
         Random rand = new Random();
-        int tanksToSeed = 1000;  // Increased
-        int mosquitoesToSeed = 10000;  // Reduced from 50000 for better distribution
+        int tanksToSeed = 10000;  // Increased
+        int mosquitoesToSeed = 100000;  // Reduced from 50000 for better distribution
 
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
         double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();

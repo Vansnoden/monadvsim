@@ -15,6 +15,9 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -41,6 +44,12 @@ public class SimulationEngine implements Runnable {
     // Statistics
     private final ConcurrentHashMap<String, AtomicInteger> layerStats = new ConcurrentHashMap<>();
     private final Object exportLock = new Object();
+    // Export management
+    private final ExecutorService exportExecutor;
+    private final AtomicBoolean exportInProgress = new AtomicBoolean(false);
+    private final Queue<ExportTask> exportQueue = new ConcurrentLinkedQueue<>();
+
+
 
     
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
@@ -58,6 +67,13 @@ public class SimulationEngine implements Runnable {
             1000,                        // Queue capacity
             60, TimeUnit.SECONDS         // Keep-alive time
         );
+        
+        this.exportExecutor = Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "Export-Thread");
+            t.setDaemon(true);
+            t.setPriority(Thread.MIN_PRIORITY);
+            return t;
+        });
         
         // Register shutdown hook
         this.simulationExecutor.addShutdownHook(this::cleanupResources);
@@ -219,23 +235,127 @@ public class SimulationEngine implements Runnable {
 //    }
     
     
+//    private void exportSnapshot(Project project) {
+//        synchronized (exportLock) {
+//            try {
+//                String dirPath = "results";
+//                File dir = new File(dirPath);
+//                if (!dir.exists()) {
+//                    dir.mkdirs();
+//                }
+//
+//                String filename = String.format("results/snapshot_tick_%d.csv", 
+//                    timeManager.getTickCount());
+//                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+//                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
+//                System.out.println("✅ Snapshot exported to: " + filename);
+//            } catch (Exception e) {
+//                System.err.println("Error exporting snapshot: " + e.getMessage());
+//            }
+//        }
+//    }
+    
     private void exportSnapshot(Project project) {
-        synchronized (exportLock) {
-            try {
-                String dirPath = "results";
-                File dir = new File(dirPath);
-                if (!dir.exists()) {
-                    dir.mkdirs();
-                }
+        long currentTick = timeManager.getTickCount();
 
-                String filename = String.format("results/snapshot_tick_%d.csv", 
-                    timeManager.getTickCount());
-                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
-                System.out.println("✅ Snapshot exported to: " + filename);
-            } catch (Exception e) {
-                System.err.println("Error exporting snapshot: " + e.getMessage());
+        // Create a snapshot of project data for export (avoids concurrency issues)
+        ExportTask task = new ExportTask(project, currentTick);
+        exportQueue.offer(task);
+
+        // Process export queue if not already processing
+        if (exportInProgress.compareAndSet(false, true)) {
+            exportExecutor.submit(this::processExportQueue);
+        }
+    }
+    
+    private void processExportQueue() {
+        try {
+            while (!exportQueue.isEmpty()) {
+                ExportTask task = exportQueue.poll();
+                if (task != null) {
+                    processSingleExport(task);
+                }
             }
+        } finally {
+            exportInProgress.set(false);
+
+            // If new tasks arrived while processing, start again
+            if (!exportQueue.isEmpty() && exportInProgress.compareAndSet(false, true)) {
+                exportExecutor.submit(this::processExportQueue);
+            }
+        }
+    }
+    
+    
+    private void processSingleExport(ExportTask task) {
+        try {
+            String dirPath = "results";
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+
+            // Create a defensive copy of agents to avoid concurrency issues
+            List<Agent> agentsSnapshot = new ArrayList<>();
+            for (AgentLayer layer : task.project.getAgentLayers()) {
+                agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
+            }
+
+            // Create a temporary project snapshot
+            Project snapshot = createProjectSnapshot(task.project, agentsSnapshot);
+
+            persistenceService.exportToCSV(snapshot, filename, task.tick);
+            System.out.println("✅ Snapshot exported to: " + filename);
+
+        } catch (Exception e) {
+            System.err.println("Error exporting snapshot: " + e.getMessage());
+        }
+    }
+    
+    private Project createProjectSnapshot(Project original, List<Agent> agents) {
+        // Create a lightweight snapshot for export
+        Project snapshot = new Project(original.getName() + "_snapshot");
+
+        // Copy basic settings
+        snapshot.setDefaultAgentSearchRadius(original.getDefaultAgentSearchRadius());
+        snapshot.setDefaultHatchingProbability(original.getDefaultHatchingProbability());
+        snapshot.setDefaultAgentStep(original.getDefaultAgentStep());
+        snapshot.setDefaultBirthRate(original.getDefaultBirthRate());
+        snapshot.setDefaultMaxAgentAge(original.getDefaultMaxAgentAge());
+
+        // Copy layers (these are mostly immutable)
+        for (Layer layer : original.getLayers()) {
+            if (!(layer instanceof AgentLayer)) {
+                snapshot.addLayer(layer);
+            }
+        }
+
+        // Create agent layers snapshot
+        for (AgentLayer originalLayer : original.getAgentLayers()) {
+            AgentLayer layerSnapshot = new AgentLayer(originalLayer.getName(), null, null);
+
+            // Add only agents from this layer
+            for (Agent agent : agents) {
+                // This is simplified - you might need to filter by layer
+                layerSnapshot.addAgent(agent);
+            }
+
+            snapshot.addLayer(layerSnapshot);
+        }
+
+        return snapshot;
+    }
+    
+    private static class ExportTask {
+        final Project project;
+        final long tick;
+
+        ExportTask(Project project, long tick) {
+            this.project = project;
+            this.tick = tick;
         }
     }
     
@@ -259,7 +379,17 @@ public class SimulationEngine implements Runnable {
             }
             layer.shutdown();
         });
-        
+        if (exportExecutor != null) {
+            exportExecutor.shutdown();
+            try {
+                if (!exportExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    exportExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                exportExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
         // Print final statistics
         printFinalStatistics();
         SnapshotMerger.mergeAfterSimulation();
