@@ -24,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 
@@ -269,12 +271,16 @@ public class SimulationEngine implements Runnable {
 
         // Use simplified export method
         ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-        boolean success = persistenceService.exportToCSV(task.project, filename, task.tick);
-
-        if (success) {
-            System.out.printf("[Export] DONE processing tick %d%n", task.tick);
-        } else {
-            System.err.printf("[Export] FAILED processing tick %d%n", task.tick);
+        boolean success;
+        try {
+            success = persistenceService.exportToCSV(task.project, filename, task.tick);
+            if (success) {
+                System.out.printf("[Export] DONE processing tick %d%n", task.tick);
+            } else {
+                System.err.printf("[Export] FAILED processing tick %d%n", task.tick);
+            }
+        } catch (IOException ex) {
+            Logger.getLogger(SimulationEngine.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
     
