@@ -178,21 +178,4 @@ public class SnapshotMerger {
             deletedCount, totalSize / (1024.0 * 1024.0));
     }
     
-    
-    /**
-     * Command-line interface for merging snapshots
-     */
-//    public static void main(String[] args) {
-//        if (args.length == 0) {
-//            // Default behavior: merge snapshots in results directory
-//            mergeSnapshotsAndCleanup("results", "merged_snapshots.csv");
-//        } else if (args.length == 1) {
-//            mergeSnapshotsAndCleanup(args[0], "merged_snapshots.csv");
-//        } else if (args.length == 2) {
-//            mergeSnapshotsAndCleanup(args[0], args[1]);
-//        } else {
-//            System.out.println("Usage: java SnapshotMerger [results_directory] [output_filename]");
-//            System.out.println("Example: java SnapshotMerger results combined_results.csv");
-//        }
-//    }
 }

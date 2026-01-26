@@ -4,6 +4,7 @@ import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ClimateDatasetManager;
+import com.monadvsim.app.models.utils.SnapshotMerger;
 import java.awt.geom.Rectangle2D;
 import java.io.File;
 import java.io.FileWriter;
@@ -52,10 +53,10 @@ public class App {
                 simulationThread.join();
             }
 
-            System.out.println("✅ Simulation completed successfully!");
+            System.out.println("Simulation completed successfully!");
 
         } catch (Exception e) {
-            System.err.println("❌ Error in simulation: " + e.getMessage());
+            System.err.println("Error in simulation: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -98,9 +99,9 @@ public class App {
                 project.addLayer(elev);
                 project.addLayer(buildings);
                 project.addLayer(population);
-                System.out.println("✅ Static raster layers loaded successfully");
+                System.out.println("Static raster layers loaded successfully");
             } catch (Exception e) {
-                System.err.println("⚠️ Failed to load raster layers: " + e.getMessage());
+                System.err.println("Failed to load raster layers: " + e.getMessage());
                 // Create fallback data
                 createFallbackRasters(elev, buildings, population);
                 project.addLayer(elev);
@@ -116,9 +117,9 @@ public class App {
             
             try {
                 climateManager = persistenceService.loadClimateData(project, netcdfFile, timeManager);
-                System.out.println("✅ Climate data loaded successfully");
+                System.out.println("Climate data loaded successfully");
             } catch (Exception e) {
-                System.err.println("⚠️ Failed to load climate data: " + e.getMessage());
+                System.err.println("Failed to load climate data: " + e.getMessage());
                 System.out.println("Using fallback climate data...");
                 // Create fallback climate layers
                 createFallbackClimateLayers(project, timeManager);
@@ -290,10 +291,10 @@ public class App {
                     // The engine.run() method will call cleanup() which now handles
                     // final snapshot export and merging automatically
 
-                    System.out.println("✅ Simulation thread completed");
+                    System.out.println("Simulation thread completed");
 
                 } catch (Exception e) {
-                    System.err.println("❌ Error in simulation thread: " + e.getMessage());
+                    System.err.println("Error in simulation thread: " + e.getMessage());
                     e.printStackTrace();
                 }
             });
@@ -468,35 +469,6 @@ public class App {
     }
     
     
-//    private static void monitorSimulation(SimulationEngine engine, Project project) {
-//        // Monitor simulation progress in main thread
-//        while (engine != null) {
-//            try {
-//                Thread.sleep(5000); // Check every 5 seconds
-//                
-//                Map<String, Object> state = engine.getState();
-//                boolean running = (Boolean) state.get("running");
-//                
-//                if (!running) {
-//                    break;
-//                }
-//                
-//                // Print progress
-//                long tick = (Long) state.get("tick");
-//                int totalAgents = (Integer) state.get("totalAgents");
-//                double avgTickTime = (Double) state.get("avgTickTime");
-//                
-//                System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
-//                    tick, totalAgents, avgTickTime);
-//                    
-//            } catch (InterruptedException e) {
-//                Thread.currentThread().interrupt();
-//                break;
-//            }
-//        }
-//    }
-    
-    
     private static void monitorSimulation(SimulationEngine engine, Project project) {
         // Monitor simulation progress in main thread
         while (engine != null) {
@@ -630,6 +602,7 @@ public class App {
                                 
                                 // Save statistics before shutting down
                                 saveFinalStatisticsToFile(project, spatialRegistry, engine);
+                                SnapshotMerger.mergeAfterSimulation();
                                 
                                 engine.stop();
                                 simulationThread.interrupt();
@@ -673,7 +646,7 @@ public class App {
         watchdog.setPriority(Thread.MIN_PRIORITY);
         watchdog.start();
         
-        System.out.println("✅ Watchdog thread started");
+        System.out.println("Watchdog thread started");
     }
     
     
@@ -844,7 +817,7 @@ public class App {
                 writer.println("=".repeat(80));
                 writer.println("Statistics saved to: " + new File(filename).getAbsolutePath());
                 
-                System.out.println("✅ Final statistics saved to: " + filename);
+                System.out.println("Final statistics saved to: " + filename);
                 
             } catch (Exception e) {
                 System.err.println("Error writing statistics file: " + e.getMessage());
@@ -898,9 +871,9 @@ public class App {
 
             File file = new File(testFile);
             if (file.exists()) {
-                System.out.println("✅ Test export successful! File size: " + file.length() + " bytes");
+                System.out.println("Test export successful! File size: " + file.length() + " bytes");
             } else {
-                System.err.println("❌ Test export failed - file not created!");
+                System.err.println("Test export failed - file not created!");
             }
 
         } catch (Exception e) {
