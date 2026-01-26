@@ -166,18 +166,6 @@ public class RuleEngine {
         }
     }
 
-    private void executeLayEggs(Agent agent, Project project) {
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), 
-                        project.getDefaultAgentSearchRadius());
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent ia) {
-                ia.addEggs(20);
-                if (agent instanceof LivingAgent la) la.setGravid(false);
-                break;
-            }
-        }
-    }
 
     private void executeHatch(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
@@ -213,7 +201,7 @@ public class RuleEngine {
                     larva.setStage(LifecycleStage.LARVA);
                     larva.setAge(0);
                     larva.setEnergy(0.8);
-
+                    
                     // Schedule for growth to pupa after 5-7 days (480-672 ticks at 15-min intervals)
                     larva.setDaysToPupa(5 + ThreadLocalRandom.current().nextInt(3));
                 }
@@ -249,6 +237,7 @@ public class RuleEngine {
             }
         }
     }
+    
 
     private double getValueAt(Project p, String layerName, double x, double y) {
         Layer layer = p.getLayerByName(layerName);

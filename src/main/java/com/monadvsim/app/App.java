@@ -20,7 +20,6 @@ public class App {
     
     public static void main(String[] args) {
         System.out.print("Hello world");
-        test();
         try {
             // init snapshot output file
             File resultsDir = new File("results");

@@ -4,6 +4,9 @@ import os
 import requests
 import calendar
 from dotenv import load_dotenv
+import xarray as xr
+import rioxarray
+from rasterio.enums import Resampling
 
 
 load_dotenv()
@@ -119,7 +122,7 @@ if __name__ == "__main__":
     DATA_DIR = "prepared_data"
 
 
-    download_gee_data(LAT, LON, BUFFER, DATA_DIR)
+    # download_gee_data(LAT, LON, BUFFER, DATA_DIR)
     download_climate_timeseries(LAT, LON, BUFFER, 
                                 YEAR, MONTH, 
                                 output_path=f"{DATA_DIR}/climate_{YEAR}_{int(BUFFER)}_km_{MONTH}.nc")

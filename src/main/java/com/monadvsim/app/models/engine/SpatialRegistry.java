@@ -3,7 +3,6 @@ package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.GridCell;
-import com.monadvsim.app.models.entities.QuadTree;
 import java.awt.geom.Rectangle2D;
 import java.util.ArrayList;
 import java.util.Collection;

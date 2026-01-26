@@ -1647,18 +1647,6 @@ public class RuleEngine {
         }
     }
 
-    private void executeLayEggs(Agent agent, Project project) {
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), 
-                        project.getDefaultAgentSearchRadius());
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent ia) {
-                ia.addEggs(20);
-                if (agent instanceof LivingAgent la) la.setGravid(false);
-                break;
-            }
-        }
-    }
 
     private void executeHatch(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
@@ -1694,7 +1682,7 @@ public class RuleEngine {
                     larva.setStage(LifecycleStage.LARVA);
                     larva.setAge(0);
                     larva.setEnergy(0.8);
-
+                    
                     // Schedule for growth to pupa after 5-7 days (480-672 ticks at 15-min intervals)
                     larva.setDaysToPupa(5 + ThreadLocalRandom.current().nextInt(3));
                 }
@@ -1730,6 +1718,7 @@ public class RuleEngine {
             }
         }
     }
+    
 
     private double getValueAt(Project p, String layerName, double x, double y) {
         Layer layer = p.getLayerByName(layerName);
@@ -1981,7 +1970,7 @@ public class ProjectPersistenceService {
                     StringBuilder row = new StringBuilder();
 
                     // Basic agent info
-                    row.append(tickCount);
+                    row.append(tickCount).append(",");
                     row.append(agent.getId()).append(",");
                     row.append(layerName).append(",");
                     row.append(agent.getClass().getSimpleName()).append(",");
@@ -5821,18 +5810,12 @@ public class App {
             }
             
             // Create spatial registry
-            Rectangle2D worldBounds;
-            if (climateManager != null && climateManager.getBounds() != null) {
-                worldBounds = climateManager.getBounds();
-                System.out.printf("Using climate bounds: [%.2f, %.2f, %.2f, %.2f]%n",
-                    worldBounds.getMinX(), worldBounds.getMinY(),
-                    worldBounds.getMaxX(), worldBounds.getMaxY());
-            } else {
-                // Addis Ababa area bounds as fallback
-                worldBounds = new Rectangle2D.Double(38.70, 8.95, 0.1, 0.1);
-                System.out.println("Using fallback bounds for Addis Ababa area");
-            }
-            
+            Rectangle2D worldBounds = createWorldBounds(
+                                9.0265, // latitude
+                                38.7311, // longitude
+                                50 // BBuffer in km
+                            );
+
             SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 0.001); // 0.001 degree, Smaller cells for better spatial resolution
             project.setSpatialRegistry(spatialRegistry);
             
@@ -5951,6 +5934,24 @@ public class App {
             
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
+            
+            
+            // Standardize all layers to the same geographic "surface"
+            double minLon = worldBounds.getMinX();
+            double maxLon = worldBounds.getMaxX();
+            double minLat = worldBounds.getMinY();
+            double maxLat = worldBounds.getMaxY();
+
+            elev.setBounds(minLon, maxLon, minLat, maxLat);
+            buildings.setBounds(minLon, maxLon, minLat, maxLat);
+            population.setBounds(minLon, maxLon, minLat, maxLat);
+
+            // If you have climate layers in a list:
+            for (Layer layer : project.getLayers()) {
+                if (layer instanceof RasterLayer rl) {
+                    rl.setBounds(minLon, maxLon, minLat, maxLat);
+                }
+            }
             
             // Seed initial population
             System.out.println("Seeding initial population...");
@@ -6173,6 +6174,16 @@ public class App {
                 break;
             }
         }
+    }
+    
+    
+    public static Rectangle2D createWorldBounds(double centerLat, double centerLon, double bufferKm) {
+        // 1 degree is roughly 111.32 km at the equator
+        double bufferDegrees = bufferKm / 111.32;
+        double minLon = centerLon - bufferDegrees;
+        double minLat = centerLat - bufferDegrees;
+        double sizeDegrees = bufferDegrees * 2;
+        return new Rectangle2D.Double(minLon, minLat, sizeDegrees, sizeDegrees);
     }
     
     

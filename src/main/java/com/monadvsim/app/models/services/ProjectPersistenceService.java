@@ -157,7 +157,7 @@ public class ProjectPersistenceService {
         try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
             // Build header dynamically
             StringBuilder header = new StringBuilder();
-            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
+            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid,EggCount,LarvaCount,waterVolume");
 
             // Add raster layer columns
             for (Layer layer : allLayers) {
@@ -194,7 +194,11 @@ public class ProjectPersistenceService {
                         row.append(la.getAge()).append(",");
                         row.append(la.getStage()).append(",");
                         row.append(String.format("%.3f", la.getEnergy())).append(",");
-                        row.append(la.isGravid());
+                        row.append(la.isGravid()).append(",");
+                        // place older for other fields
+                        row.append("0,");
+                        row.append("0,");
+                        row.append("0");
                     } else if (agent instanceof InertAgent ia) {
                         row.append("true,"); // Alive placeholder for InertAgent
                         row.append("0,"); // Age

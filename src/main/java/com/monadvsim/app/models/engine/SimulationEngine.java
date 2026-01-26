@@ -40,6 +40,7 @@ public class SimulationEngine implements Runnable {
     private final int tickTimeWindow = 100;
     // Statistics
     private final ConcurrentHashMap<String, AtomicInteger> layerStats = new ConcurrentHashMap<>();
+    private final Object exportLock = new Object();
 
     
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
@@ -196,9 +197,30 @@ public class SimulationEngine implements Runnable {
     }
     
     
+//    private void exportSnapshot(Project project) {
+//        // Run export in background thread
+//        CompletableFuture.runAsync(() -> {
+//            try {
+//                String dirPath = "results";
+//                File dir = new File(dirPath);
+//                if (!dir.exists()) {
+//                    dir.mkdirs();
+//                }
+//
+//                String filename = String.format("results/snapshot_tick_%d.csv", 
+//                    timeManager.getTickCount());
+//                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+//                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
+//                System.out.println("✅ Snapshot exported to: " + filename);
+//            } catch (Exception e) {
+//                System.err.println("Error exporting snapshot: " + e.getMessage());
+//            }
+//        }, simulationExecutor);
+//    }
+    
+    
     private void exportSnapshot(Project project) {
-        // Run export in background thread
-        CompletableFuture.runAsync(() -> {
+        synchronized (exportLock) {
             try {
                 String dirPath = "results";
                 File dir = new File(dirPath);
@@ -214,8 +236,9 @@ public class SimulationEngine implements Runnable {
             } catch (Exception e) {
                 System.err.println("Error exporting snapshot: " + e.getMessage());
             }
-        }, simulationExecutor);
+        }
     }
+    
     
     private void reportSpatialStatistics() {
         SpatialRegistry registry = 
