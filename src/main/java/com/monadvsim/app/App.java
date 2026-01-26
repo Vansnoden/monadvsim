@@ -67,7 +67,7 @@ public class App {
             Project project = new Project("Mosquito Simulation");
             // 1 degree of latitude is about 111 km
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
-            project.setDefaultAgentStep(0.000005); // about 55.5 cm
+            project.setDefaultAgentStep(0.00005); // about ~5.5 meters per move
             project.setDefaultBirthRate(20);
             project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
             
@@ -121,18 +121,12 @@ public class App {
             }
             
             // Create spatial registry
-            Rectangle2D worldBounds;
-            if (climateManager != null && climateManager.getBounds() != null) {
-                worldBounds = climateManager.getBounds();
-                System.out.printf("Using climate bounds: [%.2f, %.2f, %.2f, %.2f]%n",
-                    worldBounds.getMinX(), worldBounds.getMinY(),
-                    worldBounds.getMaxX(), worldBounds.getMaxY());
-            } else {
-                // Addis Ababa area bounds as fallback
-                worldBounds = new Rectangle2D.Double(38.70, 8.95, 0.1, 0.1);
-                System.out.println("Using fallback bounds for Addis Ababa area");
-            }
-            
+            Rectangle2D worldBounds = createWorldBounds(
+                                9.0265, // latitude
+                                38.7311, // longitude
+                                50 // BBuffer in km
+                            );
+
             SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 0.001); // 0.001 degree, Smaller cells for better spatial resolution
             project.setSpatialRegistry(spatialRegistry);
             
@@ -179,36 +173,41 @@ public class App {
             
             // Add lifecycle progression rules for Mosquitoes
             mosquitoLayer.addRule(
-                "stage == 'LARVA' && age > 480", // ~5 days as larva
+                "stage == 'LARVA' && age > 480", // ~5 days at 15-min intervals
                 "pupate",
-                2
+                4
             );
+
             mosquitoLayer.addRule(
-                "stage == 'PUPA' && age > 672", // ~7 days as pupa
+                "stage == 'PUPA' && age > 672", // ~7 days at 15-min intervals
                 "emerge",
-                2
+                4
             );
+
+            // Adult behaviors with realistic temperature ranges
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && age > 100 && energy < 0.3", // Hungry adult
+                "stage == 'ADULT' && temperature > 288.15 && energy < 0.5", // >15°C and hungry
                 "feed",
                 3
             );
+
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && age > 200 && energy > 0.8", // Mature adult with energy
+                "stage == 'ADULT' && temperature > 288.15 && energy > 0.7 && age > 200", 
                 "get_gravid",
-                4
+                3
             );
-            
-            // Add rules for water tanks (habitats)
-            habitatLayer.addRule(
-                "temperature > 285.15", // Broader temperature range (>12°C)
-                "hatch",
-                1
+
+            // Death rules
+            mosquitoLayer.addRule(
+                "temperature < 278.15 || temperature > 313.15", // <5°C or >40°C
+                "die",
+                10
             );
-            habitatLayer.addRule(
-                "temperature > 293.15 && precipitation > 0.0005", // Warm and moist
-                "hatch",
-                2  // Higher priority
+
+            mosquitoLayer.addRule(
+                "age > 2880", // 30 days
+                "die",
+                9
             );
             
             // Add layers to project
@@ -238,8 +237,32 @@ public class App {
             tokens.add("elevation");
             layerNames.add("Elevation");
             
+            tokens.add("age");
+            layerNames.add("Mosquitoes");
+            
+            tokens.add("stage");
+            layerNames.add("Mosquitoes");
+            
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
+            
+            
+            // Standardize all layers to the same geographic "surface"
+            double minLon = worldBounds.getMinX();
+            double maxLon = worldBounds.getMaxX();
+            double minLat = worldBounds.getMinY();
+            double maxLat = worldBounds.getMaxY();
+
+            elev.setBounds(minLon, maxLon, minLat, maxLat);
+            buildings.setBounds(minLon, maxLon, minLat, maxLat);
+            population.setBounds(minLon, maxLon, minLat, maxLat);
+
+            // If you have climate layers in a list:
+            for (Layer layer : project.getLayers()) {
+                if (layer instanceof RasterLayer rl) {
+                    rl.setBounds(minLon, maxLon, minLat, maxLat);
+                }
+            }
             
             // Seed initial population
             System.out.println("Seeding initial population...");
@@ -357,56 +380,82 @@ public class App {
     
     
     private static void seedInitialPopulation(AgentLayer habitatLayer, 
-                                             AgentLayer mosquitoLayer,
-                                             RasterLayer buildings,
-                                             RasterLayer population,
-                                             SpatialRegistry spatialRegistry,
-                                             Rectangle2D worldBounds) {
-        System.out.println("Seeding initial population with immediate spatial registration...");
-        
+                                         AgentLayer mosquitoLayer,
+                                         RasterLayer buildings,
+                                         RasterLayer population,
+                                         SpatialRegistry spatialRegistry,
+                                         Rectangle2D worldBounds) {
+        System.out.println("Seeding initial population...");
+
         Random rand = new Random();
-        int tanksToSeed = 100;
-        int mosquitoesToSeed = 50000;
-        
-        
+        int tanksToSeed = 1000;  // Increased
+        int mosquitoesToSeed = 10000;  // Reduced from 50000 for better distribution
+
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
-        double widthLon = 0.1, heightLat = 0.1;
-        
-        // Seed water tanks
-        for (int i = 0; i < tanksToSeed; i++) {
+        double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
+
+        // Seed water tanks - spread more evenly
+        int tanksPlaced = 0;
+        while (tanksPlaced < tanksToSeed) {
             double rx = minLon + (widthLon * rand.nextDouble());
             double ry = minLat + (heightLat * rand.nextDouble());
-            
-            // Only in built-up areas
-            if (buildings.getValueAt(rx, ry) > 0.1) {
+
+            // More relaxed placement criteria
+            double buildingDensity = buildings.getValueAt(rx, ry);
+            if (buildingDensity > 0.01 || rand.nextDouble() < 0.3) { // 30% chance even in low density
                 InertAgent tank = new InertAgent(rx, ry);
-                tank.setLarvalCount(rand.nextInt(20) + 1);
-                tank.setEggCount(rand.nextInt(50) + 10);
-                tank.setCapacity(200);
-                tank.setWaterVolume(rand.nextDouble() * 100.0);
-                
+                tank.setLarvalCount(rand.nextInt(50) + 1);  // More larvae
+                tank.setEggCount(rand.nextInt(100) + 20);   // More eggs
+                tank.setCapacity(500);  // Larger capacity
+                tank.setWaterVolume(30 + rand.nextDouble() * 70.0);  // More water
+
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
+                tanksPlaced++;
             }
         }
-        
-        // Seed mosquitoes
-        for (int i = 0; i < mosquitoesToSeed; i++) {
+
+        // Seed mosquitoes - spread more evenly
+        int mosquitoesPlaced = 0;
+        while (mosquitoesPlaced < mosquitoesToSeed) {
             double rx = minLon + (widthLon * rand.nextDouble());
             double ry = minLat + (heightLat * rand.nextDouble());
-            
-            // Only in populated areas
-            if (population.getValueAt(rx, ry) > 0.1) {
+
+            // More relaxed placement
+            double popDensity = population.getValueAt(rx, ry);
+            if (popDensity > 0.01 || rand.nextDouble() < 0.4) { // 40% chance even in low density
+
+                // Randomize life stages
+                LifecycleStage stage;
+                if (rand.nextDouble() < 0.7) { // 70% adults
+                    stage = LifecycleStage.ADULT;
+                } else if (rand.nextDouble() < 0.5) { // 15% larvae
+                    stage = LifecycleStage.LARVA;
+                } else { // 15% pupae
+                    stage = LifecycleStage.PUPA;
+                }
+
                 LivingAgent mosquito = new LivingAgent(rx, ry);
-                mosquito.setAge(rand.nextInt(500));
-                mosquito.setGravid(rand.nextDouble() < 0.3);
-                mosquito.setStage(LifecycleStage.ADULT);
-                mosquito.setEnergy(0.5 + rand.nextDouble() * 0.5);
-                
+                mosquito.setAge(rand.nextInt(1000));
+                mosquito.setGravid(rand.nextDouble() < 0.2);  // 20% gravid initially
+                mosquito.setStage(stage);
+                mosquito.setEnergy(0.3 + rand.nextDouble() * 0.7);
+
+                // Set development timers based on stage
+                if (stage == LifecycleStage.LARVA) {
+                    mosquito.setDaysToPupa(5 + rand.nextInt(3));
+                } else if (stage == LifecycleStage.PUPA) {
+                    mosquito.setDaysToAdult(2 + rand.nextInt(2));
+                }
+
                 mosquitoLayer.addAgent(mosquito);
                 spatialRegistry.registerAgent(mosquito);
+                mosquitoesPlaced++;
             }
         }
+
+        System.out.printf("Seeded: %d tanks, %d mosquitoes (various stages)%n", 
+                         tanksPlaced, mosquitoesPlaced);
     }
     
     
@@ -436,6 +485,16 @@ public class App {
                 break;
             }
         }
+    }
+    
+    
+    public static Rectangle2D createWorldBounds(double centerLat, double centerLon, double bufferKm) {
+        // 1 degree is roughly 111.32 km at the equator
+        double bufferDegrees = bufferKm / 111.32;
+        double minLon = centerLon - bufferDegrees;
+        double minLat = centerLat - bufferDegrees;
+        double sizeDegrees = bufferDegrees * 2;
+        return new Rectangle2D.Double(minLon, minLat, sizeDegrees, sizeDegrees);
     }
     
     

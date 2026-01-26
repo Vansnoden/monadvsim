@@ -148,35 +148,8 @@ public class ProjectPersistenceService {
         }
     }
 
-//    public void exportToCSV(Project project, String outputPath) throws IOException {
-//        RasterLayer pop = project.getRasterByName("Population");
-//        RasterLayer temp = project.getRasterByName("Temperature");
-//        RasterLayer rain = project.getRasterByName("Rainfall");
-//
-//        try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
-//            writer.println("AgentID,X,Y,Type,Status,PopDensity,TempC,Rain_mm");
-//            for (AgentLayer layer : project.getAgentLayers()) {
-//                for (Agent agent : layer.getAgents()) {
-//                    double t = (temp != null) ? temp.getValueAt(agent.getX(), agent.getY()) - 273.15 : 25.0;
-//                    double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0; // m to mm
-//                    double p = (pop != null) ? pop.getValueAt(agent.getX(), agent.getY()) : 0.0;
-//                    LifecycleStage stage = LifecycleStage.UNDEFINED;
-//                    boolean alive = false;
-//                    if (agent instanceof LivingAgent la){ 
-//                        alive = la.isAlive();
-//                        stage = la.getStage();
-//                    }
-//
-//                    writer.printf("%s,%.6f,%.6f,%s,%b,%.2f,%.2f,%.4f%n",
-//                        agent.getId(), agent.getX(), agent.getY(),
-//                        stage, alive, p, t, r);
-//                }
-//            }
-//        }
-//        System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
-//    }
     
-    public void exportToCSV(Project project, String outputPath) throws IOException {
+    public void exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
         // Collect all layers
         List<Layer> allLayers = project.getLayers();
         List<AgentLayer> agentLayers = project.getAgentLayers();
@@ -184,7 +157,7 @@ public class ProjectPersistenceService {
         try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
             // Build header dynamically
             StringBuilder header = new StringBuilder();
-            header.append("AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
+            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
 
             // Add raster layer columns
             for (Layer layer : allLayers) {
@@ -208,6 +181,7 @@ public class ProjectPersistenceService {
                     StringBuilder row = new StringBuilder();
 
                     // Basic agent info
+                    row.append(tickCount).append(",");
                     row.append(agent.getId()).append(",");
                     row.append(layerName).append(",");
                     row.append(agent.getClass().getSimpleName()).append(",");

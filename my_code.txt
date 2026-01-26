@@ -1096,7 +1096,7 @@ public class SimulationEngine implements Runnable {
                 String filename = String.format("results/snapshot_tick_%d.csv", 
                     timeManager.getTickCount());
                 ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-                persistenceService.exportToCSV(project, filename);
+                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
                 System.out.println("✅ Snapshot exported to: " + filename);
             } catch (Exception e) {
                 System.err.println("Error exporting snapshot: " + e.getMessage());
@@ -1567,31 +1567,48 @@ public class RuleEngine {
             case "hatch" -> executeHatch(agent, project, layer);
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
+            // Add to the switch statement in execute() method
+            case "pupate" -> executePupate(agent, layer);
+            case "emerge" -> executeEmerge(agent, layer);
+            case "feed" -> executeFeed(agent, project, layer);
+        }
+    }
+    
+    private void executePupate(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
+            la.setStage(LifecycleStage.PUPA);
+            la.setEnergy(0.6); // Reset energy for pupa stage
+            System.out.println("Larva " + agent.getId() + " pupated");
         }
     }
 
-    public void execute(String action, Agent agent, Project project) {
-        switch (action.toLowerCase()) {
-            case "die" -> { 
-                if (agent instanceof LivingAgent la) {
-                    la.setAlive(false);
-                } 
-            }
-            case "get_gravid" -> {
-                if (agent instanceof LivingAgent la){
-                    la.setGravid(true);
-                } 
-            }
-            case "lay_eggs" -> executeLayEggs(agent, project);
-            case "move_random" -> {
-                if (agent instanceof LivingAgent la) {
-                    double step = project.getDefaultAgentStep();
-                    la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
-                            (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
+    private void executeEmerge(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+            la.setStage(LifecycleStage.ADULT);
+            la.setEnergy(0.9); // New adult has energy
+            System.out.println("Pupa " + agent.getId() + " emerged as adult");
+        }
+    }
+
+    private void executeFeed(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
+            // Look for nearby hosts (humans/population) to feed on
+            List<Agent> nearby = project.getSpatialRegistry()
+                .getNearbyAgents(agent.getX(), agent.getY(), 
+                    project.getDefaultAgentSearchRadius());
+
+            // Check if in populated area
+            Layer populationLayer = project.getLayerByName("Population");
+            if (populationLayer != null) {
+                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
+                if (popDensity > 1.0) { // Arbitrary threshold
+                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
+                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             }
         }
     }
+
 
     private void executeDie(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
@@ -1662,14 +1679,25 @@ public class RuleEngine {
             System.out.println("Hatching " + hatched + " eggs at " + 
                 project.getDefaultHatchingProbability() + " rate, temp: " + temperature);
 
-            for (int i = 0; i < hatched; i++) {
-                double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+            // Get the Mosquitoes layer to add larvae
+            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+                .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+                .findFirst().orElse(null);
 
-                LivingAgent larva = (LivingAgent) layer.createAgentImmediately(LivingAgent.class, x, y);
-                larva.setStage(LifecycleStage.LARVA);
-                larva.setAge(0);
-                larva.setEnergy(0.8);
+            if (mosquitoLayer != null) {
+                for (int i = 0; i < hatched; i++) {
+                    double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                    double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+
+                    // Create larva in Mosquitoes layer
+                    LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+                    larva.setStage(LifecycleStage.LARVA);
+                    larva.setAge(0);
+                    larva.setEnergy(0.8);
+
+                    // Schedule for growth to pupa after 5-7 days (480-672 ticks at 15-min intervals)
+                    larva.setDaysToPupa(5 + ThreadLocalRandom.current().nextInt(3));
+                }
             }
             layer.updateAgentPositionImmediately(ia);
         }
@@ -1920,35 +1948,8 @@ public class ProjectPersistenceService {
         }
     }
 
-//    public void exportToCSV(Project project, String outputPath) throws IOException {
-//        RasterLayer pop = project.getRasterByName("Population");
-//        RasterLayer temp = project.getRasterByName("Temperature");
-//        RasterLayer rain = project.getRasterByName("Rainfall");
-//
-//        try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
-//            writer.println("AgentID,X,Y,Type,Status,PopDensity,TempC,Rain_mm");
-//            for (AgentLayer layer : project.getAgentLayers()) {
-//                for (Agent agent : layer.getAgents()) {
-//                    double t = (temp != null) ? temp.getValueAt(agent.getX(), agent.getY()) - 273.15 : 25.0;
-//                    double r = (rain != null) ? rain.getValueAt(agent.getX(), agent.getY()) * 1000 : 0.0; // m to mm
-//                    double p = (pop != null) ? pop.getValueAt(agent.getX(), agent.getY()) : 0.0;
-//                    LifecycleStage stage = LifecycleStage.UNDEFINED;
-//                    boolean alive = false;
-//                    if (agent instanceof LivingAgent la){ 
-//                        alive = la.isAlive();
-//                        stage = la.getStage();
-//                    }
-//
-//                    writer.printf("%s,%.6f,%.6f,%s,%b,%.2f,%.2f,%.4f%n",
-//                        agent.getId(), agent.getX(), agent.getY(),
-//                        stage, alive, p, t, r);
-//                }
-//            }
-//        }
-//        System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
-//    }
     
-    public void exportToCSV(Project project, String outputPath) throws IOException {
+    public void exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
         // Collect all layers
         List<Layer> allLayers = project.getLayers();
         List<AgentLayer> agentLayers = project.getAgentLayers();
@@ -1956,7 +1957,7 @@ public class ProjectPersistenceService {
         try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
             // Build header dynamically
             StringBuilder header = new StringBuilder();
-            header.append("AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
+            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
 
             // Add raster layer columns
             for (Layer layer : allLayers) {
@@ -1980,6 +1981,7 @@ public class ProjectPersistenceService {
                     StringBuilder row = new StringBuilder();
 
                     // Basic agent info
+                    row.append(tickCount);
                     row.append(agent.getId()).append(",");
                     row.append(layerName).append(",");
                     row.append(agent.getClass().getSimpleName()).append(",");
@@ -3308,86 +3310,70 @@ public class AgentLayer extends Layer {
     }
     
     
-    private void processAgentsWithRules(Project project) {
+    private void processAgentsWithRules(Project project) throws ExecutionException {
         // Clear thread-local newborns
         immediateNewborns.remove();
 
-        // Use thread-safe collection for futures
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        // Process agents in parallel partitions
+        // Process agents in batches
         agentContainer.processWithBatching(batch -> {
-            // Create a copy of the batch to avoid concurrent modification
-            List<Agent> batchCopy = new ArrayList<>(batch);
-
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                for (Agent agent : batchCopy) {
-                    processAgentRules(agent, project);
-                }
-            }, ruleExecutor);
-
-            futures.add(future);
-        }, 100); // Process in batches of 100
-
-        // Wait for all batches to complete
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            System.err.println("Error processing agent rules: " + e.getMessage());
-            e.printStackTrace();
-            Thread.currentThread().interrupt();
-        }
+            for (Agent agent : batch) {
+                processAgentRules(agent, project);
+            }
+        }, 100);
     }
     
     
     private void processAgentRules(Agent agent, Project project) {
-        try {
-            // Check if agent is alive (for LivingAgent)
-            if (agent instanceof LivingAgent la && !la.isAlive()) {
-                // Schedule for death
-                lifecycleManager.scheduleDeath(agent.getId());
-                deathsThisTick.incrementAndGet();
-                return;
-            }
-
-            // Age increment for LivingAgent
-            if (agent instanceof LivingAgent la) {
-                la.incrementAge();
-
-                // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks)
-                if (la.getAge() > project.getDefaultMaxAgentAge()) {
-                    la.setAlive(false);
+        if (agent == null) return;
+        synchronized (agent) {
+            try {
+                // Check if agent is alive (for LivingAgent)
+                if (agent instanceof LivingAgent la && !la.isAlive()) {
+                    // Schedule for death
                     lifecycleManager.scheduleDeath(agent.getId());
                     deathsThisTick.incrementAndGet();
                     return;
                 }
-            }
 
-            // Evaluate rules
-            for (RuleDefinition rule : rules) {
-                rulesEvaluated.incrementAndGet();
+                // Age increment for LivingAgent
+                if (agent instanceof LivingAgent la) {
+                    la.incrementAge();
 
-                if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                    // Execute rule - this may create immediate newborns
-                    ruleEngine.execute(rule.action(), agent, project, this);
-                    actionsExecuted.incrementAndGet();
-
-                    // Check if agent died during rule execution
-                    if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                    // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks)
+                    if (la.getAge() > project.getDefaultMaxAgentAge()) {
+                        la.setAlive(false);
                         lifecycleManager.scheduleDeath(agent.getId());
                         deathsThisTick.incrementAndGet();
-                        break; // Stop processing rules for dead agent
-                    }
-
-                    // Stop after terminal actions
-                    if (isTerminalAction(rule.action())) {
-                        break;
+                        return;
                     }
                 }
+
+                // Evaluate rules
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+
+                    if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                        // Execute rule - this may create immediate newborns
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
+
+                        // Check if agent died during rule execution
+                        if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                            break; // Stop processing rules for dead agent
+                        }
+
+                        // Stop after terminal actions
+                        if (isTerminalAction(rule.action())) {
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
-            e.printStackTrace();
         }
     }
     
@@ -3532,7 +3518,7 @@ public class AgentLayer extends Layer {
             rulesEvaluated.incrementAndGet();
             
             if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                ruleEngine.execute(rule.action(), agent, project);
+                ruleEngine.execute(rule.action(), agent, project, this);
                 actionsExecuted.incrementAndGet();
                 
                 // Stop after first matching rule if it's a terminal action
@@ -3612,8 +3598,14 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
@@ -3631,6 +3623,7 @@ public class AgentContainer {
     // Dead agent buffer for safe removal
     private final ConcurrentLinkedQueue<Agent> deadAgents = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Agent> newAgents = new ConcurrentLinkedQueue<>();
+    private final ExecutorService batchExecutor;
     
     
     public AgentContainer(int partitionCount) {
@@ -3638,7 +3631,21 @@ public class AgentContainer {
         this.partitions = new ArrayList<>(partitionCount);
         this.agentRegistry = new ConcurrentHashMap<>();
         this.agentPartitionMap = new ConcurrentHashMap<>();
-
+        // Initialize batch executor
+        int processors = Runtime.getRuntime().availableProcessors();
+        this.batchExecutor = Executors.newFixedThreadPool(
+            Math.max(2, processors),
+            new ThreadFactory() {
+                private final AtomicInteger count = new AtomicInteger(1);
+                @Override
+                public Thread newThread(Runnable r) {
+                    Thread t = new Thread(r, "BatchProcessor-" + count.getAndIncrement());
+                    t.setDaemon(true);
+                    t.setPriority(Thread.NORM_PRIORITY - 1);
+                    return t;
+                }
+            }
+        );
         for (int i = 0; i < partitionCount; i++) {
             partitions.add(new ConcurrentLinkedQueue<>());
         }
@@ -3759,36 +3766,52 @@ public class AgentContainer {
     }
     
     
-    public void processWithBatching(Consumer<List<Agent>> batchProcessor, int batchSize) {
-        // Create thread-local copies of each partition
-        List<List<Agent>> threadSafePartitions = new ArrayList<>(partitionCount);
+    public void processWithBatching(Consumer<List<Agent>> batchProcessor, int batchSize) throws ExecutionException {
+        List<CompletableFuture<Void>> futures = new ArrayList<>();
 
-        // Take snapshots of each partition (thread-safe)
-        for (int i = 0; i < partitionCount; i++) {
-            // Create a deep copy of the current partition
-            List<Agent> snapshot = new ArrayList<>(partitions.get(i));
-            threadSafePartitions.add(snapshot);
-        }
+        // Use read lock to ensure consistency while taking snapshots
+        registryLock.readLock().lock();
 
-        // Process snapshots instead of live partitions
-        threadSafePartitions.parallelStream().forEach(partition -> {
-            if (partition.isEmpty()) return;
+        try {
+            // Process each partition
+            for (int i = 0; i < partitionCount; i++) {
+                // Take snapshot under lock protection
+                final int partitionIndex = i;
+                List<Agent> snapshot = new ArrayList<>(partitions.get(i));
 
-            // Process in batches
-            List<Agent> batch = new ArrayList<>(Math.min(batchSize, partition.size()));
-            for (Agent agent : partition) {
-                batch.add(agent);
-                if (batch.size() >= batchSize) {
-                    // Pass a copy of the batch
-                    batchProcessor.accept(new ArrayList<>(batch));
-                    batch.clear();
+                if (snapshot.isEmpty()) continue;
+
+                // Process snapshot in batches
+                for (int start = 0; start < snapshot.size(); start += batchSize) {
+                    int end = Math.min(start + batchSize, snapshot.size());
+                    final List<Agent> batch = new ArrayList<>(snapshot.subList(start, end));
+
+                    CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
+                        try {
+                            batchProcessor.accept(batch);
+                        } catch (Exception e) {
+                            System.err.println("Error in batch processing for partition " + 
+                                             partitionIndex + ": " + e.getMessage());
+                            e.printStackTrace();
+                        }
+                    }, batchExecutor);
+
+                    futures.add(future);
                 }
             }
-            // Process remaining agents
-            if (!batch.isEmpty()) {
-                batchProcessor.accept(new ArrayList<>(batch));
-            }
-        });
+        } finally {
+            registryLock.readLock().unlock();
+        }
+
+        // Wait for all batches to complete
+        try {
+            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            System.err.println("Batch processing interrupted");
+        } catch (ExecutionException e) {
+            System.err.println("Error in batch processing: " + e.getCause().getMessage());
+        }
     }
 
     
@@ -3824,6 +3847,21 @@ public class AgentContainer {
         stats.put("partitionSizes", partitionSizes);
         
         return stats;
+    }
+    
+    
+    public void shutdown() {
+        if (batchExecutor != null) {
+            batchExecutor.shutdown();
+            try {
+                if (!batchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                    batchExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                batchExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
     }
     
     
@@ -5524,12 +5562,30 @@ public class LivingAgent extends Agent {
     // For move operations, we need synchronization
     private final Object positionLock = new Object();
     private volatile double volatileX, volatileY;
+    private AtomicInteger daysToPupa = new AtomicInteger(0);
+    private AtomicInteger daysToAdult = new AtomicInteger(0);
 
     
     public LivingAgent(double x, double y) {
         super(x, y);
         this.volatileX = x;
         this.volatileY = y;
+    }
+    
+    public void setDaysToPupa(int days) {
+        this.daysToPupa.set(days * 96); // Convert days to ticks (15-min intervals)
+    }
+
+    public void setDaysToAdult(int days) {
+        this.daysToAdult.set(days * 96);
+    }
+
+    public boolean shouldPupate() {
+        return getStage() == LifecycleStage.LARVA && getAge() > daysToPupa.get();
+    }
+
+    public boolean shouldEmerge() {
+        return getStage() == LifecycleStage.PUPA && getAge() > daysToAdult.get();
     }
    
     
@@ -5711,7 +5767,7 @@ public class App {
             Project project = new Project("Mosquito Simulation");
             // 1 degree of latitude is about 111 km
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
-            project.setDefaultAgentStep(0.000005); // about 55.5 cm
+            project.setDefaultAgentStep(0.00005); // about ~5.5 meters per move
             project.setDefaultBirthRate(20);
             project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
             
@@ -5815,17 +5871,49 @@ public class App {
                 10 // High priority - death should happen first
             );
             
-//            mosquitoLayer.addRule(
-//                "age > 1000",
-//                "die",
-//                9 // Die from old age
-//            );
+            mosquitoLayer.addRule(
+                "age > 1000",
+                "die",
+                9 // Die from old age
+            );
             
-            // Add rules for water tanks (habitats)
-            habitatLayer.addRule(
-                "temperature > 293.15", // >20°C
-                "hatch",
-                1
+            // Add lifecycle progression rules for Mosquitoes
+            mosquitoLayer.addRule(
+                "stage == 'LARVA' && age > 480", // ~5 days at 15-min intervals
+                "pupate",
+                4
+            );
+
+            mosquitoLayer.addRule(
+                "stage == 'PUPA' && age > 672", // ~7 days at 15-min intervals
+                "emerge",
+                4
+            );
+
+            // Adult behaviors with realistic temperature ranges
+            mosquitoLayer.addRule(
+                "stage == 'ADULT' && temperature > 288.15 && energy < 0.5", // >15°C and hungry
+                "feed",
+                3
+            );
+
+            mosquitoLayer.addRule(
+                "stage == 'ADULT' && temperature > 288.15 && energy > 0.7 && age > 200", 
+                "get_gravid",
+                3
+            );
+
+            // Death rules
+            mosquitoLayer.addRule(
+                "temperature < 278.15 || temperature > 313.15", // <5°C or >40°C
+                "die",
+                10
+            );
+
+            mosquitoLayer.addRule(
+                "age > 2880", // 30 days
+                "die",
+                9
             );
             
             // Add layers to project
@@ -5854,6 +5942,12 @@ public class App {
             
             tokens.add("elevation");
             layerNames.add("Elevation");
+            
+            tokens.add("age");
+            layerNames.add("Mosquitoes");
+            
+            tokens.add("stage");
+            layerNames.add("Mosquitoes");
             
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
@@ -5974,56 +6068,82 @@ public class App {
     
     
     private static void seedInitialPopulation(AgentLayer habitatLayer, 
-                                             AgentLayer mosquitoLayer,
-                                             RasterLayer buildings,
-                                             RasterLayer population,
-                                             SpatialRegistry spatialRegistry,
-                                             Rectangle2D worldBounds) {
-        System.out.println("Seeding initial population with immediate spatial registration...");
-        
+                                         AgentLayer mosquitoLayer,
+                                         RasterLayer buildings,
+                                         RasterLayer population,
+                                         SpatialRegistry spatialRegistry,
+                                         Rectangle2D worldBounds) {
+        System.out.println("Seeding initial population...");
+
         Random rand = new Random();
-        int tanksToSeed = 100;
-        int mosquitoesToSeed = 50000;
-        
-        
+        int tanksToSeed = 1000;  // Increased
+        int mosquitoesToSeed = 10000;  // Reduced from 50000 for better distribution
+
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
-        double widthLon = 0.1, heightLat = 0.1;
-        
-        // Seed water tanks
-        for (int i = 0; i < tanksToSeed; i++) {
+        double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
+
+        // Seed water tanks - spread more evenly
+        int tanksPlaced = 0;
+        while (tanksPlaced < tanksToSeed) {
             double rx = minLon + (widthLon * rand.nextDouble());
             double ry = minLat + (heightLat * rand.nextDouble());
-            
-            // Only in built-up areas
-            if (buildings.getValueAt(rx, ry) > 0.1) {
+
+            // More relaxed placement criteria
+            double buildingDensity = buildings.getValueAt(rx, ry);
+            if (buildingDensity > 0.01 || rand.nextDouble() < 0.3) { // 30% chance even in low density
                 InertAgent tank = new InertAgent(rx, ry);
-                tank.setLarvalCount(rand.nextInt(20) + 1);
-                tank.setEggCount(rand.nextInt(50) + 10);
-                tank.setCapacity(200);
-                tank.setWaterVolume(rand.nextDouble() * 100.0);
-                
+                tank.setLarvalCount(rand.nextInt(50) + 1);  // More larvae
+                tank.setEggCount(rand.nextInt(100) + 20);   // More eggs
+                tank.setCapacity(500);  // Larger capacity
+                tank.setWaterVolume(30 + rand.nextDouble() * 70.0);  // More water
+
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
+                tanksPlaced++;
             }
         }
-        
-        // Seed mosquitoes
-        for (int i = 0; i < mosquitoesToSeed; i++) {
+
+        // Seed mosquitoes - spread more evenly
+        int mosquitoesPlaced = 0;
+        while (mosquitoesPlaced < mosquitoesToSeed) {
             double rx = minLon + (widthLon * rand.nextDouble());
             double ry = minLat + (heightLat * rand.nextDouble());
-            
-            // Only in populated areas
-            if (population.getValueAt(rx, ry) > 0.1) {
+
+            // More relaxed placement
+            double popDensity = population.getValueAt(rx, ry);
+            if (popDensity > 0.01 || rand.nextDouble() < 0.4) { // 40% chance even in low density
+
+                // Randomize life stages
+                LifecycleStage stage;
+                if (rand.nextDouble() < 0.7) { // 70% adults
+                    stage = LifecycleStage.ADULT;
+                } else if (rand.nextDouble() < 0.5) { // 15% larvae
+                    stage = LifecycleStage.LARVA;
+                } else { // 15% pupae
+                    stage = LifecycleStage.PUPA;
+                }
+
                 LivingAgent mosquito = new LivingAgent(rx, ry);
-                mosquito.setAge(rand.nextInt(500));
-                mosquito.setGravid(rand.nextDouble() < 0.3);
-                mosquito.setStage(LifecycleStage.ADULT);
-                mosquito.setEnergy(0.5 + rand.nextDouble() * 0.5);
-                
+                mosquito.setAge(rand.nextInt(1000));
+                mosquito.setGravid(rand.nextDouble() < 0.2);  // 20% gravid initially
+                mosquito.setStage(stage);
+                mosquito.setEnergy(0.3 + rand.nextDouble() * 0.7);
+
+                // Set development timers based on stage
+                if (stage == LifecycleStage.LARVA) {
+                    mosquito.setDaysToPupa(5 + rand.nextInt(3));
+                } else if (stage == LifecycleStage.PUPA) {
+                    mosquito.setDaysToAdult(2 + rand.nextInt(2));
+                }
+
                 mosquitoLayer.addAgent(mosquito);
                 spatialRegistry.registerAgent(mosquito);
+                mosquitoesPlaced++;
             }
         }
+
+        System.out.printf("Seeded: %d tanks, %d mosquitoes (various stages)%n", 
+                         tanksPlaced, mosquitoesPlaced);
     }
     
     

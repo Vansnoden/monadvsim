@@ -139,86 +139,70 @@ public class AgentLayer extends Layer {
     }
     
     
-    private void processAgentsWithRules(Project project) {
+    private void processAgentsWithRules(Project project) throws ExecutionException {
         // Clear thread-local newborns
         immediateNewborns.remove();
 
-        // Use thread-safe collection for futures
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-
-        // Process agents in parallel partitions
+        // Process agents in batches
         agentContainer.processWithBatching(batch -> {
-            // Create a copy of the batch to avoid concurrent modification
-            List<Agent> batchCopy = new ArrayList<>(batch);
-
-            CompletableFuture<Void> future = CompletableFuture.runAsync(() -> {
-                for (Agent agent : batchCopy) {
-                    processAgentRules(agent, project);
-                }
-            }, ruleExecutor);
-
-            futures.add(future);
-        }, 100); // Process in batches of 100
-
-        // Wait for all batches to complete
-        try {
-            CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
-        } catch (InterruptedException | ExecutionException e) {
-            System.err.println("Error processing agent rules: " + e.getMessage());
-            e.printStackTrace();
-            Thread.currentThread().interrupt();
-        }
+            for (Agent agent : batch) {
+                processAgentRules(agent, project);
+            }
+        }, 100);
     }
     
     
     private void processAgentRules(Agent agent, Project project) {
-        try {
-            // Check if agent is alive (for LivingAgent)
-            if (agent instanceof LivingAgent la && !la.isAlive()) {
-                // Schedule for death
-                lifecycleManager.scheduleDeath(agent.getId());
-                deathsThisTick.incrementAndGet();
-                return;
-            }
-
-            // Age increment for LivingAgent
-            if (agent instanceof LivingAgent la) {
-                la.incrementAge();
-
-                // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks)
-                if (la.getAge() > project.getDefaultMaxAgentAge()) {
-                    la.setAlive(false);
+        if (agent == null) return;
+        synchronized (agent) {
+            try {
+                // Check if agent is alive (for LivingAgent)
+                if (agent instanceof LivingAgent la && !la.isAlive()) {
+                    // Schedule for death
                     lifecycleManager.scheduleDeath(agent.getId());
                     deathsThisTick.incrementAndGet();
                     return;
                 }
-            }
 
-            // Evaluate rules
-            for (RuleDefinition rule : rules) {
-                rulesEvaluated.incrementAndGet();
+                // Age increment for LivingAgent
+                if (agent instanceof LivingAgent la) {
+                    la.incrementAge();
 
-                if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                    // Execute rule - this may create immediate newborns
-                    ruleEngine.execute(rule.action(), agent, project, this);
-                    actionsExecuted.incrementAndGet();
-
-                    // Check if agent died during rule execution
-                    if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                    // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks)
+                    if (la.getAge() > project.getDefaultMaxAgentAge()) {
+                        la.setAlive(false);
                         lifecycleManager.scheduleDeath(agent.getId());
                         deathsThisTick.incrementAndGet();
-                        break; // Stop processing rules for dead agent
-                    }
-
-                    // Stop after terminal actions
-                    if (isTerminalAction(rule.action())) {
-                        break;
+                        return;
                     }
                 }
+
+                // Evaluate rules
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+
+                    if (ruleEngine.evaluate(rule.condition(), agent, project)) {
+                        // Execute rule - this may create immediate newborns
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
+
+                        // Check if agent died during rule execution
+                        if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                            break; // Stop processing rules for dead agent
+                        }
+
+                        // Stop after terminal actions
+                        if (isTerminalAction(rule.action())) {
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                e.printStackTrace();
             }
-        } catch (Exception e) {
-            System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
-            e.printStackTrace();
         }
     }
     

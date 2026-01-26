@@ -209,7 +209,7 @@ public class SimulationEngine implements Runnable {
                 String filename = String.format("results/snapshot_tick_%d.csv", 
                     timeManager.getTickCount());
                 ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-                persistenceService.exportToCSV(project, filename);
+                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
                 System.out.println("✅ Snapshot exported to: " + filename);
             } catch (Exception e) {
                 System.err.println("Error exporting snapshot: " + e.getMessage());
