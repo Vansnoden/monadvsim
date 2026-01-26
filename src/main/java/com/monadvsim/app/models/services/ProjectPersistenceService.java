@@ -148,139 +148,77 @@ public class ProjectPersistenceService {
         }
     }
 
-    
-    public void exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
-        // Collect all layers
-        List<Layer> allLayers = project.getLayers();
-        List<AgentLayer> agentLayers = project.getAgentLayers();
-
-        try (PrintWriter writer = new PrintWriter(new File(outputPath))) {
-            // Build header dynamically
-            StringBuilder header = new StringBuilder();
-            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid,EggCount,LarvaCount,waterVolume");
-
-            // Add raster layer columns
-            for (Layer layer : allLayers) {
-                if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
-                    header.append(",").append(layer.getName());
+    public boolean exportToCSV(Project project, String outputPath, long tickCount) {
+        try {
+            File dir = new File("results");
+            if (!dir.exists()) {
+                if (!dir.mkdirs()) {
+                    System.err.println("[Export] ERROR: Could not create results directory");
+                    return false;
                 }
             }
 
-            // Add agent layer statistics (nearby counts)
-            for (AgentLayer agentLayer : agentLayers) {
-                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
+            File file = new File(outputPath);
+            if (file.exists()) {
+                System.out.println("[Export] WARNING: File already exists, overwriting: " + outputPath);
             }
 
-            writer.println(header.toString());
+            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
+                // Write header
+                writer.println("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
 
-            // Write data for each agent
-            for (AgentLayer layer : agentLayers) {
-                String layerName = layer.getName();
-
-                for (Agent agent : layer.getAgents()) {
-                    StringBuilder row = new StringBuilder();
-
-                    // Basic agent info
-                    row.append(tickCount).append(",");
-                    row.append(agent.getId()).append(",");
-                    row.append(layerName).append(",");
-                    row.append(agent.getClass().getSimpleName()).append(",");
-                    row.append(String.format("%.6f", agent.getX())).append(",");
-                    row.append(String.format("%.6f", agent.getY())).append(",");
-
-                    // Agent-specific attributes
-                    if (agent instanceof LivingAgent la) {
-                        row.append(la.isAlive()).append(",");
-                        row.append(la.getAge()).append(",");
-                        row.append(la.getStage()).append(",");
-                        row.append(String.format("%.3f", la.getEnergy())).append(",");
-                        row.append(la.isGravid()).append(",");
-                        // place older for other fields
-                        row.append("0,");
-                        row.append("0,");
-                        row.append("0");
-                    } else if (agent instanceof InertAgent ia) {
-                        row.append("true,"); // Alive placeholder for InertAgent
-                        row.append("0,"); // Age
-                        row.append("INERT,");
-                        row.append("0,"); // Energy
-                        row.append("false,");
-                        // Add InertAgent specific fields
-                        row.append(ia.getEggCount()).append(",");
-                        row.append(ia.getLarvalCount()).append(",");
-                        row.append(String.format("%.2f", ia.getWaterVolume()));
-                    } else {
-                        row.append("true,0,UNKNOWN,0,false");
+                // Write data
+                for (AgentLayer layer : project.getAgentLayers()) {
+                    String layerName = layer.getName();
+                    // Get a thread-safe copy of agents
+                    List<Agent> agents;
+                    synchronized (layer) {
+                        agents = new ArrayList<>(layer.getAgents());
                     }
 
-                    // Add raster layer values
-                    for (Layer envLayer : allLayers) {
-                        if (envLayer instanceof RasterLayer || envLayer instanceof InterpolatedRasterLayer) {
-                            double value = envLayer.getValueAt(agent.getX(), agent.getY());
+                    for (Agent agent : agents) {
+                        StringBuilder row = new StringBuilder();
+                        row.append(tickCount).append(",");
+                        row.append(agent.getId()).append(",");
+                        row.append(layerName).append(",");
+                        row.append(agent.getClass().getSimpleName()).append(",");
+                        row.append(String.format("%.6f", agent.getX())).append(",");
+                        row.append(String.format("%.6f", agent.getY())).append(",");
 
-                            // Format based on layer type
-                            String layerNameLower = envLayer.getName().toLowerCase();
-                            if (layerNameLower.contains("temp") || layerNameLower.contains("t2m")) {
-                                // Temperature: convert Kelvin to Celsius
-                                value = value - 273.15;
-                                row.append(String.format(",%.2f", value));
-                            } else if (layerNameLower.contains("rain") || layerNameLower.contains("precip") || 
-                                      layerNameLower.contains("tp")) {
-                                // Precipitation: convert m to mm
-                                value = value * 1000;
-                                row.append(String.format(",%.4f", value));
-                            } else if (layerNameLower.contains("pop")) {
-                                // Population density
-                                row.append(String.format(",%.2f", value));
-                            } else {
-                                // Other layers
-                                row.append(String.format(",%.4f", value));
-                            }
+                        if (agent instanceof LivingAgent la) {
+                            row.append(la.isAlive()).append(",");
+                            row.append(la.getAge()).append(",");
+                            row.append(la.getStage()).append(",");
+                            row.append(String.format("%.3f", la.getEnergy())).append(",");
+                            row.append(la.isGravid());
+                        } else if (agent instanceof InertAgent ia) {
+                            row.append("true,"); // Alive placeholder
+                            row.append("0,"); // Age
+                            row.append("INERT,");
+                            row.append("0,"); // Energy
+                            row.append("false");
+                        } else {
+                            row.append("true,0,UNKNOWN,0,false");
                         }
+
+                        writer.println(row.toString());
                     }
-
-                    // Add nearby agent counts
-                    SpatialRegistry spatialRegistry = project.getSpatialRegistry();
-                    if (spatialRegistry != null) {
-                        for (AgentLayer otherLayer : agentLayers) {
-                            // Get agents from this layer that are nearby
-                            List<Agent> nearbyAgents = spatialRegistry.getNearbyAgents(
-                                agent.getX(), agent.getY(), 
-                                project.getDefaultAgentSearchRadius());
-
-                            // Count agents from the specific layer
-                            long count = nearbyAgents.stream()
-                                .filter(a -> {
-                                    // Check which layer this agent belongs to
-                                    for (AgentLayer al : agentLayers) {
-                                        if (al.getAgents().contains(a)) {
-                                            return al.getName().equals(otherLayer.getName());
-                                        }
-                                    }
-                                    return false;
-                                })
-                                .count();
-
-                            row.append(",").append(count);
-                        }
-                    } else {
-                        // If no spatial registry, add zeros
-                        for (int i = 0; i < agentLayers.size(); i++) {
-                            row.append(",0");
-                        }
-                    }
-
-                    writer.println(row.toString());
                 }
+
+                writer.flush();
+                System.out.println("[Export] SUCCESS: Exported " + file.getAbsolutePath() + 
+                                 " (" + file.length() + " bytes)");
+                return true;
+
+            } catch (IOException e) {
+                System.err.println("[Export] ERROR writing CSV: " + e.getMessage());
+                return false;
             }
 
-            System.out.println("✅ Results exported with Environmental Context to: " + outputPath);
-            System.out.println("   Included " + allLayers.size() + " layers and " + 
-                              agentLayers.size() + " agent layers");
-
-        } catch (IOException e) {
-            System.err.println("❌ Error exporting CSV: " + e.getMessage());
-            throw e;
+        } catch (Exception e) {
+            System.err.println("[Export] CRITICAL ERROR: " + e.getMessage());
+            e.printStackTrace();
+            return false;
         }
     }
     
@@ -317,7 +255,7 @@ public class ProjectPersistenceService {
             }
             
             climateManager.printStatistics();
-            System.out.println("✅ Climate data loaded successfully");
+            System.out.println("Climate data loaded successfully");
             
             return climateManager;
             

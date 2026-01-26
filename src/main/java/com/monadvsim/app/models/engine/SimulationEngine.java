@@ -6,7 +6,9 @@ import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
 import com.monadvsim.app.models.utils.SnapshotMerger;
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileReader;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -49,8 +51,6 @@ public class SimulationEngine implements Runnable {
     private final AtomicBoolean exportInProgress = new AtomicBoolean(false);
     private final Queue<ExportTask> exportQueue = new ConcurrentLinkedQueue<>();
 
-
-
     
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
         this.project = project;
@@ -83,58 +83,42 @@ public class SimulationEngine implements Runnable {
     @Override
     public void run() {
         running.set(true); 
-        System.out.println("🚀-> Simulation Engine with Incremental Updates Started...");
-        
-        while (running.get()) {
-            long tickStart = System.nanoTime();
-            
-            // TICK SEQUENCE:
-            // 1. Advance time
-            if (!timeManager.tick()) {
-                running.set(false);
-                break;
+        System.out.println("🚀Simulation Engine with Incremental Updates Started...");
+
+        try {
+            while (running.get()) {
+                long tickStart = System.nanoTime();
+
+                // TICK SEQUENCE:
+                // 1. Advance time
+                if (!timeManager.tick()) {
+                    System.out.println("Simulation time limit reached");
+                    break;
+                }
+
+                // 2. Update environment
+                project.updateEnvironment(timeManager.getCurrentFrameIndex());
+
+                // 3. Process agent layers WITH immediate spatial updates
+                processAgentLayersWithImmediateUpdates();
+
+                // 4. Finalize spatial registry for this tick
+                finalizeSpatialRegistry();
+
+                // 5. Report progress and export periodic snapshots
+                reportTickProgress(tickStart);
+
+                // Adaptive sleep
+                adaptiveSleep(System.nanoTime() - tickStart);
             }
-            
-            // 2. Update environment
-            project.updateEnvironment(timeManager.getCurrentFrameIndex());
-            
-            // 3. Process agent layers WITH immediate spatial updates
-            processAgentLayersWithImmediateUpdates();
-            
-            // 4. Finalize spatial registry for this tick
-            finalizeSpatialRegistry();
-            
-            // 5. Report progress
-            reportTickProgress(tickStart);
-            
-            // Adaptive sleep
-            adaptiveSleep(System.nanoTime() - tickStart);
+        } catch (Exception e) {
+            System.err.println("Error in simulation loop: " + e.getMessage());
+            e.printStackTrace();
+        } finally {
+            // Always run cleanup
+            cleanup();
         }
-        
-        // Final cleanup
-        cleanup();
     }
-    
-    
-//    private void processAgentLayersWithImmediateUpdates() {
-//        List<AgentLayer> layers = project.getAgentLayers();
-//        
-//        // Process layers sequentially to maintain dependencies
-//        // (e.g., mosquitoes depend on tanks from previous layer)
-//        for (AgentLayer layer : layers) {
-//            try {
-//                // This now includes immediate spatial registry updates
-//                layer.update(project);
-//                
-//                // Update statistics
-////                updateLayerStats(layer.getName(), layer.getAgents().size());
-//                
-//            } catch (Exception e) {
-//                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//    }
     
     
     private void finalizeSpatialRegistry() {
@@ -193,67 +177,51 @@ public class SimulationEngine implements Runnable {
     
     private void reportTickProgress(long tickStart) {
         long tickDuration = System.nanoTime() - tickStart;
-        
-//        if (timeManager.getTickCount() % 10 == 0) {
-//            reportProgress();
-//            
-//            // Report spatial registry statistics
-//            if (timeManager.getTickCount() % 100 == 0) {
-//                reportSpatialStatistics();
-//            }
-//        }
-        
-        
-        if (timeManager.getTickCount() % 100 == 0) { // Every 100 ticks
-            exportSnapshot(project);
-        }
-        
+
         // Update performance metrics
         updatePerformanceMetrics(tickDuration);
+
+        // Export snapshot every 100 ticks
+        if (timeManager.getTickCount() % 100 == 0) {
+            exportPeriodicSnapshot();
+            printExportStatus();
+        }
+
+        // Print progress every 10 ticks
+        if (timeManager.getTickCount() % 10 == 0) {
+            reportProgress();
+        }
     }
     
     
-//    private void exportSnapshot(Project project) {
-//        // Run export in background thread
-//        CompletableFuture.runAsync(() -> {
-//            try {
-//                String dirPath = "results";
-//                File dir = new File(dirPath);
-//                if (!dir.exists()) {
-//                    dir.mkdirs();
-//                }
-//
-//                String filename = String.format("results/snapshot_tick_%d.csv", 
-//                    timeManager.getTickCount());
-//                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-//                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
-//                System.out.println("✅ Snapshot exported to: " + filename);
-//            } catch (Exception e) {
-//                System.err.println("Error exporting snapshot: " + e.getMessage());
-//            }
-//        }, simulationExecutor);
-//    }
+    private void exportPeriodicSnapshot() {
+        long currentTick = timeManager.getTickCount();
+
+        // Check for stuck exports
+        checkAndClearStuckExports();
+
+        System.out.printf("[Export] Scheduling export for tick %d at %s%n", 
+            currentTick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
+
+        ExportTask task = new ExportTask(project, currentTick);
+        exportQueue.offer(task);
+
+        System.out.printf("[Export] Queue size: %d%n", exportQueue.size());
+
+        if (exportInProgress.compareAndSet(false, true)) {
+            System.out.println("[Export] Starting export processing...");
+            exportExecutor.submit(() -> {
+                try {
+                    processExportQueue();
+                } catch (Exception e) {
+                    System.err.println("[Export] Error in export processing: " + e.getMessage());
+                    e.printStackTrace();
+                    exportInProgress.set(false);
+                }
+            });
+        }
+    }
     
-    
-//    private void exportSnapshot(Project project) {
-//        synchronized (exportLock) {
-//            try {
-//                String dirPath = "results";
-//                File dir = new File(dirPath);
-//                if (!dir.exists()) {
-//                    dir.mkdirs();
-//                }
-//
-//                String filename = String.format("results/snapshot_tick_%d.csv", 
-//                    timeManager.getTickCount());
-//                ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-//                persistenceService.exportToCSV(project, filename, timeManager.getTickCount());
-//                System.out.println("✅ Snapshot exported to: " + filename);
-//            } catch (Exception e) {
-//                System.err.println("Error exporting snapshot: " + e.getMessage());
-//            }
-//        }
-//    }
     
     private void exportSnapshot(Project project) {
         long currentTick = timeManager.getTickCount();
@@ -267,6 +235,7 @@ public class SimulationEngine implements Runnable {
             exportExecutor.submit(this::processExportQueue);
         }
     }
+    
     
     private void processExportQueue() {
         try {
@@ -288,36 +257,37 @@ public class SimulationEngine implements Runnable {
     
     
     private void processSingleExport(ExportTask task) {
-        try {
-            String dirPath = "results";
-            File dir = new File(dirPath);
-            if (!dir.exists()) {
-                dir.mkdirs();
-            }
+        if (task == null || task.project == null) {
+            System.err.println("[Export] ERROR: Invalid export task");
+            return;
+        }
 
-            String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
-            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+        System.out.printf("[Export] START processing tick %d at %s%n", 
+            task.tick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
-            // Create a defensive copy of ALL agents from ALL layers
-            List<Agent> agentsSnapshot = new ArrayList<>();
-            for (AgentLayer layer : task.project.getAgentLayers()) {
-                synchronized (layer) { // Add synchronization for thread safety
-                    // Use getAgents() which returns a copy from AgentContainer
-                    agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
-                }
-            }
+        String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
 
-            // Create a proper project snapshot with all data
-            Project snapshot = createCompleteProjectSnapshot(task.project, agentsSnapshot);
+        // Use simplified export method
+        ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+        boolean success = persistenceService.exportToCSV(task.project, filename, task.tick);
 
-            persistenceService.exportToCSV(snapshot, filename, task.tick);
-            System.out.println("✅ Snapshot exported to: " + filename);
-
-        } catch (Exception e) {
-            System.err.println("Error exporting snapshot: " + e.getMessage());
-            e.printStackTrace();
+        if (success) {
+            System.out.printf("[Export] DONE processing tick %d%n", task.tick);
+        } else {
+            System.err.printf("[Export] FAILED processing tick %d%n", task.tick);
         }
     }
+    
+    
+    private void checkAndClearStuckExports() {
+        if (exportQueue.size() > 10) { // Too many queued exports
+            System.err.println("[Export] WARNING: Too many queued exports (" + 
+                              exportQueue.size() + "), clearing queue");
+            exportQueue.clear();
+            exportInProgress.set(false);
+        }
+    }
+    
     
     private Project createCompleteProjectSnapshot(Project original, List<Agent> agents) {
         // Create a complete snapshot for export
@@ -422,50 +392,59 @@ public class SimulationEngine implements Runnable {
     }
     
     
-//    private void cleanup() {
-//        // Clean up lifecycle managers
-//        project.getAgentLayers().forEach(layer -> {
-//            if (layer.getLifecycleManager() != null) {
-//                layer.getLifecycleManager().shutdown();
-//            }
-//            layer.shutdown();
-//        });
-//        if (exportExecutor != null) {
-//            exportExecutor.shutdown();
-//            try {
-//                if (!exportExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
-//                    exportExecutor.shutdownNow();
-//                }
-//            } catch (InterruptedException e) {
-//                exportExecutor.shutdownNow();
-//                Thread.currentThread().interrupt();
-//            }
-//        }
-//        // Print final statistics
-//        printFinalStatistics();
-//        SnapshotMerger.mergeAfterSimulation();
-//    }
-    
-    
     private void cleanup() {
-        // Force a final snapshot export
-        exportSnapshot(project);
+        System.out.println("Cleaning up simulation resources...");
 
-        // Wait for exports to complete
+        // 1. Ensure all pending exports are processed
+        exportFinalSnapshotNow();
+
+        // 2. Wait for any ongoing exports to complete
         waitForExportsToComplete();
 
-        // Clean up lifecycle managers
-        project.getAgentLayers().forEach(layer -> {
-            if (layer.getLifecycleManager() != null) {
-                layer.getLifecycleManager().shutdown();
-            }
-            layer.shutdown();
-        });
+        // 3. Now merge the snapshots
+        mergeSnapshots();
 
+        System.out.println("Cleanup completed successfully");
+    }
+
+    private void exportFinalSnapshotNow() {
+        long currentTick = timeManager.getTickCount();
+        try {
+            String dirPath = "results";
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+
+            // Get a safe copy of all agents
+            List<Agent> agentsSnapshot = new ArrayList<>();
+            for (AgentLayer layer : project.getAgentLayers()) {
+                synchronized (layer) {
+                    agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
+                }
+            }
+
+            // Create a complete project snapshot
+            Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
+            persistenceService.exportToCSV(snapshot, filename, currentTick);
+            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void waitForExportsToComplete() {
         if (exportExecutor != null) {
             exportExecutor.shutdown();
             try {
-                if (!exportExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                System.out.println("Waiting for exports to complete...");
+                if (!exportExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    System.err.println("Export timeout reached, forcing shutdown");
                     exportExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -473,10 +452,183 @@ public class SimulationEngine implements Runnable {
                 Thread.currentThread().interrupt();
             }
         }
+    }
+    
+    
+    
+    private void mergeSnapshots() {
+        System.out.println("Merging snapshot files...");
+        try {
+            // Use your SnapshotMerger utility
+            SnapshotMerger.mergeAfterSimulation();
+        } catch (Exception e) {
+            System.err.println("Failed to merge snapshots: " + e.getMessage());
+        }
+    }
+    
+    
+    private void exportFinalSnapshot() {
+        long currentTick = timeManager.getTickCount();
+        try {
+            String dirPath = "results";
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
 
-        // Print final statistics
-        printFinalStatistics();
-        SnapshotMerger.mergeAfterSimulation();
+            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+
+            // Get a safe copy of all agents
+            List<Agent> agentsSnapshot = new ArrayList<>();
+            for (AgentLayer layer : project.getAgentLayers()) {
+                synchronized (layer) {
+                    agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
+                }
+            }
+
+            // Create a complete project snapshot
+            Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
+            persistenceService.exportToCSV(snapshot, filename, currentTick);
+            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+
+        } catch (Exception e) {
+            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private void mergeAllSnapshots() {
+        try {
+            System.out.println("🔄 Merging all snapshots...");
+
+            // Create results directory if it doesn't exist
+            File resultsDir = new File("results");
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+                System.out.println("⚠️ No results directory found, nothing to merge");
+                return;
+            }
+
+            // Get all snapshot files
+            File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
+                name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
+
+            if (snapshotFiles == null || snapshotFiles.length == 0) {
+                System.out.println("⚠️ No snapshot files found to merge");
+                return;
+            }
+
+            System.out.println("Found " + snapshotFiles.length + " snapshot files to merge");
+
+            // Sort files by tick number
+            Arrays.sort(snapshotFiles, (f1, f2) -> {
+                try {
+                    int tick1 = extractTickNumber(f1.getName());
+                    int tick2 = extractTickNumber(f2.getName());
+                    return Integer.compare(tick1, tick2);
+                } catch (Exception e) {
+                    return 0;
+                }
+            });
+
+            // Create merged filename with timestamp
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String mergedFilename = String.format("results/merged_simulation_results_%s.csv", timestamp);
+
+            // Merge all files
+            try (PrintWriter writer = new PrintWriter(new FileWriter(mergedFilename))) {
+                boolean headerWritten = false;
+                int totalRows = 0;
+
+                for (int i = 0; i < snapshotFiles.length; i++) {
+                    File file = snapshotFiles[i];
+
+                    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
+                        String line;
+                        int lineNumber = 0;
+
+                        while ((line = reader.readLine()) != null) {
+                            line = line.trim();
+                            if (line.isEmpty()) continue;
+
+                            // Write header only once (from first file)
+                            if (i == 0 && !headerWritten && line.startsWith("TickCount,AgentID")) {
+                                writer.println(line);
+                                headerWritten = true;
+                                continue;
+                            }
+
+                            // Skip header for subsequent files
+                            if (i > 0 && lineNumber == 0 && line.startsWith("TickCount,AgentID")) {
+                                lineNumber++;
+                                continue;
+                            }
+
+                            writer.println(line);
+                            totalRows++;
+                            lineNumber++;
+                        }
+
+                        System.out.printf("Processed: %s (%d rows)%n", file.getName(), lineNumber);
+
+                    } catch (IOException e) {
+                        System.err.println("Error reading file: " + file.getName() + " - " + e.getMessage());
+                    }
+                }
+
+                System.out.printf("Successfully merged %d files into %s (total rows: %d)%n",
+                    snapshotFiles.length, mergedFilename, totalRows);
+
+            } catch (IOException e) {
+                System.err.println("Error writing merged file: " + e.getMessage());
+            }
+
+        } catch (Exception e) {
+            System.err.println("Error merging snapshots: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
+
+    private int extractTickNumber(String filename) {
+        // Extract number from "snapshot_tick_123.csv"
+        try {
+            String numberPart = filename.replace("snapshot_tick_", "").replace(".csv", "");
+            return Integer.parseInt(numberPart);
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+    
+    
+    private void exportSnapshotSynchronously(Project project) {
+        long currentTick = timeManager.getTickCount();
+        try {
+            String dirPath = "results";
+            File dir = new File(dirPath);
+            if (!dir.exists()) {
+                dir.mkdirs();
+            }
+
+            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
+
+            // Get a safe copy of all agents
+            List<Agent> agentsSnapshot = new ArrayList<>();
+            for (AgentLayer layer : project.getAgentLayers()) {
+                // Use getAllAgents() from AgentContainer which creates a copy
+                agentsSnapshot.addAll(layer.getAgents());
+            }
+
+            // Create a complete project snapshot
+            Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
+            persistenceService.exportToCSV(snapshot, filename, currentTick);
+            System.out.println("FINAL Snapshot exported to: " + filename);
+
+        } catch (Exception e) {
+            System.err.println("Error exporting final snapshot: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 
     
@@ -500,20 +652,6 @@ public class SimulationEngine implements Runnable {
                 System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
                 e.printStackTrace();
             }
-        }
-    }
-    
-    
-    private void waitForExportsToComplete() {
-        try {
-            // Wait for export queue to be processed
-            while (!exportQueue.isEmpty()) {
-                Thread.sleep(100);
-            }
-            // Give a little extra time for the last export
-            Thread.sleep(500);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
         }
     }
     
@@ -725,19 +863,6 @@ public class SimulationEngine implements Runnable {
     }
     
     
-//    public Map<String, Object> getState() {
-//        Map<String, Object> state = new HashMap<>();
-//        state.put("running", running.get());
-//        state.put("paused", paused.get());
-//        state.put("tick", timeManager.getTickCount());
-//        state.put("totalAgents", getTotalAgentCount());
-//        state.put("avgTickTime", averageTickTime);
-////        state.put("threadPoolActive", (simulationExecutor).getActiveCount());
-////        state.put("threadPoolQueue", (simulationExecutor).getQueue().size());
-//        return state;
-//    }
-    
-    
     public Map<String, Object> getState() {
         Map<String, Object> state = new HashMap<>();
         try {
@@ -820,6 +945,26 @@ public class SimulationEngine implements Runnable {
             double alpha = 2.0 / (tickTimeWindow + 1);
             averageTickTime = (1 - alpha) * averageTickTime + 
                              alpha * (tickDuration / 1_000_000.0);
+        }
+    }
+    
+    
+    private void printExportStatus() {
+        System.out.printf("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
+            exportQueue.size(), exportInProgress.get(), 
+            exportExecutor != null && !exportExecutor.isShutdown(),
+            exportExecutor != null && exportExecutor.isShutdown());
+
+        // Check if results directory exists and is writable
+        File resultsDir = new File("results");
+        System.out.printf("[Export Status] Results dir exists: %b, writable: %b%n",
+            resultsDir.exists(), resultsDir.canWrite());
+
+        if (resultsDir.exists()) {
+            File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
+                name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
+            System.out.printf("[Export Status] Existing snapshots: %d%n", 
+                snapshotFiles != null ? snapshotFiles.length : 0);
         }
     }
     

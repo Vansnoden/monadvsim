@@ -25,44 +25,37 @@ public class App {
     private static SpatialRegistry currentSpatialRegistry;
       
     
-    
     public static void main(String[] args) {
         System.out.println("Hello world - Starting Multi-Agent Simulation System");
+
         try {
-            // init snapshot output file
+            // Initialize snapshot output directory
             File resultsDir = new File("results");
             if (!resultsDir.exists()) {
                 resultsDir.mkdirs();
-                System.out.println("Created results directory");
+                System.out.println("📁 Created results directory");
             }
-            
+
             // Configure and run simulation
             test();
-            
-            // Run simulation
+
+            // Simple shutdown hook - just stop the engine
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\nShutdown signal received...");
+                System.out.println("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) {
                     simulationEngine.stop();
                 }
-                if (simulationThread != null && simulationThread.isAlive()) {
-                    try {
-                        simulationThread.join(5000);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                    }
-                }
-                // Save final statistics on shutdown
-                saveFinalStatisticsToFile(currentProject, currentSpatialRegistry, simulationEngine);
             }));
-            
+
             // Wait for simulation to complete if running in foreground
             if (simulationThread != null && simulationThread.isAlive()) {
                 simulationThread.join();
             }
-            
+
+            System.out.println("✅ Simulation completed successfully!");
+
         } catch (Exception e) {
-            System.err.println("Error in simulation: " + e.getMessage());
+            System.err.println("❌ Error in simulation: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -288,30 +281,23 @@ public class App {
             // Create and start simulation engine
             System.out.println("Creating simulation engine...");
             simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
-            
+
             // Run simulation in background thread
             simulationThread = new Thread(() -> {
                 try {
                     simulationEngine.run();
-                    
-                    // After simulation completes, export results
-                    System.out.println("Simulation completed, exporting results...");
-                    
-                    // Save final statistics to file
-                    saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
-                    
+
+                    // The engine.run() method will call cleanup() which now handles
+                    // final snapshot export and merging automatically
+
+                    System.out.println("✅ Simulation thread completed");
+
                 } catch (Exception e) {
-                    System.err.println("Error in simulation thread: " + e.getMessage());
+                    System.err.println("❌ Error in simulation thread: " + e.getMessage());
                     e.printStackTrace();
-                    // Try to save statistics even on error
-                    try {
-                        saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
-                    } catch (Exception ex) {
-                        System.err.println("Failed to save statistics: " + ex.getMessage());
-                    }
                 }
             });
-            
+
             simulationThread.setName("Simulation-Thread");
             simulationThread.setDaemon(false);
             simulationThread.start();
@@ -876,5 +862,50 @@ public class App {
     
     private static long getSimulationStartTime() {
         return simulationStartTime;
+    }
+    
+    
+    private static void testExportDirectly() {
+        System.out.println("=== Testing Export Directly ===");
+
+        try {
+            // Create a simple test project
+            Project testProject = new Project("Test Export");
+
+            // Create test layers
+            AgentLayer testLayer = new AgentLayer("TestAgents", null, null);
+
+            // Add some test agents
+            Random rand = new Random();
+            for (int i = 0; i < 100; i++) {
+                LivingAgent agent = new LivingAgent(
+                    38.7 + rand.nextDouble() * 0.1,
+                    8.95 + rand.nextDouble() * 0.1
+                );
+                agent.setAge(rand.nextInt(1000));
+                agent.setEnergy(rand.nextDouble());
+                testLayer.addAgent(agent);
+            }
+
+            testProject.addLayer(testLayer);
+
+            // Test export
+            ProjectPersistenceService service = new ProjectPersistenceService();
+            String testFile = "results/test_export.csv";
+
+            System.out.println("Testing export to: " + testFile);
+            service.exportToCSV(testProject, testFile, 999);
+
+            File file = new File(testFile);
+            if (file.exists()) {
+                System.out.println("✅ Test export successful! File size: " + file.length() + " bytes");
+            } else {
+                System.err.println("❌ Test export failed - file not created!");
+            }
+
+        } catch (Exception e) {
+            System.err.println("Test export failed: " + e.getMessage());
+            e.printStackTrace();
+        }
     }
 }
