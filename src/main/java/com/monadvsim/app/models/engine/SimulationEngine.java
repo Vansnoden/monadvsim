@@ -116,25 +116,25 @@ public class SimulationEngine implements Runnable {
     }
     
     
-    private void processAgentLayersWithImmediateUpdates() {
-        List<AgentLayer> layers = project.getAgentLayers();
-        
-        // Process layers sequentially to maintain dependencies
-        // (e.g., mosquitoes depend on tanks from previous layer)
-        for (AgentLayer layer : layers) {
-            try {
-                // This now includes immediate spatial registry updates
-                layer.update(project);
-                
-                // Update statistics
-//                updateLayerStats(layer.getName(), layer.getAgents().size());
-                
-            } catch (Exception e) {
-                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
-                e.printStackTrace();
-            }
-        }
-    }
+//    private void processAgentLayersWithImmediateUpdates() {
+//        List<AgentLayer> layers = project.getAgentLayers();
+//        
+//        // Process layers sequentially to maintain dependencies
+//        // (e.g., mosquitoes depend on tanks from previous layer)
+//        for (AgentLayer layer : layers) {
+//            try {
+//                // This now includes immediate spatial registry updates
+//                layer.update(project);
+//                
+//                // Update statistics
+////                updateLayerStats(layer.getName(), layer.getAgents().size());
+//                
+//            } catch (Exception e) {
+//                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+//                e.printStackTrace();
+//            }
+//        }
+//    }
     
     
     private void finalizeSpatialRegistry() {
@@ -298,22 +298,73 @@ public class SimulationEngine implements Runnable {
             String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
 
-            // Create a defensive copy of agents to avoid concurrency issues
+            // Create a defensive copy of ALL agents from ALL layers
             List<Agent> agentsSnapshot = new ArrayList<>();
             for (AgentLayer layer : task.project.getAgentLayers()) {
-                agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
+                synchronized (layer) { // Add synchronization for thread safety
+                    // Use getAgents() which returns a copy from AgentContainer
+                    agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
+                }
             }
 
-            // Create a temporary project snapshot
-            Project snapshot = createProjectSnapshot(task.project, agentsSnapshot);
+            // Create a proper project snapshot with all data
+            Project snapshot = createCompleteProjectSnapshot(task.project, agentsSnapshot);
 
             persistenceService.exportToCSV(snapshot, filename, task.tick);
             System.out.println("✅ Snapshot exported to: " + filename);
 
         } catch (Exception e) {
             System.err.println("Error exporting snapshot: " + e.getMessage());
+            e.printStackTrace();
         }
     }
+    
+    private Project createCompleteProjectSnapshot(Project original, List<Agent> agents) {
+        // Create a complete snapshot for export
+        Project snapshot = new Project(original.getName() + "_snapshot_tick_" + System.currentTimeMillis());
+
+        // Copy basic settings
+        snapshot.setDefaultAgentSearchRadius(original.getDefaultAgentSearchRadius());
+        snapshot.setDefaultHatchingProbability(original.getDefaultHatchingProbability());
+        snapshot.setDefaultAgentStep(original.getDefaultAgentStep());
+        snapshot.setDefaultBirthRate(original.getDefaultBirthRate());
+        snapshot.setDefaultMaxAgentAge(original.getDefaultMaxAgentAge());
+
+        // Copy ALL layers (both raster and agent layers)
+        for (Layer layer : original.getLayers()) {
+            if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
+                // For raster layers, create a copy with current frame data
+                snapshot.addLayer(layer);
+            }
+        }
+
+        // Group agents by their original layer for proper export
+        Map<String, List<Agent>> agentsByLayerName = new HashMap<>();
+        for (Agent agent : agents) {
+            // Find which layer this agent belongs to
+            for (AgentLayer originalLayer : original.getAgentLayers()) {
+                if (originalLayer.getAgents().contains(agent)) {
+                    agentsByLayerName.computeIfAbsent(originalLayer.getName(), 
+                        k -> new ArrayList<>()).add(agent);
+                    break;
+                }
+            }
+        }
+
+        // Create agent layers with their respective agents
+        for (Map.Entry<String, List<Agent>> entry : agentsByLayerName.entrySet()) {
+            String layerName = entry.getKey();
+            AgentLayer layerSnapshot = new AgentLayer(layerName, null, null);
+            layerSnapshot.addAgents(entry.getValue());
+            snapshot.addLayer(layerSnapshot);
+        }
+
+        // Copy spatial registry reference
+        snapshot.setSpatialRegistry(original.getSpatialRegistry());
+
+        return snapshot;
+    }
+    
     
     private Project createProjectSnapshot(Project original, List<Agent> agents) {
         // Create a lightweight snapshot for export
@@ -371,7 +422,38 @@ public class SimulationEngine implements Runnable {
     }
     
     
+//    private void cleanup() {
+//        // Clean up lifecycle managers
+//        project.getAgentLayers().forEach(layer -> {
+//            if (layer.getLifecycleManager() != null) {
+//                layer.getLifecycleManager().shutdown();
+//            }
+//            layer.shutdown();
+//        });
+//        if (exportExecutor != null) {
+//            exportExecutor.shutdown();
+//            try {
+//                if (!exportExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+//                    exportExecutor.shutdownNow();
+//                }
+//            } catch (InterruptedException e) {
+//                exportExecutor.shutdownNow();
+//                Thread.currentThread().interrupt();
+//            }
+//        }
+//        // Print final statistics
+//        printFinalStatistics();
+//        SnapshotMerger.mergeAfterSimulation();
+//    }
+    
+    
     private void cleanup() {
+        // Force a final snapshot export
+        exportSnapshot(project);
+
+        // Wait for exports to complete
+        waitForExportsToComplete();
+
         // Clean up lifecycle managers
         project.getAgentLayers().forEach(layer -> {
             if (layer.getLifecycleManager() != null) {
@@ -379,10 +461,11 @@ public class SimulationEngine implements Runnable {
             }
             layer.shutdown();
         });
+
         if (exportExecutor != null) {
             exportExecutor.shutdown();
             try {
-                if (!exportExecutor.awaitTermination(10, TimeUnit.SECONDS)) {
+                if (!exportExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
                     exportExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -390,9 +473,48 @@ public class SimulationEngine implements Runnable {
                 Thread.currentThread().interrupt();
             }
         }
+
         // Print final statistics
         printFinalStatistics();
         SnapshotMerger.mergeAfterSimulation();
+    }
+
+    
+    private void processAgentLayersWithImmediateUpdates() {
+        List<AgentLayer> layers = project.getAgentLayers();
+
+        // Add timeout for layer processing
+        long layerStartTime = System.currentTimeMillis();
+
+        for (AgentLayer layer : layers) {
+            try {
+                // Check if overall simulation is taking too long
+                if (System.currentTimeMillis() - layerStartTime > 5000) { // 5 second timeout
+                    System.err.println("WARNING: Layer processing taking too long, skipping remaining layers");
+                    break;
+                }
+
+                layer.update(project);
+
+            } catch (Exception e) {
+                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+                e.printStackTrace();
+            }
+        }
+    }
+    
+    
+    private void waitForExportsToComplete() {
+        try {
+            // Wait for export queue to be processed
+            while (!exportQueue.isEmpty()) {
+                Thread.sleep(100);
+            }
+            // Give a little extra time for the last export
+            Thread.sleep(500);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
     
     
@@ -603,15 +725,33 @@ public class SimulationEngine implements Runnable {
     }
     
     
+//    public Map<String, Object> getState() {
+//        Map<String, Object> state = new HashMap<>();
+//        state.put("running", running.get());
+//        state.put("paused", paused.get());
+//        state.put("tick", timeManager.getTickCount());
+//        state.put("totalAgents", getTotalAgentCount());
+//        state.put("avgTickTime", averageTickTime);
+////        state.put("threadPoolActive", (simulationExecutor).getActiveCount());
+////        state.put("threadPoolQueue", (simulationExecutor).getQueue().size());
+//        return state;
+//    }
+    
     public Map<String, Object> getState() {
         Map<String, Object> state = new HashMap<>();
-        state.put("running", running.get());
-        state.put("paused", paused.get());
-        state.put("tick", timeManager.getTickCount());
-        state.put("totalAgents", getTotalAgentCount());
-        state.put("avgTickTime", averageTickTime);
-//        state.put("threadPoolActive", (simulationExecutor).getActiveCount());
-//        state.put("threadPoolQueue", (simulationExecutor).getQueue().size());
+        try {
+            state.put("running", running.get());
+            state.put("paused", paused.get());
+            state.put("tick", timeManager.getTickCount());
+            state.put("totalAgents", getTotalAgentCount());
+            state.put("avgTickTime", averageTickTime);
+            // Add timestamp
+            state.put("timestamp", System.currentTimeMillis());
+        } catch (Exception e) {
+            // If we can't get the state, return minimal info
+            state.put("error", "Could not get state: " + e.getMessage());
+            state.put("timestamp", System.currentTimeMillis());
+        }
         return state;
     }
     
@@ -681,4 +821,5 @@ public class SimulationEngine implements Runnable {
                              alpha * (tickDuration / 1_000_000.0);
         }
     }
+    
 }

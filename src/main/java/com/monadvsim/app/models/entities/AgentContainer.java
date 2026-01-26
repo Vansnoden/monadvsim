@@ -141,7 +141,11 @@ public class AgentContainer {
     
     
     // Get all agents (for spatial registry updates)
+    
     public List<Agent> getAllAgents() {
+        // Ensure we're getting a fresh copy
+        applyPendingOperations(); // Process any pending adds/removes first
+
         List<Agent> allAgents = new ArrayList<>(size.get());
         registryLock.readLock().lock();
         try {

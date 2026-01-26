@@ -16,6 +16,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.stream.Collectors;
 
 
@@ -28,12 +29,12 @@ public class AgentLayer extends Layer {
     private final ExecutorService ruleExecutor;
     private int batchSize;
     // Statistics
-    private final AtomicInteger rulesEvaluated = new AtomicInteger(0);
-    private final AtomicInteger actionsExecuted = new AtomicInteger(0);
-    private final AtomicInteger births = new AtomicInteger(0);
-    private final AtomicInteger deaths = new AtomicInteger(0);
-    private final AtomicInteger birthsThisTick = new AtomicInteger(0);
-    private final AtomicInteger deathsThisTick = new AtomicInteger(0);
+    private final AtomicLong rulesEvaluated = new AtomicLong(0);
+    private final AtomicLong actionsExecuted = new AtomicLong(0);
+    private final AtomicLong births = new AtomicLong(0);
+    private final AtomicLong deaths = new AtomicLong(0);
+    private final AtomicLong birthsThisTick = new AtomicLong(0);
+    private final AtomicLong deathsThisTick = new AtomicLong(0);
     private final ThreadLocal<List<Agent>> immediateNewborns = ThreadLocal.withInitial(ArrayList::new);
 
     
@@ -107,16 +108,20 @@ public class AgentLayer extends Layer {
     public void update(Project project) {
         long startTime = System.nanoTime();
 
+        // Add a time limit for layer update (max 100ms)
+        long timeLimit = startTime + 100_000_000L; // 100ms in nanoseconds
+
         try {
             // Reset per-tick counters
             birthsThisTick.set(0);
             deathsThisTick.set(0);
+            rulesEvaluated.set(0); // Reset each tick
 
             // Apply pending agent operations from previous tick
             agentContainer.applyPendingOperations();
 
             // Process all agents with rules
-            processAgentsWithRules(project);
+            processAgentsWithRules(project, timeLimit);
 
             // Process immediate newborns created during rule execution
             processImmediateNewborns();
@@ -125,7 +130,9 @@ public class AgentLayer extends Layer {
             cleanupDeadAgents();
 
             // Process scheduled lifecycle events
-            lifecycleManager.processLifecycleEvents();
+            if (lifecycleManager != null) {
+                lifecycleManager.processLifecycleEvents();
+            }
 
         } catch (Exception e) {
             System.err.println("Critical error in AgentLayer.update() for "
@@ -138,6 +145,31 @@ public class AgentLayer extends Layer {
         logUpdatePerformance(startTime);
     }
     
+    
+    private void processAgentsWithRules(Project project, long timeLimit) throws ExecutionException {
+        // Clear thread-local newborns
+        immediateNewborns.remove();
+
+        // Process agents in batches with timeout check
+        agentContainer.processWithBatching(batch -> {
+            // Check if we've exceeded time limit
+            if (System.nanoTime() > timeLimit) {
+                System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
+                return;
+            }
+
+            for (Agent agent : batch) {
+                processAgentRules(agent, project);
+
+                // Check time limit after each agent
+                if (System.nanoTime() > timeLimit) {
+                    System.out.println("Time limit reached for " + getName() + ", skipping remaining agents");
+                    break;
+                }
+            }
+        }, 100);
+    }
+
     
     private void processAgentsWithRules(Project project) throws ExecutionException {
         // Clear thread-local newborns
@@ -154,6 +186,13 @@ public class AgentLayer extends Layer {
     
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
+
+        // Add safety check - skip processing if too many rules have been evaluated
+        if (rulesEvaluated.get() > 1_000_000_000L) { // 1 billion limit
+            System.err.println("WARNING: Rule evaluation limit reached, skipping further evaluations");
+            return;
+        }
+
         synchronized (agent) {
             try {
                 // Check if agent is alive (for LivingAgent)
@@ -175,14 +214,30 @@ public class AgentLayer extends Layer {
                         deathsThisTick.incrementAndGet();
                         return;
                     }
+
+                    // Check lifecycle progression
+                    if (la.shouldPupate()) {
+                        la.setStage(LifecycleStage.PUPA);
+                        la.setEnergy(0.6);
+                    } else if (la.shouldEmerge()) {
+                        la.setStage(LifecycleStage.ADULT);
+                        la.setEnergy(0.9);
+                    }
                 }
 
-                // Evaluate rules
+                // Evaluate rules with a limit per agent
+                int maxRulesPerAgent = 10;
+                int rulesChecked = 0;
+
                 for (RuleDefinition rule : rules) {
+                    if (rulesChecked++ >= maxRulesPerAgent) {
+                        break; // Prevent infinite rule evaluation
+                    }
+
                     rulesEvaluated.incrementAndGet();
 
                     if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                        // Execute rule - this may create immediate newborns
+                        // Execute rule
                         ruleEngine.execute(rule.action(), agent, project, this);
                         actionsExecuted.incrementAndGet();
 
@@ -267,6 +322,7 @@ public class AgentLayer extends Layer {
                action.equalsIgnoreCase("lay_eggs");
     }
     
+    
     private void logUpdatePerformance(long startTime) {
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
@@ -277,15 +333,40 @@ public class AgentLayer extends Layer {
     }
     
     
+//    public Map<String, Object> getStatistics() {
+//        Map<String, Object> stats = new HashMap<>();
+//        stats.put("agentCount", agentContainer.size());
+//        stats.put("rulesCount", rules.size());
+//        stats.put("rulesEvaluated", rulesEvaluated.get());
+//        stats.put("birthsThisTick", birthsThisTick.get());
+//        stats.put("deathsThisTick", deathsThisTick.get());
+//        stats.putAll(agentContainer.getStatistics());
+//        
+//        return stats;
+//    }
+    
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
         stats.put("agentCount", agentContainer.size());
         stats.put("rulesCount", rules.size());
         stats.put("rulesEvaluated", rulesEvaluated.get());
+        stats.put("actionsExecuted", actionsExecuted.get());
         stats.put("birthsThisTick", birthsThisTick.get());
         stats.put("deathsThisTick", deathsThisTick.get());
+
+        // Add performance metrics
+        stats.put("avgRulesPerAgent", agentContainer.size() > 0 ? 
+            (double)rulesEvaluated.get() / agentContainer.size() : 0);
+
+        // Log if rules are being evaluated excessively
+        if (rulesEvaluated.get() > 1000000) { // More than 1 million rules
+            System.err.println("WARNING: Excessive rule evaluations in " + getName() + 
+                              ": " + rulesEvaluated.get() + " evaluations for " + 
+                              agentContainer.size() + " agents");
+        }
+
         stats.putAll(agentContainer.getStatistics());
-        
+
         return stats;
     }
     

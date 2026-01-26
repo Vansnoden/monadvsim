@@ -294,6 +294,8 @@ public class App {
             simulationThread.setDaemon(false);
             simulationThread.start();
             
+            startWatchdog(simulationEngine, simulationThread);
+            
             System.out.println("Simulation started! Press Ctrl+C to stop.");
             
             // 15. Monitor simulation progress
@@ -458,30 +460,88 @@ public class App {
     }
     
     
+//    private static void monitorSimulation(SimulationEngine engine, Project project) {
+//        // Monitor simulation progress in main thread
+//        while (engine != null) {
+//            try {
+//                Thread.sleep(5000); // Check every 5 seconds
+//                
+//                Map<String, Object> state = engine.getState();
+//                boolean running = (Boolean) state.get("running");
+//                
+//                if (!running) {
+//                    break;
+//                }
+//                
+//                // Print progress
+//                long tick = (Long) state.get("tick");
+//                int totalAgents = (Integer) state.get("totalAgents");
+//                double avgTickTime = (Double) state.get("avgTickTime");
+//                
+//                System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
+//                    tick, totalAgents, avgTickTime);
+//                    
+//            } catch (InterruptedException e) {
+//                Thread.currentThread().interrupt();
+//                break;
+//            }
+//        }
+//    }
+    
+    
     private static void monitorSimulation(SimulationEngine engine, Project project) {
         // Monitor simulation progress in main thread
         while (engine != null) {
             try {
                 Thread.sleep(5000); // Check every 5 seconds
-                
+
                 Map<String, Object> state = engine.getState();
                 boolean running = (Boolean) state.get("running");
-                
+
                 if (!running) {
+                    System.out.println("Simulation has stopped normally");
                     break;
                 }
-                
+
                 // Print progress
                 long tick = (Long) state.get("tick");
                 int totalAgents = (Integer) state.get("totalAgents");
                 double avgTickTime = (Double) state.get("avgTickTime");
-                
+
                 System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
                     tick, totalAgents, avgTickTime);
-                    
+
+                // Every 100 ticks, print more detailed info
+                if (tick % 100 == 0) {
+                    System.out.println("--- Detailed Status ---");
+                    for (AgentLayer layer : project.getAgentLayers()) {
+                        Map<String, Object> layerStats = layer.getStatistics();
+                        System.out.printf("  %s: %d agents, %d rules evaluated%n",
+                            layer.getName(), 
+                            layerStats.get("agentCount"),
+                            layerStats.get("rulesEvaluated"));
+                    }
+                    System.out.println("----------------------");
+                }
+
+                // Check if we're making progress
+                if (avgTickTime > 10000) { // 10 seconds per tick is too slow
+                    System.err.println("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
+                }
+
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
+                System.out.println("Monitor thread interrupted");
                 break;
+            } catch (Exception e) {
+                System.err.println("Error in monitor: " + e.getMessage());
+                // Don't break immediately, might be temporary
+                try {
+                    Thread.sleep(10000); // Wait longer before retrying
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
             }
         }
     }
@@ -530,5 +590,44 @@ public class App {
         System.out.printf("  Total: %d MB%n", totalMB);
         System.out.printf("  Max: %d MB%n", maxMB);
         System.out.println("====================================\n");
+    }
+    
+    
+    private static void startWatchdog(SimulationEngine engine, Thread simulationThread) {
+        Thread watchdog = new Thread(() -> {
+            try {
+                int stuckCount = 0;
+                long lastTick = 0;
+
+                while (simulationThread.isAlive()) {
+                    Thread.sleep(10000); // Check every 10 seconds
+
+                    Map<String, Object> state = engine.getState();
+                    long currentTick = (Long) state.get("tick");
+
+                    if (currentTick == lastTick) {
+                        stuckCount++;
+                        System.err.println("WARNING: Simulation may be stuck at tick " + currentTick + 
+                                         " (stuck count: " + stuckCount + ")");
+
+                        if (stuckCount > 3) { // Stuck for 30+ seconds
+                            System.err.println("CRITICAL: Simulation appears stuck, forcing shutdown");
+                            engine.stop();
+                            simulationThread.interrupt();
+                            break;
+                        }
+                    } else {
+                        stuckCount = 0;
+                        lastTick = currentTick;
+                    }
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        });
+
+        watchdog.setDaemon(true);
+        watchdog.setName("Simulation-Watchdog");
+        watchdog.start();
     }
 }
