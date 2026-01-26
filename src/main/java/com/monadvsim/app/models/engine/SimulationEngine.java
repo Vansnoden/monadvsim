@@ -737,6 +737,7 @@ public class SimulationEngine implements Runnable {
 //        return state;
 //    }
     
+    
     public Map<String, Object> getState() {
         Map<String, Object> state = new HashMap<>();
         try {
