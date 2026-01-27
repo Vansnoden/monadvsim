@@ -249,9 +249,9 @@ public class ProjectPersistenceService {
             }
 
             // Add agent layer statistics (nearby counts)
-            for (AgentLayer agentLayer : agentLayers) {
-                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
-            }
+//            for (AgentLayer agentLayer : agentLayers) {
+//                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
+//            }
 
             writer.println(header.toString());
 
