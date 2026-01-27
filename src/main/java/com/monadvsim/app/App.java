@@ -79,7 +79,7 @@ public class App {
             
             // Set up time manager (simulate 30 days at 15-minute intervals)
             LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
-            int totalTicks = 4 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
+            int totalTicks = 2 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
             TimeManager timeManager = new TimeManager(startDate, totalTicks, 15);
             
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
@@ -384,7 +384,7 @@ public class App {
 
         Random rand = new Random();
         int tanksToSeed = 10000;  // Increased
-        int mosquitoesToSeed = 100000;  // Reduced from 50000 for better distribution
+        int mosquitoesToSeed = 500000;  // Reduced from 50000 for better distribution
 
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
         double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
