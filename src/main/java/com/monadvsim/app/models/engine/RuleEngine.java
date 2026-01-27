@@ -86,7 +86,6 @@ public class RuleEngine {
             case "hatch" -> executeHatch(agent, project, layer);
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
-            // Add to the switch statement in execute() method
             case "pupate" -> executePupate(agent, layer);
             case "emerge" -> executeEmerge(agent, layer);
             case "feed" -> executeFeed(agent, project, layer);

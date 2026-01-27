@@ -79,15 +79,15 @@ public class App {
             
             // Set up time manager (simulate 30 days at 15-minute intervals)
             LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
-            int totalTicks = 30 * 24 * 4; // 30 days * 24 hours * 4 (15-min intervals)
+            int totalTicks = 4 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
             TimeManager timeManager = new TimeManager(startDate, totalTicks, 15);
             
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
             
             // load static rasters
-            String elevation_50_km_file = "prepared_data/elevation_50_km.tiff";
-            String buildings_50_km_file = "prepared_data/buildings_50_km.tif";
-            String population_50_km_file = "prepared_data/pop_density_50_km.tif";
+            String elevation_50_km_file = "prepared_data/elevation_5_km.tiff";
+            String buildings_50_km_file = "prepared_data/buildings_100_km.tif";
+            String population_50_km_file = "prepared_data/population_density_100m.tif";
             
             RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
             RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
@@ -112,7 +112,7 @@ public class App {
             
             // Load climate data
             System.out.println("Loading climate data...");
-            String netcdfFile = "prepared_data/climate_2023_50_km_6.nc";
+            String netcdfFile = "prepared_data/historical_climate_2025_5_km_9_12.nc";
             ClimateDatasetManager climateManager = null;
             
             try {
@@ -150,71 +150,52 @@ public class App {
             
             // Add rules for mosquitoes
             // Note: Temperature is in Kelvin in ERA5 data (0°C = 273.15K, 25°C = 298.15K)
+            // 1. ADULT FEEDING (Only at night/dusk for Anopheles)
+            // Note: Anopheles stephensi are primarily nocturnal biters.
             mosquitoLayer.addRule(
-                "temperature > 298.15 && precipitation < 0.0001", // ~25°C and dry
-                "move_random",
-                1
+                "stage == 'ADULT' && hour >= 18 && hour <= 6 && energy < 0.5", 
+                "feed", 
+                5
             );
+
+            // 2. DIGESTION & EGG DEVELOPMENT (The "Gravid" State)
+            // Trigger: If fed and temperature is optimal (speeds up metabolism)
             mosquitoLayer.addRule(
-                "temperature > 298.15 && precipitation < 0.0001", // ~25°C and dry
-                "get_gravid",
-                2
-            );
-            mosquitoLayer.addRule(
-                "temperature > 298.15 && precipitation > 0.001", // ~25°C and rainy
-                "lay_eggs",
-                3
-            );
-            mosquitoLayer.addRule(
-                "temperature < 283.15 || temperature > 313.15", // <10°C or >40°C
-                "die",
-                10 // High priority - death should happen first
-            );
-            
-            mosquitoLayer.addRule(
-                "age > 1000",
-                "die",
-                9 // Die from old age
-            );
-            
-            // Add lifecycle progression rules for Mosquitoes
-            mosquitoLayer.addRule(
-                "stage == 'LARVA' && age > 480", // ~5 days at 15-min intervals
-                "pupate",
+                "stage == 'ADULT' && energy != 0 && age > 192", 
+                "get_gravid", 
                 4
             );
 
+            // 3. EGG LAYING (Precipitation isn't strictly necessary for stephensi)
+            // Unlike other species, they use man-made containers. 
+            // humidity > 60% is a better trigger than rain.
             mosquitoLayer.addRule(
-                "stage == 'PUPA' && age > 672", // ~7 days at 15-min intervals
-                "emerge",
-                4
+                "gravid == true && temperature > 293.15", 
+                "lay_eggs", 
+                6
             );
 
-            // Adult behaviors with realistic temperature ranges
+            // 4. LARVAL GROWTH (Optimized for 7-10 days)
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && temperature > 288.15 && energy < 0.5", // >15°C and hungry
-                "feed",
+                "stage == 'LARVA' && age > 768 && temperature > 295.15", 
+                "pupate", 
                 3
             );
 
+            // 5. PUPAL EMERGENCE (Fast: ~48 hours)
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && temperature > 288.15 && energy > 0.7 && age > 200", 
-                "get_gravid",
+                "stage == 'PUPA' && age > 192", 
+                "emerge", 
                 3
             );
 
-            // Death rules
+            // 6. THERMAL DEATH (A. stephensi is hardy, but >40°C is lethal)
             mosquitoLayer.addRule(
-                "temperature < 278.15 || temperature > 313.15", // <5°C or >40°C
-                "die",
-                10
+                "temperature < 283.15 || temperature > 313.15", 
+                "die", 
+                10 
             );
-
-            mosquitoLayer.addRule(
-                "age > 2880", // 30 days
-                "die",
-                9
-            );
+            
             
             // Add layers to project
             project.addLayer(mosquitoLayer);
@@ -248,6 +229,10 @@ public class App {
             
             tokens.add("stage");
             layerNames.add("Mosquitoes");
+            
+            tokens.add("gravid");
+            layerNames.add("Mosquitoes");
+
             
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
