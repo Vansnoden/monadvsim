@@ -22,12 +22,15 @@ public class App {
     private static Thread simulationThread;
     // Helper method to track simulation start time
     private static long simulationStartTime = System.currentTimeMillis();
-    private static Project currentProject;
-    private static SpatialRegistry currentSpatialRegistry;
+    private static Project project;
+    private static SpatialRegistry spatialRegistry;
+    private static TimeManager timeManager;
+    private static Rectangle2D worldBounds;
+    private static ProjectPersistenceService persistenceService;
       
     
     public static void main(String[] args) {
-        System.out.println("Hello world - Starting Multi-Agent Simulation System");
+        System.out.println("Starting Multi-Agent Simulation System");
 
         try {
             // Initialize snapshot output directory
@@ -38,7 +41,31 @@ public class App {
             }
 
             // Configure and run simulation
-            test();
+            
+            // define simulation time
+            LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
+            int totalTicks = 2 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
+            timeManager = new TimeManager(startDate, totalTicks, 15);
+            
+            // configure simulation bounds (world bounds)
+            // Create spatial registry
+            worldBounds = createWorldBounds(
+                                9.0265, // latitude
+                                38.7311, // longitude
+                                5 // Buffer in km
+                            );
+            // initialize project persistence service
+            persistenceService = new ProjectPersistenceService();
+            
+            // initialize spatial registry
+            spatialRegistry = new SpatialRegistry(worldBounds, 0.001); // 0.001 degree, Smaller cells for better spatial resolution
+            
+            // poject initialization
+            project = new Project("Mosquito Simulation");
+            configureSimulation(project, persistenceService, spatialRegistry, timeManager, 
+                    worldBounds);
+            
+            createAndStartSimulation(project, timeManager, spatialRegistry);
 
             // Simple shutdown hook - just stop the engine
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -55,21 +82,19 @@ public class App {
 
             System.out.println("Simulation completed successfully!");
 
-        } catch (Exception e) {
+        } catch (InterruptedException e) {
             System.err.println("Error in simulation: " + e.getMessage());
-            e.printStackTrace();
         }
     }
     
     
-    private static void test(){
-        System.out.println("Starting Multi-Agent Simulation with Climate Data");
-        
+    private static void configureSimulation(Project project, 
+            ProjectPersistenceService persistenceService, 
+            SpatialRegistry spatialRegistry, TimeManager timeManager, 
+            Rectangle2D worldBounds){
+        System.out.println("Configuring project");
         try {
-            // 1. Create project
-            Project project = new Project("Mosquito Simulation");
-            currentProject = project; // Store for later use
-            
+                        
             // 1 degree of latitude is about 111 km
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
             project.setDefaultAgentStep(0.00005); // about ~5.5 meters per move
@@ -77,25 +102,19 @@ public class App {
             project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
             project.setDefaultHatchingProbability(0.8);
             
-            // Set up time manager (simulate 30 days at 15-minute intervals)
-            LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
-            int totalTicks = 2 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
-            TimeManager timeManager = new TimeManager(startDate, totalTicks, 15);
-            
-            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-            
             // load static rasters
-            String elevation_50_km_file = "prepared_data/elevation_5_km.tiff";
-            String buildings_50_km_file = "prepared_data/buildings_100_km.tif";
-            String population_50_km_file = "prepared_data/population_density_100m.tif";
+            String elevation_file = "prepared_data/elevation_5_km.tiff";
+            String buildings_file = "prepared_data/buildings_100_km.tif";
+            String population_file = "prepared_data/population_density_100m.tif";
             
             RasterLayer elev = new MemoryMappedRasterLayer("Elevation", 1, 1, 1);
             RasterLayer buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
             RasterLayer population = new MemoryMappedRasterLayer("Population", 1, 1, 1);
+            
             try {
-                persistenceService.loadRasterData(elev, elevation_50_km_file);
-                persistenceService.loadRasterData(buildings, buildings_50_km_file);
-                persistenceService.loadRasterData(population, population_50_km_file);
+                persistenceService.loadRasterData(elev, elevation_file);
+                persistenceService.loadRasterData(buildings, buildings_file);
+                persistenceService.loadRasterData(population, population_file);
                 project.addLayer(elev);
                 project.addLayer(buildings);
                 project.addLayer(population);
@@ -109,14 +128,14 @@ public class App {
                 project.addLayer(population);
             }
             
-            
             // Load climate data
             System.out.println("Loading climate data...");
             String netcdfFile = "prepared_data/historical_climate_2025_5_km_9_12.nc";
             ClimateDatasetManager climateManager = null;
             
             try {
-                climateManager = persistenceService.loadClimateData(project, netcdfFile, timeManager);
+                climateManager = persistenceService.loadClimateData(project, 
+                        netcdfFile, timeManager);
                 System.out.println("Climate data loaded successfully");
             } catch (Exception e) {
                 System.err.println("Failed to load climate data: " + e.getMessage());
@@ -125,17 +144,8 @@ public class App {
                 createFallbackClimateLayers(project, timeManager);
             }
             
-            // Create spatial registry
-            Rectangle2D worldBounds = createWorldBounds(
-                                9.0265, // latitude
-                                38.7311, // longitude
-                                50 // BBuffer in km
-                            );
-
-            SpatialRegistry spatialRegistry = new SpatialRegistry(worldBounds, 0.001); // 0.001 degree, Smaller cells for better spatial resolution
+            // set project spatial registry
             project.setSpatialRegistry(spatialRegistry);
-            currentSpatialRegistry = spatialRegistry; // Store for later use
-            
             
             // Create Rule engine and lifecycle manager
             RuleEngine ruleEngine = new RuleEngine();
@@ -148,69 +158,50 @@ public class App {
             mosquitoLayer.setLifecycleManager(lifecycleManager);
             habitatLayer.setLifecycleManager(lifecycleManager);
             
-            // Add rules for mosquitoes
-            // Note: Temperature is in Kelvin in ERA5 data (0°C = 273.15K, 25°C = 298.15K)
-            // 1. ADULT FEEDING (Only at night/dusk for Anopheles)
-            // Note: Anopheles stephensi are primarily nocturnal biters.
+            // Add rules for mosquitoLayer
             mosquitoLayer.addRule(
                 "stage == 'ADULT' && hour >= 18 && hour <= 6 && energy < 0.5", 
                 "feed", 
                 5
             );
-
-            // 2. DIGESTION & EGG DEVELOPMENT (The "Gravid" State)
-            // Trigger: If fed and temperature is optimal (speeds up metabolism)
             mosquitoLayer.addRule(
                 "stage == 'ADULT' && energy != 0 && age > 192", 
                 "get_gravid", 
                 4
             );
-
-            // 3. EGG LAYING (Precipitation isn't strictly necessary for stephensi)
-            // Unlike other species, they use man-made containers. 
-            // humidity > 60% is a better trigger than rain.
             mosquitoLayer.addRule(
                 "gravid == true && temperature > 293.15", 
                 "lay_eggs", 
                 6
             );
-
-            // 4. LARVAL GROWTH (Optimized for 7-10 days)
             mosquitoLayer.addRule(
                 "stage == 'LARVA' && age > 768 && temperature > 295.15", 
                 "pupate", 
                 3
             );
-
-            // 5. PUPAL EMERGENCE (Fast: ~48 hours)
             mosquitoLayer.addRule(
                 "stage == 'PUPA' && age > 192", 
                 "emerge", 
                 3
             );
-
-            // 6. THERMAL DEATH (A. stephensi is hardy, but >40°C is lethal)
             mosquitoLayer.addRule(
                 "temperature < 283.15 || temperature > 313.15", 
                 "die", 
                 10 
             );
-            
-            // habitat layer
+            // rules habitat layer
             habitatLayer.addRule(
                 "stage == 'EGG' && age > 240 && temperature > 287.15 && temperature < 306.15", 
                 "hatch",
                 1
             );
-
             habitatLayer.addRule(
                 "stage == 'EGG' && temperature > 308.15", 
                 "die", 
                 2
             );
             
-            
-            // Add layers to project
+            // Add agent layers to project
             project.addLayer(mosquitoLayer);
             project.addLayer(habitatLayer);
             
@@ -257,10 +248,6 @@ public class App {
             double minLat = worldBounds.getMinY();
             double maxLat = worldBounds.getMaxY();
 
-            elev.setBounds(minLon, maxLon, minLat, maxLat);
-            buildings.setBounds(minLon, maxLon, minLat, maxLat);
-            population.setBounds(minLon, maxLon, minLat, maxLat);
-
             // If you have climate layers in a list:
             for (Layer layer : project.getLayers()) {
                 if (layer instanceof RasterLayer rl) {
@@ -269,44 +256,13 @@ public class App {
             }
             
             // Seed initial population
-            System.out.println("Seeding initial population...");
+            System.out.println("Seeding initial agents population...");
             seedInitialPopulation(habitatLayer, 
                     mosquitoLayer, buildings, population, spatialRegistry,
                     worldBounds);
             
             System.out.printf("Initial agents: %d tanks, %d mosquitoes%n",
                 habitatLayer.getAgents().size(), mosquitoLayer.getAgents().size());
-            
-            // Create and start simulation engine
-            System.out.println("Creating simulation engine...");
-            simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
-
-            // Run simulation in background thread
-            simulationThread = new Thread(() -> {
-                try {
-                    simulationEngine.run();
-
-                    // The engine.run() method will call cleanup() which now handles
-                    // final snapshot export and merging automatically
-
-                    System.out.println("Simulation thread completed");
-
-                } catch (Exception e) {
-                    System.err.println("Error in simulation thread: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            });
-
-            simulationThread.setName("Simulation-Thread");
-            simulationThread.setDaemon(false);
-            simulationThread.start();
-            
-            startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
-            
-            System.out.println("Simulation started! Press Ctrl+C to stop.");
-            
-            // Monitor simulation progress
-            monitorSimulation(simulationEngine, project);
             
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
@@ -315,7 +271,38 @@ public class App {
     }
     
     
-    private static void createFallbackRasters(RasterLayer elev, RasterLayer buildings, RasterLayer population) {
+    private static void createAndStartSimulation(Project project, 
+            TimeManager timeManager, SpatialRegistry spatialRegistry){
+        // Create and start simulation engine
+        System.out.println("Creating simulation engine...");
+        simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
+        
+        // Run simulation in background thread
+        simulationThread = new Thread(() -> {
+            try {
+                simulationEngine.run();
+                System.out.println("Simulation thread completed");
+            } catch (Exception e) {
+                System.err.println("Error in simulation thread: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+
+        simulationThread.setName("Simulation-Thread");
+        simulationThread.setDaemon(false);
+        simulationThread.start();
+
+        startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
+
+        System.out.println("Simulation started! Press Ctrl+C to stop.");
+
+        // Monitor simulation progress
+        monitorSimulation(simulationEngine, project);
+    }
+    
+    
+    private static void createFallbackRasters(RasterLayer elev, 
+            RasterLayer buildings, RasterLayer population) {
         // Create 100x100 grid for Addis Ababa area
         elev.initialize(100, 100, 1);
         elev.setBounds(38.70, 38.80, 8.95, 9.05);
@@ -330,23 +317,27 @@ public class App {
         for (int x = 0; x < 100; x++) {
             for (int y = 0; y < 100; y++) {
                 // Higher elevation in center
-                double elevValue = 2000 + Math.sin(x * 0.1) * Math.cos(y * 0.1) * 500;
+                double elevValue = 2000 + Math.sin(x * 0.1) 
+                        * Math.cos(y * 0.1) * 500;
                 elev.setData(0, x, y, elevValue);
                 
                 // Buildings concentrated in center
-                double distFromCenter = Math.sqrt(Math.pow(x-50, 2) + Math.pow(y-50, 2));
+                double distFromCenter = Math.sqrt(Math.pow(x-50, 2) 
+                        + Math.pow(y-50, 2));
                 double buildingValue = Math.max(0, 1.0 - distFromCenter / 50.0);
                 buildings.setData(0, x, y, buildingValue);
                 
                 // Population density
-                double popValue = Math.max(0, 0.8 - distFromCenter / 60.0) + rand.nextDouble() * 0.2;
+                double popValue = Math.max(0, 0.8 - distFromCenter / 60.0) 
+                        + rand.nextDouble() * 0.2;
                 population.setData(0, x, y, popValue);
             }
         }
     }
     
     
-    private static void createFallbackClimateLayers(Project project, TimeManager timeManager) {
+    private static void createFallbackClimateLayers(Project project, 
+            TimeManager timeManager) {
         // Create fallback temperature layer as a regular RasterLayer
         RasterLayer temperatureLayer = new RasterLayer("t2m", 10, 10, 24*30); // 30 days of hourly data
         
@@ -383,7 +374,7 @@ public class App {
         project.addLayer(temperatureLayer);
         project.addLayer(precipitationLayer);
         
-        System.out.println("✅ Created fallback climate layers");
+        System.out.println("Created fallback climate layers");
     }
     
     
@@ -396,11 +387,13 @@ public class App {
         System.out.println("Seeding initial population...");
 
         Random rand = new Random();
-        int tanksToSeed = 5000;  // Increased
-        int mosquitoesToSeed = 150000;  // Reduced from 50000 for better distribution
+        int tanksToSeed = 500; 
+        int mosquitoesToSeed = 50000;  //
 
-        double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
-        double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
+        double minLon = worldBounds.getMinX();
+        double minLat = worldBounds.getMinY();
+        double widthLon = worldBounds.getWidth();
+        double heightLat = worldBounds.getHeight();
 
         // Seed water tanks - spread more evenly
         int tanksPlaced = 0;
@@ -410,7 +403,7 @@ public class App {
 
             // More relaxed placement criteria
             double buildingDensity = buildings.getValueAt(rx, ry);
-            if (buildingDensity > 0.01 || rand.nextDouble() < 0.3) { // 30% chance even in low density
+            if (buildingDensity > 10 || rand.nextDouble() < 0.3) { // 30% chance even in low density
                 InertAgent tank = new InertAgent(rx, ry);
                 tank.setLarvalCount(rand.nextInt(50) + 1);  // More larvae
                 tank.setEggCount(rand.nextInt(100) + 20);   // More eggs
@@ -431,7 +424,7 @@ public class App {
 
             // More relaxed placement
             double popDensity = population.getValueAt(rx, ry);
-            if (popDensity > 0.01 || rand.nextDouble() < 0.4) { // 40% chance even in low density
+            if (popDensity > 10 || rand.nextDouble() < 0.4) { // 40% chance even in low density
 
                 // Randomize life stages
                 LifecycleStage stage;
@@ -504,7 +497,8 @@ public class App {
 
                 // Check if we're making progress
                 if (avgTickTime > 10000) { // 10 seconds per tick is too slow
-                    System.err.println("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
+                    System.err.println("CRITICAL: Tick time too slow (" 
+                            + avgTickTime + "ms), simulation may be hanging");
                 }
 
             } catch (InterruptedException e) {
@@ -525,7 +519,8 @@ public class App {
     }
     
     
-    public static Rectangle2D createWorldBounds(double centerLat, double centerLon, double bufferKm) {
+    public static Rectangle2D createWorldBounds(double centerLat, 
+            double centerLon, double bufferKm) {
         // 1 degree is roughly 111.32 km at the equator
         double bufferDegrees = bufferKm / 111.32;
         double minLon = centerLon - bufferDegrees;
@@ -534,53 +529,18 @@ public class App {
         return new Rectangle2D.Double(minLon, minLat, sizeDegrees, sizeDegrees);
     }
     
-    
-    private static void printFinalStatistics(Project project, SpatialRegistry spatialRegistry) {
-        System.out.println("\n=== FINAL SIMULATION STATISTICS ===");
-        
-        // Agent statistics
-        int totalAgents = 0;
-        for (AgentLayer layer : project.getAgentLayers()) {
-            int layerAgents = layer.getAgents().size();
-            System.out.printf("%s: %,d agents%n", layer.getName(), layerAgents);
-            totalAgents += layerAgents;
-        }
-        System.out.printf("Total agents: %,d%n", totalAgents);
-        
-        // Spatial registry statistics
-        Map<String, Object> spatialStats = spatialRegistry.getStatistics();
-        System.out.printf("\nSpatial Registry Statistics:%n");
-        System.out.printf("  Grid cells: %d%n", spatialStats.get("gridCells"));
-        System.out.printf("  Total inserts: %d%n", spatialStats.get("totalInserts"));
-        System.out.printf("  Total removes: %d%n", spatialStats.get("totalRemoves"));
-        System.out.printf("  Total updates: %d%n", spatialStats.get("totalUpdates"));
-        System.out.printf("  Max agents per cell: %d%n", spatialStats.get("maxAgentsPerCell"));
-        System.out.printf("  Cache size: %d%n", spatialStats.get("cacheSize"));
-        
-        // Memory usage
-        Runtime runtime = Runtime.getRuntime();
-        long usedMB = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024);
-        long totalMB = runtime.totalMemory() / (1024 * 1024);
-        long maxMB = runtime.maxMemory() / (1024 * 1024);
-        
-        System.out.printf("\nMemory Usage:%n");
-        System.out.printf("  Used: %d MB%n", usedMB);
-        System.out.printf("  Total: %d MB%n", totalMB);
-        System.out.printf("  Max: %d MB%n", maxMB);
-        System.out.println("====================================\n");
-    }
-    
-    
-    // Update the startWatchdog method to include project and spatialRegistry
-    private static void startWatchdog(SimulationEngine engine, Thread simulationThread, 
-                                     Project project, SpatialRegistry spatialRegistry) {
+    // to enable simulation clean interruption at any time
+    private static void startWatchdog(SimulationEngine engine,
+            Thread simulationThread, Project project, 
+            SpatialRegistry spatialRegistry) {
         Thread watchdog = new Thread(() -> {
             try {
                 int stuckCount = 0;
                 long lastTick = 0;
                 long lastTickTime = System.currentTimeMillis();
                 
-                while (simulationThread.isAlive() && !simulationThread.isInterrupted()) {
+                while (simulationThread.isAlive() 
+                        && !simulationThread.isInterrupted()) {
                     Thread.sleep(10000); // Check every 10 seconds
                     
                     try {
@@ -592,11 +552,15 @@ public class App {
                             stuckCount++;
                             long stuckSeconds = (currentTime - lastTickTime) / 1000;
                             
-                            System.err.println("WARNING: Simulation may be stuck at tick " + currentTick + 
-                                             " (stuck for " + stuckSeconds + " seconds, count: " + stuckCount + ")");
+                            System.err.println("WARNING: Simulation may be "
+                                    + "stuck at tick " + currentTick 
+                                    + " (stuck for " + stuckSeconds 
+                                    + " seconds, count: " + stuckCount + ")");
                             
                             if (stuckCount > 3) { // Stuck for 30+ seconds
-                                System.err.println("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
+                                System.err.println("CRITICAL: Simulation "
+                                        + "appears stuck for over 30 "
+                                        + "seconds, forcing shutdown");
                                 
                                 // Save statistics before shutting down
                                 saveFinalStatisticsToFile(project, spatialRegistry, engine);
@@ -609,7 +573,8 @@ public class App {
                                 Thread.sleep(5000);
                                 
                                 if (simulationThread.isAlive()) {
-                                    System.err.println("Simulation thread still alive, forcing termination");
+                                    System.err.println("Simulation thread "
+                                            + "still alive, forcing termination");
                                     System.exit(1);
                                 }
                                 break;
@@ -621,9 +586,11 @@ public class App {
                         }
                         
                     } catch (Exception e) {
-                        System.err.println("Error in watchdog while checking state: " + e.getMessage());
+                        System.err.println("Error in watchdog while "
+                                + "checking state: " + e.getMessage());
                         if (stuckCount++ > 5) {
-                            System.err.println("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
+                            System.err.println("CRITICAL: Cannot retrieve "
+                                    + "simulation state, forcing shutdown");
                             saveFinalStatisticsToFile(project, spatialRegistry, engine);
                             simulationThread.interrupt();
                             break;
@@ -651,9 +618,11 @@ public class App {
     /**
      * Saves final detailed statistics to a file
      */
-    private static void saveFinalStatisticsToFile(Project project, SpatialRegistry spatialRegistry, SimulationEngine engine) {
+    private static void saveFinalStatisticsToFile(Project project, 
+            SpatialRegistry spatialRegistry, SimulationEngine engine) {
         if (project == null || spatialRegistry == null) {
-            System.err.println("Cannot save statistics: project or spatial registry is null");
+            System.err.println("Cannot save statistics: project "
+                    + "or spatial registry is null");
             return;
         }
         
@@ -665,9 +634,12 @@ public class App {
             }
             
             // Generate filename with timestamp
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
-            String filename = String.format("results/%s_final_statistics_%s.txt", safeProjectName, timestamp);
+            String timestamp = LocalDateTime.now()
+                    .format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String safeProjectName = project.getName()
+                    .replaceAll("[^a-zA-Z0-9_\\-]", "_");
+            String filename = String.format("results/%s_final_statistics_%s.txt",
+                    safeProjectName, timestamp);
             
             try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
                 writer.println("=".repeat(80));
@@ -813,15 +785,13 @@ public class App {
                 }
                 
                 writer.println("=".repeat(80));
-                writer.println("Statistics saved to: " + new File(filename).getAbsolutePath());
+                writer.println("Statistics saved to: " 
+                        + new File(filename).getAbsolutePath());
                 
                 System.out.println("Final statistics saved to: " + filename);
                 
             } catch (Exception e) {
                 System.err.println("Error writing statistics file: " + e.getMessage());
-                // Fallback to console
-                System.out.println("\nFailed to write statistics file, printing to console:");
-                printFinalStatistics(project, spatialRegistry);
             }
             
         } catch (Exception e) {
@@ -835,48 +805,4 @@ public class App {
         return simulationStartTime;
     }
     
-    
-    private static void testExportDirectly() {
-        System.out.println("=== Testing Export Directly ===");
-
-        try {
-            // Create a simple test project
-            Project testProject = new Project("Test Export");
-
-            // Create test layers
-            AgentLayer testLayer = new AgentLayer("TestAgents", null, null);
-
-            // Add some test agents
-            Random rand = new Random();
-            for (int i = 0; i < 100; i++) {
-                LivingAgent agent = new LivingAgent(
-                    38.7 + rand.nextDouble() * 0.1,
-                    8.95 + rand.nextDouble() * 0.1
-                );
-                agent.setAge(rand.nextInt(1000));
-                agent.setEnergy(rand.nextDouble());
-                testLayer.addAgent(agent);
-            }
-
-            testProject.addLayer(testLayer);
-
-            // Test export
-            ProjectPersistenceService service = new ProjectPersistenceService();
-            String testFile = "results/test_export.csv";
-
-            System.out.println("Testing export to: " + testFile);
-            service.exportToCSV(testProject, testFile, 999);
-
-            File file = new File(testFile);
-            if (file.exists()) {
-                System.out.println("Test export successful! File size: " + file.length() + " bytes");
-            } else {
-                System.err.println("Test export failed - file not created!");
-            }
-
-        } catch (Exception e) {
-            System.err.println("Test export failed: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
 }
