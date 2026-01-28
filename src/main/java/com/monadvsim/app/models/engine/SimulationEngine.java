@@ -99,6 +99,14 @@ public class SimulationEngine implements Runnable {
                             + timeManager.getTickCount());
                     break;
                 }
+                
+                if (!areAnyLivingAgentsAlive()) {
+                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
+                            + timeManager.getTickCount());
+                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
+                    running.set(false);
+                    break;
+                }
 
                 // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());
@@ -135,6 +143,35 @@ public class SimulationEngine implements Runnable {
         if (System.getProperty("debug.spatial") != null) {
             validateSpatialConsistency();
         }
+    }
+    
+    
+    private boolean areAnyLivingAgentsAlive() {
+        // Check all agent layers for living agents
+        for (AgentLayer layer : project.getAgentLayers()) {
+            List<Agent> agents = layer.getAgents();
+            for (Agent agent : agents) {
+                if (agent instanceof LivingAgent la) {
+                    if (la.isAlive()) {
+                        return true; // Found at least one living agent
+                    }
+                }
+            }
+        }
+        return false; // No living agents found
+    }
+    
+    private int getLivingAgentCount() {
+        int count = 0;
+        for (AgentLayer layer : project.getAgentLayers()) {
+            List<Agent> agents = layer.getAgents();
+            for (Agent agent : agents) {
+                if (agent instanceof LivingAgent la && la.isAlive()) {
+                    count++;
+                }
+            }
+        }
+        return count;
     }
     
     
