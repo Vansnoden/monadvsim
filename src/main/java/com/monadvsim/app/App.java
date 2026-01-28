@@ -384,7 +384,7 @@ public class App {
 
         Random rand = new Random();
         int tanksToSeed = 10000;  // Increased
-        int mosquitoesToSeed = 500000;  // Reduced from 50000 for better distribution
+        int mosquitoesToSeed = 250000;  // Reduced from 50000 for better distribution
 
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
         double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
