@@ -167,11 +167,14 @@ if __name__ == "__main__":
     # Dire Dawa Coordinates
     LAT, LON = 9.604134790332163, 41.8562149505558
     BUFFER = 5 #50.0 # 50km radius
+    
     H_YEAR = 2025
-    F_YEAR = 2026
     H_START_MONTH = 9
-    F_START_MONTH = 1
     H_END_MONTH = 12
+
+    F_YEAR = 2026
+    F_START_MONTH = 1
+    
     DATA_DIR = "prepared_data"
     LEAD_MONTH = 6
 

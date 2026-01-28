@@ -190,6 +190,17 @@
                 <configuration>
                     <mainClass>${exec.mainClass}</mainClass>
                     <arguments>
+                        <argument>-Xmx8g</argument>
+                        <argument>-Xms4g</argument>
+                        <argument>-XX:+UseG1GC</argument>
+                        <argument>-XX:MaxGCPauseMillis=200</argument>
+                        <argument>-XX:+ParallelRefProcEnabled</argument>
+                        <argument>-XX:+UnlockExperimentalVMOptions</argument>
+                        <argument>-XX:G1NewSizePercent=20</argument>
+                        <argument>-XX:G1MaxNewSizePercent=50</argument>
+                        <argument>-XX:G1HeapRegionSize=32M</argument>
+                        <argument>-XX:G1ReservePercent=20</argument>
+                        <argument>-XX:InitiatingHeapOccupancyPercent=35</argument>
                         <argument>--add-opens</argument>
                         <argument>java.base/java.lang=ALL-UNNAMED</argument>
                         <argument>--add-opens</argument>

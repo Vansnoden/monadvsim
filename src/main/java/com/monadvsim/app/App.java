@@ -43,15 +43,15 @@ public class App {
             // Configure and run simulation
             
             // define simulation time
-            LocalDateTime startDate = LocalDateTime.of(2023, 6, 1, 0, 0);
-            int totalTicks = 2 * 30 * 24 * 4; // 4 * 30 days * 24 hours * 4 (15-min intervals)
+            LocalDateTime startDate = LocalDateTime.of(2025, 9, 1, 0, 0);
+            int totalTicks = 60 * 24 * 4; // 30 days * 24 hours * 4 (15-min intervals)
             timeManager = new TimeManager(startDate, totalTicks, 15);
             
             // configure simulation bounds (world bounds)
             // Create spatial registry
             worldBounds = createWorldBounds(
-                                9.0265, // latitude
-                                38.7311, // longitude
+                                9.604134790332163, // latitude
+                                41.8562149505558, // longitude
                                 5 // Buffer in km
                             );
             // initialize project persistence service
@@ -69,7 +69,7 @@ public class App {
 
             // Simple shutdown hook - just stop the engine
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\n🛑 Shutdown signal received...");
+                System.out.println("\n🛑Shutdown signal received...");
                 if (simulationEngine != null) {
                     simulationEngine.stop();
                 }
@@ -79,11 +79,20 @@ public class App {
             if (simulationThread != null && simulationThread.isAlive()) {
                 simulationThread.join();
             }
+            
+            // Save statistics after normal completion
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+            SnapshotMerger.mergeAfterSimulation();
 
             System.out.println("Simulation completed successfully!");
 
         } catch (InterruptedException e) {
             System.err.println("Error in simulation: " + e.getMessage());
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+        }catch (Exception e) {
+            System.err.println("Unexpected error: " + e.getMessage());
+            e.printStackTrace();
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
         }
     }
     
@@ -97,9 +106,9 @@ public class App {
                         
             // 1 degree of latitude is about 111 km
             project.setDefaultAgentSearchRadius(0.0005); // which is about 0.0005 * 111km = 55m
-            project.setDefaultAgentStep(0.00005); // about ~5.5 meters per move
+            project.setDefaultAgentStep(0.00005); // about ~5.5 meters / 15 min per move
             project.setDefaultBirthRate(20);
-            project.setDefaultMaxAgentAge(2880); // Aging death (after 30 days at 15-min intervals: 30*24*4 = 2880 ticks) 
+            project.setDefaultMaxAgentAge(20 * 24 * 4); // 20 days * 24h * 4 (15 days at 15min a tick) 
             project.setDefaultHatchingProbability(0.8);
             
             // load static rasters
@@ -159,46 +168,85 @@ public class App {
             habitatLayer.setLifecycleManager(lifecycleManager);
             
             // Add rules for mosquitoLayer
+            // Feed: Adult mosquitoes between 22.5-67.5 hours old with low energy
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && hour >= 18 && hour <= 6 && energy < 0.5", 
+                "agent.stage == 'ADULT' && agent.age >= 6*15 && agent.age <= 18*15 && agent.energy < 0.5", 
                 "feed", 
                 5
             );
+
+            // Become gravid: Adult with energy, after 48 hours
             mosquitoLayer.addRule(
-                "stage == 'ADULT' && energy != 0 && age > 192", 
+                "agent.stage == 'ADULT' && agent.energy > 0 && agent.age > 192", 
                 "get_gravid", 
                 4
             );
+
+            // Lay eggs: Gravid and temperature > 20°C (293.15K)
             mosquitoLayer.addRule(
-                "gravid == true && temperature > 293.15", 
+                "agent.gravid == true && temperature > 293.15", 
                 "lay_eggs", 
                 6
             );
+
+            // Pupate: Larva older than 8 days, temperature > 22°C
             mosquitoLayer.addRule(
-                "stage == 'LARVA' && age > 768 && temperature > 295.15", 
+                "agent.stage == 'LARVA' && agent.age > 768 && temperature > 295.15", 
                 "pupate", 
                 3
             );
+
+            // Emerge: Pupa older than 2 days
             mosquitoLayer.addRule(
-                "stage == 'PUPA' && age > 192", 
+                "agent.stage == 'PUPA' && agent.age > 192", 
                 "emerge", 
                 3
             );
+
+            // Die: Extreme temperatures (10°C or 40°C)
             mosquitoLayer.addRule(
                 "temperature < 283.15 || temperature > 313.15", 
                 "die", 
-                10 
+                10
             );
+            mosquitoLayer.addRule(
+                "stage == 'ADULT' && age <= 6 * 15 && age >= 18 * 15 && energy < 0.5", 
+                "feed", 
+                5
+            );
+            
+            
             // rules habitat layer
+            // Hatch eggs: Moderate temperature (14-33°C) AND tank has water
             habitatLayer.addRule(
-                "stage == 'EGG' && age > 240 && temperature > 287.15 && temperature < 306.15", 
+                "temperature > 287.15 && temperature < 306.15 && agent.waterVolume > 10", 
                 "hatch",
                 1
             );
+
+            // Tank dries out: No water OR too hot
             habitatLayer.addRule(
-                "stage == 'EGG' && temperature > 308.15", 
+                "agent.waterVolume <= 0 || temperature > 308.15", 
                 "die", 
                 2
+            );
+            
+            habitatLayer.addRule(
+                "agent.eggCount > 0 && agent.waterVolume > 10 && temperature > 293.15", 
+                "hatch", 
+                1
+            );
+
+            habitatLayer.addRule(
+                "agent.waterVolume < 5", 
+                "dry_out",  // You need to add this action
+                2
+            );
+
+            habitatLayer.addRule(
+                "temperature < 273.15", 
+                "freeze",  // Eggs/larvae die if frozen
+                3
             );
             
             // Add agent layers to project
@@ -387,8 +435,8 @@ public class App {
         System.out.println("Seeding initial population...");
 
         Random rand = new Random();
-        int tanksToSeed = 500; 
-        int mosquitoesToSeed = 50000;  //
+        int tanksToSeed = 1000; 
+        int mosquitoesToSeed = 5000;  //
 
         double minLon = worldBounds.getMinX();
         double minLat = worldBounds.getMinY();
@@ -403,7 +451,7 @@ public class App {
 
             // More relaxed placement criteria
             double buildingDensity = buildings.getValueAt(rx, ry);
-            if (buildingDensity > 10 || rand.nextDouble() < 0.3) { // 30% chance even in low density
+            if (buildingDensity > 20 || rand.nextDouble() < 0.3) { // 30% chance even in low density
                 InertAgent tank = new InertAgent(rx, ry);
                 tank.setLarvalCount(rand.nextInt(50) + 1);  // More larvae
                 tank.setEggCount(rand.nextInt(100) + 20);   // More eggs
@@ -437,7 +485,7 @@ public class App {
                 }
 
                 LivingAgent mosquito = new LivingAgent(rx, ry);
-                mosquito.setAge(rand.nextInt(1000));
+                mosquito.setAge(rand.nextInt(20 * 24 * 15)); // 20 days max
                 mosquito.setGravid(rand.nextDouble() < 0.2);  // 20% gravid initially
                 mosquito.setStage(stage);
                 mosquito.setEnergy(0.3 + rand.nextDouble() * 0.7);
@@ -468,16 +516,31 @@ public class App {
 
                 Map<String, Object> state = engine.getState();
                 boolean running = (Boolean) state.get("running");
+                long tick = (Long) state.get("tick");
 
+                if (!running) {
+                    System.out.println("Simulation has stopped normally");
+                    break;
+                }
+                
+                // Check if simulation should have completed
+                if (tick >= timeManager.getTotalTicks()) {
+                    System.out.println("Simulation reached total ticks, stopping engine...");
+                    engine.stop();
+                    break;
+                }
+                
                 if (!running) {
                     System.out.println("Simulation has stopped normally");
                     break;
                 }
 
                 // Print progress
-                long tick = (Long) state.get("tick");
-                int totalAgents = (Integer) state.get("totalAgents");
-                double avgTickTime = (Double) state.get("avgTickTime");
+                Integer totalAgentsObj = (Integer) state.get("totalAgents");
+                int totalAgents = totalAgentsObj != null ? totalAgentsObj : 0;
+
+                Double avgTickTimeObj = (Double) state.get("avgTickTime");
+                double avgTickTime = avgTickTimeObj != null ? avgTickTimeObj : 0.0;
 
                 System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
                     tick, totalAgents, avgTickTime);

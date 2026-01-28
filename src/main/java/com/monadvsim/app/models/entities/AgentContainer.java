@@ -32,6 +32,8 @@ public class AgentContainer {
     private final ConcurrentLinkedQueue<Agent> deadAgents = new ConcurrentLinkedQueue<>();
     private final ConcurrentLinkedQueue<Agent> newAgents = new ConcurrentLinkedQueue<>();
     private final ExecutorService batchExecutor;
+    // performance
+    private static final int DEAD_AGENT_BATCH_SIZE = 500;
     
     
     public AgentContainer(int partitionCount) {
@@ -91,42 +93,59 @@ public class AgentContainer {
     }
     
     
-    private void processNewAgents(){
-        while (!newAgents.isEmpty()) {
-            Agent agent = newAgents.poll();
-            if (agent != null) {
-                int partitionIndex = Math.abs(agent.getId().hashCode()) % partitionCount;
-                partitions.get(partitionIndex).add(agent);
-                
-                registryLock.writeLock().lock();
-                try {
-                    agentRegistry.put(agent.getId(), agent);
-                    agentPartitionMap.put(agent.getId(), partitionIndex);
-                } finally {
-                    registryLock.writeLock().unlock();
+    private void processNewAgents() {
+        synchronized (newAgents) {
+            int addedCount = 0;
+            while (!newAgents.isEmpty()) {
+                Agent agent = newAgents.poll();
+                if (agent != null) {
+                    int partitionIndex = Math.abs(agent.getId().hashCode()) % partitionCount;
+                    partitions.get(partitionIndex).add(agent);
+
+                    registryLock.writeLock().lock();
+                    try {
+                        agentRegistry.put(agent.getId(), agent);
+                        agentPartitionMap.put(agent.getId(), partitionIndex);
+                    } finally {
+                        registryLock.writeLock().unlock();
+                    }
+                    addedCount++;
                 }
+            }
+            // Only update size after all are processed
+            if (addedCount > 0) {
+                size.addAndGet(addedCount);
             }
         }
     }
     
     
-    private void processDeadAgents(){
-        while (!deadAgents.isEmpty()) {
-            Agent agent = deadAgents.poll();
-            if (agent != null) {
-                registryLock.readLock().lock();
-                try {
-                    Integer partitionIndex = agentPartitionMap.get(agent.getId());
-                    if (partitionIndex != null) {
-                        partitions.get(partitionIndex).remove(agent);
-                        agentRegistry.remove(agent.getId());
-                        agentPartitionMap.remove(agent.getId());
-                        size.decrementAndGet();
-                    }
-                } finally {
-                    registryLock.readLock().unlock();
+    private void processDeadAgents() {
+        // Use optimized version for large batches
+        if (deadAgents.size() > 100) {
+            processDeadAgentsOptimized();
+        } else {
+            // Original small batch processing
+            while (!deadAgents.isEmpty()) {
+                Agent agent = deadAgents.poll();
+                if (agent != null) {
+                    processSingleDeadAgent(agent);
                 }
             }
+        }
+    }
+    
+    private void processSingleDeadAgent(Agent agent) {
+        registryLock.readLock().lock();
+        try {
+            Integer partitionIndex = agentPartitionMap.get(agent.getId());
+            if (partitionIndex != null) {
+                partitions.get(partitionIndex).remove(agent);
+                agentRegistry.remove(agent.getId());
+                agentPartitionMap.remove(agent.getId());
+            }
+        } finally {
+            registryLock.readLock().unlock();
         }
     }
     
@@ -143,10 +162,10 @@ public class AgentContainer {
     // Get all agents (for spatial registry updates)
     
     public List<Agent> getAllAgents() {
-        // Ensure we're getting a fresh copy
-        applyPendingOperations(); // Process any pending adds/removes first
+        // Ensure pending operations are processed first
+        applyPendingOperations();
 
-        List<Agent> allAgents = new ArrayList<>(size.get());
+        List<Agent> allAgents = new ArrayList<>(Math.max(0, size.get()));
         registryLock.readLock().lock();
         try {
             allAgents.addAll(agentRegistry.values());
@@ -229,7 +248,9 @@ public class AgentContainer {
     
     // Getters
     public int size() {
-        return size.get();
+        // Apply pending operations to get accurate count
+        applyPendingOperations();
+        return Math.max(0, size.get());
     }
     
     
@@ -276,5 +297,67 @@ public class AgentContainer {
         }
     }
     
+    
+    // Bulk mark for removal (more efficient)
+    public void markMultipleForRemoval(Collection<Agent> agents) {
+        synchronized (deadAgents) {
+            deadAgents.addAll(agents);
+            // DON'T decrement size here
+        }
+    }
+
+    // Optimized bulk removal processing
+    private void processDeadAgentsOptimized() {
+        if (deadAgents.isEmpty()) return;
+
+        List<Agent> batch = new ArrayList<>(DEAD_AGENT_BATCH_SIZE);
+        synchronized (deadAgents) {
+            int count = 0;
+            while (!deadAgents.isEmpty() && count < 1000) {
+                Agent agent = deadAgents.poll();
+                if (agent != null) {
+                    batch.add(agent);
+                    count++;
+                }
+            }
+        }
+
+        if (!batch.isEmpty()) {
+            size.addAndGet(-batch.size());
+            Map<Integer, List<Agent>> partitionMap = new HashMap<>();
+
+            // Group by partition for efficient removal
+            for (Agent agent : batch) {
+                registryLock.readLock().lock();
+                try {
+                    Integer partitionIndex = agentPartitionMap.get(agent.getId());
+                    if (partitionIndex != null) {
+                        partitionMap.computeIfAbsent(partitionIndex, k -> new ArrayList<>())
+                                   .add(agent);
+                    }
+                } finally {
+                    registryLock.readLock().unlock();
+                }
+            }
+
+            // Remove from partitions
+            for (Map.Entry<Integer, List<Agent>> entry : partitionMap.entrySet()) {
+                List<Agent> partitionAgents = entry.getValue();
+                ConcurrentLinkedQueue<Agent> partition = partitions.get(entry.getKey());
+                partition.removeAll(partitionAgents);
+            }
+
+            // Remove from tracking maps
+            registryLock.writeLock().lock();
+            try {
+                for (Agent agent : batch) {
+                    agentRegistry.remove(agent.getId());
+                    agentPartitionMap.remove(agent.getId());
+                }
+            } finally {
+                registryLock.writeLock().unlock();
+            }
+        }
+    }
     
 }

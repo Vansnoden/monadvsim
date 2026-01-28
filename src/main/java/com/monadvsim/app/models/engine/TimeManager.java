@@ -11,7 +11,7 @@ public class TimeManager {
     private long tickCount = 0;
     private final Duration tickDuration;      // Usually 15 minutes
     private final Duration dataStepDuration;  // Usually 1 hour (for ERA5)
-
+    private long totalTicks = 0;
     /**
      * @param start The start date of the simulation
      * @param totalTicks Total number of ticks to run
@@ -22,7 +22,7 @@ public class TimeManager {
         this.currentDateTime = start;
         this.tickDuration = Duration.ofMinutes(tickMinutes);
         this.dataStepDuration = Duration.ofHours(1); // Standard for ERA5-Land
-        
+        this.totalTicks = totalTicks;
         // Calculate end date based on total ticks
         this.endDateTime = start.plus(tickDuration.multipliedBy(totalTicks));
     }
@@ -62,4 +62,13 @@ public class TimeManager {
     public long getTickCount() { return tickCount; }
     public LocalDateTime getStartDateTime() { return startDateTime; }
     public LocalDateTime getEndDateTime() { return endDateTime; }
+
+    public long getTotalTicks() {
+        return totalTicks;
+    }
+
+    public void setTotalTicks(long totalTicks) {
+        this.totalTicks = totalTicks;
+    }
+    
 }

@@ -62,17 +62,44 @@ public class RuleEngine {
         }
     }
 
+//    private void populateBindings(Value bindings, Agent agent, Project project) {
+//        if (project.getTokens().size() != project.getLayerNames().size()) {
+//            throw new IllegalArgumentException("Token/Layer mismatch");
+//        }
+//
+//        bindings.putMember("agent", agent);
+//
+//        for (int i = 0; i < project.getLayerNames().size(); i++) {
+//            String token = project.getTokens().get(i);
+//            double value = getValueAt(project, 
+//                    project.getLayerNames().get(i), agent.getX(), agent.getY());
+//            bindings.putMember(token, value);
+//        }
+//    }
+    
     private void populateBindings(Value bindings, Agent agent, Project project) {
-        if (project.getTokens().size() != project.getLayerNames().size()) {
-            throw new IllegalArgumentException("Token/Layer mismatch");
-        }
-
+        // Bind agent as 'agent' object
         bindings.putMember("agent", agent);
 
+        // Also bind commonly used agent properties for easier access
+        if (agent instanceof LivingAgent la) {
+            bindings.putMember("stage", la.getStage().toString());
+            bindings.putMember("age", la.getAge());
+            bindings.putMember("energy", la.getEnergy());
+            bindings.putMember("gravid", la.isGravid());
+            bindings.putMember("alive", la.isAlive());
+        } else if (agent instanceof InertAgent ia) {
+            bindings.putMember("waterVolume", ia.getWaterVolume());
+            bindings.putMember("eggCount", ia.getEggCount());
+            bindings.putMember("larvalCount", ia.getLarvalCount());
+            bindings.putMember("capacity", ia.getCapacity());
+        }
+
+        // Bind layer values
         for (int i = 0; i < project.getLayerNames().size(); i++) {
             String token = project.getTokens().get(i);
-            double value = getValueAt(project, 
-                    project.getLayerNames().get(i), agent.getX(), agent.getY());
+            double value = getValueAt(project, project.getLayerNames().get(i), 
+                                     agent.getX(), agent.getY());
             bindings.putMember(token, value);
         }
     }
@@ -89,6 +116,8 @@ public class RuleEngine {
             case "pupate" -> executePupate(agent, layer);
             case "emerge" -> executeEmerge(agent, layer);
             case "feed" -> executeFeed(agent, project, layer);
+            case "dry_out" -> executeDryOut(agent, layer);
+            case "freeze" -> executeFreeze(agent, layer);
         }
     }
     
@@ -128,10 +157,58 @@ public class RuleEngine {
     }
 
 
+//    private void executeDie(Agent agent, AgentLayer layer) {
+//        if (agent instanceof LivingAgent la) {
+//            la.setAlive(false);
+//            layer.killAgentImmediately(agent.getId());
+//        }
+//    }
     private void executeDie(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
+        } else if (agent instanceof InertAgent) {
+            // For InertAgent, also kill it (remove from simulation)
+            layer.killAgentImmediately(agent.getId());
+        }
+    }
+    
+    private void executeDryOut(Agent agent, AgentLayer layer) {
+        if (agent instanceof InertAgent ia) {
+            // When tank dries out, kill all eggs/larvae
+            int eggsKilled = ia.getEggCount();
+            int larvaeKilled = ia.getLarvalCount();
+
+            ia.setEggCount(0);
+            ia.setLarvalCount(0);
+            ia.setWaterVolume(0);
+
+            System.out.printf("Tank %s dried out! Killed %d eggs and %d larvae%n",
+                agent.getId(), eggsKilled, larvaeKilled);
+
+            // Optional: Mark tank for removal if completely dry for too long
+            // For now, just update position
+            layer.updateAgentPositionImmediately(agent);
+        }
+    }
+    
+    private void executeFreeze(Agent agent, AgentLayer layer) {
+        if (agent instanceof InertAgent ia) {
+            // Kill all eggs and larvae when tank freezes
+            int eggsKilled = ia.getEggCount();
+            int larvaeKilled = ia.getLarvalCount();
+
+            ia.setEggCount(0);
+            ia.setLarvalCount(0);
+
+            // Reduce water volume (ice expansion can damage tank)
+            ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
+
+            System.out.printf("Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
+                agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
+
+            // Update position in spatial registry (if needed)
+            layer.updateAgentPositionImmediately(agent);
         }
     }
 

@@ -5,6 +5,7 @@ import com.monadvsim.app.models.engine.AgentLifecycleManager;
 import com.monadvsim.app.models.engine.RuleEngine;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -17,6 +18,8 @@ import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.logging.Level;
+import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 
@@ -186,6 +189,11 @@ public class AgentLayer extends Layer {
     
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
+        
+        // Check if agent is already dead
+        if (agent instanceof LivingAgent la && !la.isAlive()) {
+            return; // Skip processing, will be cleaned up later
+        }
 
         // Add safety check - skip processing if too many rules have been evaluated
         if (rulesEvaluated.get() > 1_000_000_000L) { // 1 billion limit
@@ -259,6 +267,13 @@ public class AgentLayer extends Layer {
                 e.printStackTrace();
             }
         }
+        
+        // When agent dies, just mark it, don't schedule immediately
+        if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
+            // Just mark for cleanup, don't schedule death here
+            // The death will be handled in cleanupDeadAgents()
+            return;
+        }
     }
     
     
@@ -284,9 +299,52 @@ public class AgentLayer extends Layer {
     
     
     private void cleanupDeadAgents() {
-        // Remove agents marked for death from container
-        // This happens after lifecycle manager processes deaths
-        agentContainer.applyPendingOperations();
+        try {
+            // Create a thread-safe copy of dead agents
+            List<Agent> deadAgentsList = Collections.synchronizedList(new ArrayList<>());
+
+            // Process agents to find dead ones - ensure thread safety
+            agentContainer.processWithBatching(batch -> {
+                List<Agent> localDeadAgents = new ArrayList<>();
+                for (Agent agent : batch) {
+                    if (agent instanceof LivingAgent la && !la.isAlive()) {
+                        localDeadAgents.add(agent);
+                    }
+                }
+
+                // Add to synchronized list
+                if (!localDeadAgents.isEmpty()) {
+                    synchronized (deadAgentsList) {
+                        deadAgentsList.addAll(localDeadAgents);
+                    }
+                }
+            }, 500);
+
+            // Bulk mark for removal (thread-safe)
+            if (!deadAgentsList.isEmpty()) {
+                // Use synchronized block when accessing the list
+                List<Agent> deadAgentsCopy;
+                synchronized (deadAgentsList) {
+                    deadAgentsCopy = new ArrayList<>(deadAgentsList);
+                }
+
+                agentContainer.markMultipleForRemoval(deadAgentsCopy);
+
+                // Bulk schedule deaths in lifecycle manager
+                if (lifecycleManager != null) {
+                    for (Agent agent : deadAgentsCopy) {
+                        lifecycleManager.scheduleDeath(agent.getId());
+                    }
+                }
+
+                deathsThisTick.addAndGet(deadAgentsCopy.size());
+            }
+
+            // Apply pending operations
+            agentContainer.applyPendingOperations();
+        } catch (ExecutionException ex) {
+            Logger.getLogger(AgentLayer.class.getName()).log(Level.SEVERE, null, ex);
+        }
     }
     
     
@@ -472,7 +530,12 @@ public class AgentLayer extends Layer {
     
     
     public List<Agent> getAgents() {
-        return agentContainer.getAllAgents();
+        // Add safety check
+        List<Agent> agents = agentContainer.getAllAgents();
+        if (agents == null) {
+            return Collections.emptyList();
+        }
+        return agents;
     }
     
     
@@ -498,6 +561,43 @@ public class AgentLayer extends Layer {
     // Add this setter method to AgentLayer class:
     public void setLifecycleManager(AgentLifecycleManager lifecycleManager) {
         this.lifecycleManager = lifecycleManager;
+    }
+    
+    
+    // Progressive cleanup to avoid spikes
+    private void progressiveCleanup() {
+        int agentCount = agentContainer.size();
+
+        // Only clean up a portion at a time to avoid spikes
+        if (deathsThisTick.get() > agentCount * 0.1) { // More than 10% died
+            System.out.println("Progressive cleanup: " + deathsThisTick.get() + 
+                              " deaths out of " + agentCount + " agents");
+
+            // Process in smaller batches
+            int batchLimit = Math.max(1000, agentCount / 10);
+            List<Agent> deadBatch = new ArrayList<>(batchLimit);
+
+            try {
+                agentContainer.processWithBatching(batch -> {
+                    for (Agent agent : batch) {
+                        if (agent instanceof LivingAgent la && !la.isAlive()) {
+                            deadBatch.add(agent);
+                            if (deadBatch.size() >= batchLimit) {
+                                break;
+                            }
+                        }
+                    }
+                }, 200);
+            } catch (ExecutionException ex) {
+                Logger.getLogger(AgentLayer.class.getName()).log(Level.SEVERE, null, ex);
+            }
+
+            // Process this batch now, leave rest for next tick
+            if (!deadBatch.isEmpty()) {
+                agentContainer.markMultipleForRemoval(deadBatch);
+                deathsThisTick.set(deadBatch.size());
+            }
+        }
     }
     
 }

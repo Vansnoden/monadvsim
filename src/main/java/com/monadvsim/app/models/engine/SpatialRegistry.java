@@ -553,4 +553,54 @@ public class SpatialRegistry {
         }
     }
     
+    // Add bulk unregister method to SpatialRegistry:
+    public void unregisterAgents(Collection<String> agentIds) {
+        if (agentIds == null || agentIds.isEmpty()) return;
+
+        long stamp = updateLock.writeLock();
+        try {
+            Map<GridCell, List<String>> cellsToRemove = new HashMap<>();
+
+            // Group by cell for bulk removal
+            for (String agentId : agentIds) {
+                GridCell cell = agentPositions.get(agentId);
+                if (cell != null) {
+                    cellsToRemove.computeIfAbsent(cell, k -> new ArrayList<>())
+                                .add(agentId);
+                }
+            }
+
+            // Bulk remove from cells
+            for (Map.Entry<GridCell, List<String>> entry : cellsToRemove.entrySet()) {
+                GridCell cell = entry.getKey();
+                List<Agent> cellAgents = spatialGrid.get(cell);
+                if (cellAgents != null) {
+                    List<String> idsToRemove = entry.getValue();
+
+                    // Use removeIf for bulk removal
+                    cellAgents.removeIf(a -> idsToRemove.contains(a.getId()));
+
+                    // Update tracking
+                    for (String agentId : idsToRemove) {
+                        agentPositions.remove(agentId);
+                        agentRecords.remove(agentId);
+
+                        // Record change
+                        pendingChanges.offer(new SpatialChange(
+                            SpatialChange.ChangeType.REMOVE, agentId, null, cell));
+                        changeCount.incrementAndGet();
+                        totalRemoves.incrementAndGet();
+                    }
+
+                    // Invalidate cell cache once per cell
+                    cellCache.remove(cell);
+                }
+            }
+
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+
+    
 }

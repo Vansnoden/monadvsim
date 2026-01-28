@@ -21,6 +21,7 @@ import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
@@ -94,7 +95,8 @@ public class SimulationEngine implements Runnable {
                 // TICK SEQUENCE:
                 // 1. Advance time
                 if (!timeManager.tick()) {
-                    System.out.println("Simulation time limit reached");
+                    System.out.println("Simulation time limit reached at tick "
+                            + timeManager.getTickCount());
                     break;
                 }
 
@@ -109,7 +111,7 @@ public class SimulationEngine implements Runnable {
 
                 // 5. Report progress and export periodic snapshots
                 reportTickProgress(tickStart);
-
+                
                 // Adaptive sleep
                 adaptiveSleep(System.nanoTime() - tickStart);
             }
@@ -641,18 +643,27 @@ public class SimulationEngine implements Runnable {
     private void processAgentLayersWithImmediateUpdates() {
         List<AgentLayer> layers = project.getAgentLayers();
 
-        // Add timeout for layer processing
-        long layerStartTime = System.currentTimeMillis();
+        // Calculate adaptive timeout based on agent count
+        long adaptiveTimeout = calculateAdaptiveTimeout(layers);
 
         for (AgentLayer layer : layers) {
             try {
-                // Check if overall simulation is taking too long
-                if (System.currentTimeMillis() - layerStartTime > 5000) { // 5 second timeout
-                    System.err.println("WARNING: Layer processing taking too long, skipping remaining layers");
-                    break;
-                }
+                long layerStartTime = System.currentTimeMillis();
 
-                layer.update(project);
+                // Process layer with progress monitoring
+                CompletableFuture<Void> layerFuture = CompletableFuture.runAsync(() -> {
+                    layer.update(project);
+                });
+
+                try {
+                    // Wait with timeout, but allow more time for large layers
+                    layerFuture.get(adaptiveTimeout, TimeUnit.MILLISECONDS);
+                } catch (TimeoutException e) {
+                    System.err.println("WARNING: Layer " + layer.getName() + 
+                                     " processing timed out after " + adaptiveTimeout + "ms");
+                    layerFuture.cancel(true);
+                    // Continue with next layer instead of breaking
+                }
 
             } catch (Exception e) {
                 System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
@@ -660,6 +671,20 @@ public class SimulationEngine implements Runnable {
             }
         }
     }
+    
+    
+    private long calculateAdaptiveTimeout(List<AgentLayer> layers) {
+        int totalAgents = layers.stream()
+            .mapToInt(l -> l.getAgents().size())
+            .sum();
+
+        // Base timeout + additional time per 1000 agents
+        long baseTimeout = 5000; // 5 seconds base
+        long perAgentTimeout = 10; // 10ms per 1000 agents
+
+        return baseTimeout + (totalAgents / 1000) * perAgentTimeout;
+    }
+
     
     
     private void printFinalStatistics() {

@@ -161,18 +161,20 @@ public class AgentLifecycleManager {
     
     private CompletableFuture<Void> processDeathsBatch() {
         return CompletableFuture.runAsync(() -> {
-            List<String> batch = new ArrayList<>(batchSize);
+            List<String> batch = new ArrayList<>(batchSize * 10); // Larger batch
             String agentId;
-            
-            while ((agentId = deathQueue.poll()) != null && batch.size() < batchSize) {
+
+            while ((agentId = deathQueue.poll()) != null && batch.size() < batchSize * 10) {
                 batch.add(agentId);
             }
-            
-            for (String id : batch) {
-                spatialRegistry.unregisterAgent(id);
+
+            if (!batch.isEmpty()) {
+                // Use bulk unregister instead of individual calls
+                spatialRegistry.unregisterAgents(batch);
             }
         }, lifecycleExecutor);
     }
+    
     
     private CompletableFuture<Void> processMovesBatch() {
         return CompletableFuture.runAsync(() -> {
