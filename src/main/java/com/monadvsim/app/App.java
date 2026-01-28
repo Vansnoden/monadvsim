@@ -196,6 +196,19 @@ public class App {
                 10 
             );
             
+            // habitat layer
+            habitatLayer.addRule(
+                "stage == 'EGG' && age > 240 && temperature > 287.15 && temperature < 306.15", 
+                "hatch",
+                1
+            );
+
+            habitatLayer.addRule(
+                "stage == 'EGG' && temperature > 308.15", 
+                "die", 
+                2
+            );
+            
             
             // Add layers to project
             project.addLayer(mosquitoLayer);
@@ -384,7 +397,7 @@ public class App {
 
         Random rand = new Random();
         int tanksToSeed = 10000;  // Increased
-        int mosquitoesToSeed = 250000;  // Reduced from 50000 for better distribution
+        int mosquitoesToSeed = 200000;  // Reduced from 50000 for better distribution
 
         double minLon = worldBounds.getMinX(), minLat = worldBounds.getMinY();
         double widthLon = worldBounds.getWidth(), heightLat = worldBounds.getHeight();
