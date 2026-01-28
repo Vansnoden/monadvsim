@@ -210,6 +210,26 @@ public class AgentLayer extends Layer {
                     deathsThisTick.incrementAndGet();
                     return;
                 }
+                
+                if (agent instanceof LivingAgent la) {
+                    // Update resting state
+                    if (la.isResting()) {
+                        la.incrementRestingDuration();
+                        // Auto-stop resting after maximum duration
+                        if (la.getRestingDuration() > la.getMaxRestingDuration()) {
+                            la.setResting(false);
+                        }
+                    } else {
+                        la.incrementTimeWithoutRest();
+
+                        // Exhaustion death if too long without rest
+                        if (la.getTimeWithoutRest() > 96) { // 24 hours without rest
+                            la.setAlive(false);
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            return;
+                        }
+                    }
+                }
 
                 // Age increment for LivingAgent
                 if (agent instanceof LivingAgent la) {

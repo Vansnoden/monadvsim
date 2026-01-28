@@ -214,6 +214,67 @@ public class App {
                 "feed", 
                 5
             );
+            // Rest during heavy rain (mosquitoes seek shelter)
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !agent.resting", 
+                "rest_in_building", 
+                4
+            );
+            // Rest after feeding (high energy + buildings available)
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && agent.energy > 0.7 && building_density > 0.2 && !agent.resting", 
+                "rest_in_building", 
+                3
+            );
+
+            // Rest when tired (low energy + buildings available)
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && agent.energy < 0.3 && building_density > 0.1 && !agent.resting", 
+                "rest_in_building", 
+                4
+            );
+
+            // Stop resting when energy is restored or building density is poor
+            mosquitoLayer.addRule(
+                "agent.resting && (agent.energy > 0.9 || building_density < 0.05)", 
+                "stop_resting", 
+                2
+            );
+
+            // Rest during hot midday (11am-3pm) - mosquitoes avoid extreme heat
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && temperature > 303.15 && building_density > 0.3 && !agent.resting", 
+                "rest_in_building", 
+                3
+            );
+
+            // Rest during cold nights
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && temperature < 288.15 && building_density > 0.2 && !agent.resting", 
+                "rest", 
+                3
+            );
+
+            // Emergency rest - too long without rest
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && agent.timeWithoutRest > 48 && !agent.resting", 
+                "rest", 
+                5  // High priority - need to rest!
+            );
+
+            // Die from exhaustion if too long without rest and energy critically low
+            mosquitoLayer.addRule(
+                "agent.stage == 'ADULT' && agent.timeWithoutRest > 72 && agent.energy < 0.1", 
+                "die_exhaustion", 
+                10
+            );
+
+            // Move less when resting
+            mosquitoLayer.addRule(
+                "agent.resting", 
+                "",  // Empty action - just prevents move_random from executing
+                6
+            );
             
             
             // rules habitat layer
@@ -226,27 +287,38 @@ public class App {
 
             // Tank dries out: No water OR too hot
             habitatLayer.addRule(
-                "agent.waterVolume <= 0 || temperature > 308.15", 
-                "die", 
-                2
-            );
-            
-            habitatLayer.addRule(
-                "agent.eggCount > 0 && agent.waterVolume > 10 && temperature > 293.15", 
-                "hatch", 
+                // Hatch when: temperature is optimal AND water level is sufficient AND eggs exist
+                "temperature >= 293.15 && temperature <= 303.15 && " +  // 20-30°C optimal range
+                "agent.waterVolume > 20 && agent.eggCount > 0", 
+                "hatch",
                 1
             );
 
+            // Freeze when temperature < 0°C (273.15K)
             habitatLayer.addRule(
-                "agent.waterVolume < 5", 
-                "dry_out",  // You need to add this action
+                "temperature < 273.15 && agent.waterVolume > 0", 
+                "freeze",
                 2
             );
 
+            // Dry out when water is very low
             habitatLayer.addRule(
-                "temperature < 273.15", 
-                "freeze",  // Eggs/larvae die if frozen
+                "agent.waterVolume <= 5 && agent.waterVolume > 0", 
+                "dry_out",
                 3
+            );
+
+            // Complete evaporation - remove tank if dry for too long
+            habitatLayer.addRule(
+                "agent.waterVolume == 0 && agent.eggCount == 0 && agent.larvalCount == 0", 
+                "die",
+                4
+            );
+            habitatLayer.addRule(
+                // Evaporate faster in hot, dry conditions
+                "temperature > 303.15 && precipitation < 0.001", 
+                "evaporate",
+                5
             );
             
             // Add agent layers to project
@@ -270,7 +342,7 @@ public class App {
             tokens.add("population");
             layerNames.add("Population");
             
-            tokens.add("buildings");
+            tokens.add("building_density");
             layerNames.add("Buildings");
             
             tokens.add("elevation");
@@ -436,7 +508,7 @@ public class App {
 
         Random rand = new Random();
         int tanksToSeed = 1000; 
-        int mosquitoesToSeed = 5000;  //
+        int mosquitoesToSeed = 50000;  //
 
         double minLon = worldBounds.getMinX();
         double minLat = worldBounds.getMinY();
@@ -483,12 +555,18 @@ public class App {
                 } else { // 15% pupae
                     stage = LifecycleStage.PUPA;
                 }
-
+                
                 LivingAgent mosquito = new LivingAgent(rx, ry);
-                mosquito.setAge(rand.nextInt(20 * 24 * 15)); // 20 days max
+                mosquito.setAge(rand.nextInt(20 * 24 * 4)); // 20 days max
                 mosquito.setGravid(rand.nextDouble() < 0.2);  // 20% gravid initially
                 mosquito.setStage(stage);
                 mosquito.setEnergy(0.3 + rand.nextDouble() * 0.7);
+
+                // Set initial resting state (some mosquitoes start resting)
+                if (rand.nextDouble() < 0.3) { // 30% start resting
+                    mosquito.setResting(true);
+                    mosquito.setRestingDuration(rand.nextInt(4)); // Resting for 0-1 hour already
+                }
 
                 // Set development timers based on stage
                 if (stage == LifecycleStage.LARVA) {

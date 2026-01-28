@@ -118,8 +118,107 @@ public class RuleEngine {
             case "feed" -> executeFeed(agent, project, layer);
             case "dry_out" -> executeDryOut(agent, layer);
             case "freeze" -> executeFreeze(agent, layer);
+            case "evaporate" -> executeEvaporate(agent, project, layer);
+            case "rest" -> executeRest(agent, layer);
+            case "stop_resting" -> executeStopResting(agent, layer);
+            case "die_exhaustion" -> executeDieExhaustion(agent, layer);
+            case "rest_in_building" -> executeRestInBuilding(agent, project, layer);
         }
     }
+    
+    
+    private void executeRest(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            la.setResting(true);
+            // While resting, energy recovers slowly
+            la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
+            la.resetTimeWithoutRest();
+
+            System.out.println("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
+        }
+    }
+
+    private void executeStopResting(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            la.setResting(false);
+            System.out.println("Mosquito " + agent.getId() + " stopped resting");
+        }
+    }
+
+    private void executeDieExhaustion(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            System.out.println("Mosquito " + agent.getId() + " died from exhaustion after " + 
+                              la.getTimeWithoutRest() + " ticks without rest");
+            la.setAlive(false);
+            layer.killAgentImmediately(agent.getId());
+        }
+    }
+
+    private void executeRestInBuilding(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            // Check building density at current location
+            Layer buildingLayer = project.getLayerByName("Buildings");
+            if (buildingLayer != null) {
+                double buildingDensity = buildingLayer.getValueAt(agent.getX(), agent.getY());
+
+                if (buildingDensity > 0.3) { // Good building density for resting
+                    la.setResting(true);
+                    // Better energy recovery when resting in buildings
+                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.02));
+                    la.resetTimeWithoutRest();
+
+                    System.out.println("Mosquito " + agent.getId() + " resting in building. " +
+                                     "Building density: " + buildingDensity + ", Energy: " + la.getEnergy());
+                } else {
+                    // Try to move toward buildings
+                    executeFindBuildingToRest(agent, project, layer);
+                }
+            }
+        }
+    }
+
+    private void executeFindBuildingToRest(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la) {
+            // Use spatial registry to find nearby building-rich areas
+            List<Agent> nearby = project.getSpatialRegistry()
+                .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+
+            // Look for areas with high building density by sampling nearby points
+            Layer buildingLayer = project.getLayerByName("Buildings");
+            if (buildingLayer != null) {
+                // Sample 8 directions around current position
+                double bestX = agent.getX();
+                double bestY = agent.getY();
+                double bestDensity = buildingLayer.getValueAt(agent.getX(), agent.getY());
+
+                for (int i = 0; i < 8; i++) {
+                    double angle = i * Math.PI / 4;
+                    double sampleX = agent.getX() + Math.cos(angle) * 0.0001; // ~11m
+                    double sampleY = agent.getY() + Math.sin(angle) * 0.0001;
+                    double density = buildingLayer.getValueAt(sampleX, sampleY);
+
+                    if (density > bestDensity) {
+                        bestDensity = density;
+                        bestX = sampleX;
+                        bestY = sampleY;
+                    }
+                }
+
+                // Move toward better resting spot if found
+                if (bestDensity > buildingLayer.getValueAt(agent.getX(), agent.getY())) {
+                    la.setX(bestX);
+                    la.setY(bestY);
+                    la.setResting(true);
+                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.015));
+
+                    System.out.println("Mosquito " + agent.getId() + " moved to better resting spot. " +
+                                     "Building density: " + bestDensity);
+                    layer.updateAgentPositionImmediately(la);
+                }
+            }
+        }
+    }
+    
     
     private void executePupate(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
@@ -241,47 +340,95 @@ public class RuleEngine {
             }
         }
     }
+    
+    
+    private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof InertAgent ia) {
+            double temperature = project.getLayerByName("t2m") != null ? 
+                project.getLayerByName("t2m").getValueAt(ia.getX(), ia.getY()) : 295.15;
+            double precipitation = project.getLayerByName("tp") != null ? 
+                project.getLayerByName("tp").getValueAt(ia.getX(), ia.getY()) : 0.0;
+
+            // Evaporation rate increases with temperature, decreases with rain
+            double evaporationRate = Math.max(0.01, (temperature - 293.15) / 20.0); // 0-1%
+            evaporationRate *= (1.0 - Math.min(1.0, precipitation * 1000)); // Reduce with rain
+
+            double currentWater = ia.getWaterVolume();
+            double newWater = Math.max(0, currentWater - evaporationRate);
+            ia.setWaterVolume(newWater);
+
+            // Optional: Refill from precipitation
+            if (precipitation > 0.001) { // More than 1mm of rain
+                double refill = precipitation * 100; // Scale factor
+                ia.setWaterVolume(Math.min(100, ia.getWaterVolume() + refill));
+            }
+
+            layer.updateAgentPositionImmediately(agent);
+        }
+    }
 
 
     private void executeHatch(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
-            // Calculate hatching based on temperature
             double temperature = project.getLayerByName("t2m") != null ? 
                 project.getLayerByName("t2m").getValueAt(ia.getX(), ia.getY()) : 295.15;
 
-            // Higher temperature = higher hatching rate (optimal: 25-30°C = 298-303K)
-            double tempFactor = Math.min(1.0, Math.max(0.0, 
-                (temperature - 293.15) / 10.0)); // 20-30°C range
+            // Temperature-based hatching probability
+            double baseHatchRate = project.getDefaultHatchingProbability();
 
-            double hatchRate = project.getDefaultHatchingProbability() * tempFactor;
+            // Optimal temperature: 25-30°C (298-303K)
+            double tempFactor;
+            if (temperature >= 298.15 && temperature <= 303.15) {
+                tempFactor = 1.0; // Optimal
+            } else if (temperature >= 293.15 && temperature <= 308.15) {
+                tempFactor = 0.5; // Suboptimal
+            } else {
+                tempFactor = 0.1; // Poor conditions
+            }
+
+            // Water level factor
+            double waterFactor = Math.min(1.0, ia.getWaterVolume() / 100.0);
+
+            double hatchRate = baseHatchRate * tempFactor * waterFactor;
             int eggsToHatch = (int) (ia.getEggCount() * hatchRate);
             eggsToHatch = Math.max(1, Math.min(eggsToHatch, ia.getEggCount()));
 
             int hatched = ia.takeEggs(eggsToHatch);
 
-            System.out.println("Hatching " + hatched + " eggs at " + 
-                project.getDefaultHatchingProbability() + " rate, temp: " + temperature);
+            System.out.printf("Hatching %d/%d eggs at %.1f%% rate (Temp: %.1f°C, Water: %.1f%%)%n",
+                hatched, ia.getEggCount() + hatched, hatchRate * 100,
+                temperature - 273.15, ia.getWaterVolume());
 
-            // Get the Mosquitoes layer to add larvae
-            AgentLayer mosquitoLayer = project.getAgentLayers().stream()
-                .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
-                .findFirst().orElse(null);
+            // Create larvae
+            if (hatched > 0) {
+                AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+                    .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+                    .findFirst().orElse(null);
 
-            if (mosquitoLayer != null) {
-                for (int i = 0; i < hatched; i++) {
-                    double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                    double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                if (mosquitoLayer != null) {
+                    for (int i = 0; i < hatched; i++) {
+                        double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                        double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
 
-                    // Create larva in Mosquitoes layer
-                    LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-                    larva.setStage(LifecycleStage.LARVA);
-                    larva.setAge(0);
-                    larva.setEnergy(0.8);
-                    
-                    // Schedule for growth to pupa after 5-7 days (480-672 ticks at 15-min intervals)
-                    larva.setDaysToPupa(5 + ThreadLocalRandom.current().nextInt(3));
+                        LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+                        larva.setStage(LifecycleStage.LARVA);
+                        larva.setAge(0);
+                        larva.setEnergy(0.8);
+
+                        // Temperature affects development time
+                        int daysToPupa;
+                        if (temperature >= 298.15 && temperature <= 303.15) {
+                            daysToPupa = 5; // Fast development in optimal temp
+                        } else if (temperature >= 293.15 && temperature <= 308.15) {
+                            daysToPupa = 7; // Slower
+                        } else {
+                            daysToPupa = 10; // Very slow
+                        }
+                        larva.setDaysToPupa(daysToPupa);
+                    }
                 }
             }
+
             layer.updateAgentPositionImmediately(ia);
         }
     }

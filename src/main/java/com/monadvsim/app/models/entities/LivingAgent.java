@@ -20,6 +20,11 @@ public class LivingAgent extends Agent {
     private volatile double volatileX, volatileY;
     private AtomicInteger daysToPupa = new AtomicInteger(0);
     private AtomicInteger daysToAdult = new AtomicInteger(0);
+    private final AtomicBoolean resting = new AtomicBoolean(false);
+    private final AtomicInteger restingDuration = new AtomicInteger(0);
+    private final AtomicInteger timeWithoutRest = new AtomicInteger(0);
+    private final AtomicInteger maxRestingDuration = new AtomicInteger(4); // 1 hour (4x15min)
+
 
     
     public LivingAgent(double x, double y) {
@@ -153,5 +158,50 @@ public class LivingAgent extends Agent {
     @Override
     public void updateState(Project project, TimeManager timeManager) {
         
+    }
+    
+    public boolean isResting() {
+        return resting.get();
+    }
+    
+    public void setResting(boolean resting) {
+        this.resting.set(resting);
+        if (resting) {
+            restingDuration.set(0);
+            timeWithoutRest.set(0);
+        }
+    }
+    
+    public int getRestingDuration() {
+        return restingDuration.get();
+    }
+    
+    public void setRestingDuration(int duration) {
+        restingDuration.set(duration);
+    }
+    
+    public void incrementRestingDuration() {
+        restingDuration.incrementAndGet();
+    }
+    
+    public int getTimeWithoutRest() {
+        return timeWithoutRest.get();
+    }
+    
+    public void incrementTimeWithoutRest() {
+        timeWithoutRest.incrementAndGet();
+    }
+    
+    public int getMaxRestingDuration() {
+        return maxRestingDuration.get();
+    }
+    
+    public void setMaxRestingDuration(int duration) {
+        maxRestingDuration.set(duration);
+    }
+    
+    // Reset time without rest when agent moves or feeds
+    public void resetTimeWithoutRest() {
+        timeWithoutRest.set(0);
     }
 }

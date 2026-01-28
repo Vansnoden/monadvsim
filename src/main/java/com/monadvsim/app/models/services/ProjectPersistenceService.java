@@ -239,7 +239,8 @@ public class ProjectPersistenceService {
          
             // Build header dynamically
             StringBuilder header = new StringBuilder();
-            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid,EggCount,LarvaCount,waterVolume");
+            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,"
+                    + "Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
 
             // Add raster layer columns
             for (Layer layer : allLayers) {
@@ -272,27 +273,31 @@ public class ProjectPersistenceService {
 
                     // Agent-specific attributes
                     if (agent instanceof LivingAgent la) {
-                        row.append(la.isAlive()).append(",");
+                        row.append(la.isAlive()? "1":"0").append(",");
                         row.append(la.getAge()).append(",");
                         row.append(la.getStage()).append(",");
                         row.append(String.format("%.3f", la.getEnergy())).append(",");
-                        row.append(la.isGravid()).append(",");
+                        row.append(la.isGravid() ? "1":"0").append(",");
                         // place older for other fields
                         row.append("0,");
                         row.append("0,");
-                        row.append("0");
+                        row.append("0,");
+                        row.append(la.isResting() ? "1":"0").append(",");  // Add resting
+                        row.append(la.getRestingDuration()).append(",");  // Add resting duration
+                        row.append(la.getTimeWithoutRest());  // Add time without rest
                     } else if (agent instanceof InertAgent ia) {
-                        row.append("true,"); // Alive placeholder for InertAgent
+                        row.append("-1,"); // Alive placeholder for InertAgent
                         row.append("0,"); // Age
                         row.append("INERT,");
                         row.append("0,"); // Energy
-                        row.append("false,");
+                        row.append("0,");
                         // Add InertAgent specific fields
                         row.append(ia.getEggCount()).append(",");
                         row.append(ia.getLarvalCount()).append(",");
-                        row.append(String.format("%.2f", ia.getWaterVolume()));
-                    } else {
-                        row.append("true,0,UNKNOWN,0,false");
+                        row.append(String.format("%.2f", ia.getWaterVolume())).append(",");
+                        row.append("0,");
+                        row.append("0,");
+                        row.append("0");
                     }
 
                     // Add raster layer values
