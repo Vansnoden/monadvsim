@@ -1,10 +1,26 @@
 package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.SpatialRegistry;
-import com.monadvsim.app.models.engine.TimeManager;
 import java.util.ArrayList;
 import java.util.List;
 import java.io.Serializable;
+
+
+/**
+ * Simulation Project Container
+ *
+ * Main container for all simulation components
+ *
+ * Holds layers (raster, agent, vector), simulation parameters
+ *
+ * Manages spatial registry reference
+ *
+ * Provides layer lookup by name and type
+ * 
+ * 
+ * @author void
+ */
+
 
 public class Project implements Serializable {
     private String name;

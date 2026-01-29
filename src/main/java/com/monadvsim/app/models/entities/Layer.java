@@ -4,6 +4,20 @@ package com.monadvsim.app.models.entities;
 import java.io.Serializable;
 import java.util.UUID;
 
+
+/**
+ * Base Layer Class
+ *
+ * Abstract base for all layer types
+ *
+ * Defines common properties: name, visibility, file path
+ *
+ * Declares abstract update and value retrieval methods
+ * 
+ * 
+ * @author void
+ */
+
 public abstract class Layer implements Serializable {
     
     private final String id;

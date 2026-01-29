@@ -4,6 +4,22 @@ package com.monadvsim.app.models.entities;
 import java.io.Serializable;
 
 
+/**
+ * Static Raster Data
+ *
+ * Stores grid-based environmental data (elevation, population, buildings)
+ *
+ * Supports multi-frame temporal data
+ *
+ * Provides coordinate-to-grid value lookup
+ *
+ * Basic spatial interpolation
+ * 
+ * 
+ * @author void
+ */
+
+
 public class RasterLayer extends Layer implements Serializable {
     
     private double[][][] dataGrid; // [frame][x][y]

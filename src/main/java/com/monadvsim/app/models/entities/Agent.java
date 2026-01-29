@@ -1,11 +1,24 @@
 package com.monadvsim.app.models.entities;
 
 
-
-
 import com.monadvsim.app.models.engine.TimeManager;
 import java.io.Serializable;
 import java.util.UUID;
+
+
+/**
+ * Base Agent Class
+ *
+ * Abstract base for all agent types
+ *
+ * Defines position (x,y), ID, and basic properties
+ *
+ * Declares abstract state update method
+ * 
+ * 
+ * @author void
+ */
+
 
 public abstract class Agent implements Serializable {
     private final String id;

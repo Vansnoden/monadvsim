@@ -7,7 +7,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 
 
-// Managed executor service with resource tracking and cleanup
+/**
+ * Enhanced Thread Pool
+ *
+ * Wraps ExecutorService with monitoring and resource tracking
+ *
+ * Provides graceful shutdown with timeout
+ *
+ * Tracks task statistics (active, completed, failed tasks)
+ *
+ * Implements shutdown hooks for resource cleanup
+ * 
+ * 
+ * @author void
+ */
+
+
 public class ManagedExecutorService implements ExecutorService {
     private final ExecutorService delegate;
     private final String name;

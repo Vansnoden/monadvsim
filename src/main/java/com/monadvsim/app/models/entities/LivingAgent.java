@@ -7,6 +7,24 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 
+/**
+ * Mobile Biological Agent
+ *
+ * Represents mosquitoes with lifeCycle stages (egg, larva, pupa, adult)
+ *
+ * Thread-safe state management using atomic variables
+ *
+ * Tracks age, energy, gravid state, resting behavior
+ *
+ * Implements movement with position synchronization
+ *
+ * Manages resting/exhaustion mechanics
+ * 
+ * 
+ * @author void
+ */
+
+
 public class LivingAgent extends Agent {
     // Using atomic types for thread-safe state
     private final AtomicBoolean alive = new AtomicBoolean(true);

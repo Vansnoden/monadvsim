@@ -30,6 +30,27 @@ import java.util.logging.Logger;
 import java.util.stream.Collectors;
 
 
+/**
+ * Core Simulation Loop
+ *
+ * Main simulation controller implementing Runnable
+ *
+ * Manages the simulation tick sequence: time advance → environment update →
+ * agent processing
+ *
+ * Handles periodic snapshot exports and statistics reporting
+ *
+ * Integrates with TimeManager, SpatialRegistry, and AgentLifecycleManager
+ *
+ * Implements adaptive sleep for real-time simulation pacing
+ *
+ * Provides resource cleanup and monitoring
+ * 
+ * 
+ * @author void
+ */
+
+
 public class SimulationEngine implements Runnable {
     
     private final Project project;
@@ -100,13 +121,13 @@ public class SimulationEngine implements Runnable {
                     break;
                 }
                 
-                if (!areAnyLivingAgentsAlive()) {
-                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
-                            + timeManager.getTickCount());
-                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
-                    running.set(false);
-                    break;
-                }
+//                if (!areAnyLivingAgentsAlive()) {
+//                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
+//                            + timeManager.getTickCount());
+//                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
+//                    running.set(false);
+//                    break;
+//                }
 
                 // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());

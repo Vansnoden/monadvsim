@@ -18,7 +18,26 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.StampedLock;
 
 
-// Spatial registry with incremental updates for newborn agents
+/**
+ * Spatial Indexing System
+ *
+ * Grid-based spatial partitioning for efficient agent queries
+ *
+ * Manages agent positions with cell-based spatial indexing
+ *
+ * Tracks agent movements, births, and deaths incrementally
+ *
+ * Provides radius-based nearby agent queries with caching
+ *
+ * Thread-safe with StampedLock for concurrent access
+ *
+ * Includes statistics tracking and consistency validation
+ * 
+ * 
+ * @author void
+ */
+
+
 public class SpatialRegistry {
     
     private final Map<GridCell, List<Agent>> spatialGrid;

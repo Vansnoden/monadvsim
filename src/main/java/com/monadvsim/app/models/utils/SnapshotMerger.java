@@ -7,6 +7,23 @@ import java.time.format.DateTimeFormatter;
 import java.util.*;
 import java.util.stream.Collectors;
 
+
+/**
+ * Result File Consolidator
+ *
+ * Merges multiple snapshot CSV files into single result files
+ *
+ * Sorts files by tick number and combines data
+ *
+ * Deletes intermediate files after merging
+ *
+ * Handles large result sets efficiently
+ * 
+ * 
+ * @author void
+ */
+
+
 public class SnapshotMerger {
     
     /**

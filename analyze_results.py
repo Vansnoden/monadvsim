@@ -18,7 +18,7 @@ STAGE_COLORS = {'ADULT': '#2E8B57', 'LARVA': '#4169E1', 'PUPA': '#FF8C00'}
 os.makedirs('output', exist_ok=True)
 
 # --- Load Data ---
-file_name = 'results/merged_snapshots_20260129_012653.csv'
+file_name = 'results/merged_snapshots_20260129_100834.csv'
 df = pd.read_csv(file_name)
 
 # --- Data Processing ---
@@ -88,47 +88,64 @@ plt.close()
 
 # 2. REFINED SPATIAL EVOLUTION (Mosquitoes + Water Tanks)
 mosquito_ticks = sorted(mosquito_df['TickCount'].unique())
-n_snapshots = len(mosquito_ticks)
-n_cols = 2
-n_rows = (n_snapshots + n_cols - 1) // n_cols
+# 1. Calculate the 4 specific indices for the snapshots
+n_total_ticks = len(mosquito_ticks)
 
-fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 6 * n_rows))
+# We define the indices: 0 (start), 1/3 way, 2/3 way, and -1 (end)
+# This ensures we get a "1st middle" and "2nd middle" as requested.
+indices = [
+    0, 
+    n_total_ticks // 3, 
+    (2 * n_total_ticks) // 3, 
+    n_total_ticks - 1
+]
+
+# Filter the ticks to only these four
+selected_ticks = [mosquito_ticks[i] for i in indices]
+
+# 2. REFINED SPATIAL EVOLUTION (Updated for 4 Snapshots)
+n_cols = 2
+n_rows = 2  # Fixed to 2x2 for your 4 selected days
+
+fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 12))
 axes = axes.flatten()
 
-for i, tick in enumerate(mosquito_ticks):
+for i, tick in enumerate(selected_ticks):
     ax = axes[i]
     m_data = mosquito_df[mosquito_df['TickCount'] == tick]
     wt_data = watertank_df[watertank_df['TickCount'] == tick]
     
-    # Fallback for water tank background if no data at exact tick
+    # Fallback for water tank background
     if wt_data.empty and not watertank_df.empty:
         wt_data = watertank_df[watertank_df['TickCount'] == watertank_df['TickCount'].min()]
-    
-    # Plot Water Tanks as black crosses
-    ax.scatter(wt_data['X'], wt_data['Y'], marker='x', color='black', s=40, alpha=0.4, label='Water Tank', linewidths=1)
     
     # Plot Mosquitoes by Stage
     for stage, color in STAGE_COLORS.items():
         subset = m_data[m_data['Stage'] == stage]
         if not subset.empty:
-            ax.scatter(subset['X'], subset['Y'], c=color, s=20, alpha=0.7, label=stage, edgecolors='white', linewidths=0.3)
+            ax.scatter(subset['X'], subset['Y'], c=color, s=25, alpha=0.8, 
+                       label=stage, edgecolors='white', linewidths=0.3)
+
+    # Plot Water Tanks
+    ax.scatter(wt_data['X'], wt_data['Y'], marker='x', color='black', 
+               s=50, alpha=0.5, label='Water Tank', linewidths=1.5)
     
-    day_val = tick / TICKS_PER_DAY
-    ax.set_title(f'Day {day_val:.2f} (Tick {tick})\nMosquitoes: {len(m_data)} | Tanks: {len(wt_data)}', fontsize=12, fontweight='bold')
+    # Assuming TICKS_PER_DAY = 96 (since 1 tick = 15 min)
+    day_val = tick / 96 
+    ax.set_title(f'Snapshot {i+1}: Day {day_val:.2f} (Tick {tick})\n'
+                 f'Mosquitoes: {len(m_data)}', fontsize=12, fontweight='bold')
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
     ax.grid(True, alpha=0.2)
+    
     if i == 0:
         ax.legend(loc='upper right', frameon=True, fontsize='small')
 
-# Remove empty subplots
-for j in range(i + 1, len(axes)):
-    fig.delaxes(axes[j])
-
-plt.suptitle('Spatial Evolution: Mosquito Distribution vs Water Tanks (Black Crosses)', fontsize=16, fontweight='bold', y=0.98)
-plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-plt.savefig('output/spatial_evolution_tanks.png', dpi=300)
-plt.close()
+plt.suptitle('Spatial Trend: Start, Mid-Point 1, Mid-Point 2, and Final State', 
+             fontsize=16, fontweight='bold', y=0.98)
+plt.tight_layout(rect=[0, 0.03, 1, 0.96])
+plt.savefig('output/spatial_evolution.png', dpi=300)
+plt.show()
 
 # 3. DIURNAL PATTERNS
 mosquito_df['HourOfDay'] = (mosquito_df['TickCount'] % TICKS_PER_DAY) * MINUTES_PER_TICK / 60

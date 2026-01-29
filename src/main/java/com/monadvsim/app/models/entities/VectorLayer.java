@@ -6,6 +6,20 @@ import java.util.ArrayList;
 import java.util.List;
 
 
+/**
+ * Geometric Feature Layer
+ *
+ * Stores vector geometries (shapes)
+ *
+ * Provides point-in-polygon testing
+ *
+ * Currently minimal implementation
+ * 
+ * 
+ * @author void
+ */
+
+
 public class VectorLayer extends Layer {
     
     private List<Shape> geometries;

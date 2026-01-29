@@ -19,6 +19,21 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Consumer;
 
 
+/**
+ * Thread-Safe Agent Storage
+ *
+ * Partitioned container for efficient parallel agent processing
+ *
+ * Implements thread-safe agent addition/removal
+ *
+ * Supports batch processing with completion futures
+ *
+ * Provides agent lookup by ID and partition management
+ * 
+ * 
+ * @author void
+ */
+
 
 public class AgentContainer {
 

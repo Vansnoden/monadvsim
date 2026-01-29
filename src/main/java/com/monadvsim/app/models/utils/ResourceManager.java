@@ -10,7 +10,22 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 
-// Advanced resource management system for tracking and auto-closing resources
+/**
+ * Resource LifeCycle Manager
+ *
+ * Tracks and manages resources (file handles, memory mappings)
+ *
+ * Uses Cleaner API and PhantomReferences for resource cleanup
+ *
+ * Detects resource leaks and ensures proper disposal
+ *
+ * Specifically handles GeoTools GridCoverage2D resources
+ * 
+ * 
+ * @author void
+ */
+
+
 public final class ResourceManager implements Closeable {
     private static final ResourceManager INSTANCE = new ResourceManager();
     private static final Cleaner CLEANER = Cleaner.create();

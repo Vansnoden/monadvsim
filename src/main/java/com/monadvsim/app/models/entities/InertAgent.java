@@ -6,6 +6,22 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 
+/**
+ * Static Habitat Agent
+ *
+ * Represents unconventional breeding sites (e.g water tanks)
+ *
+ * Tracks water volume, egg count, larval count, capacity
+ *
+ * Thread-safe operations for population management
+ *
+ * Supports hatching, evaporation, and drying out
+ * 
+ * 
+ * @author void
+ */
+
+
 public class InertAgent extends Agent {
     
     private final AtomicReference<Double> waterVolume = new AtomicReference<>(0.0); // percentage 0-100

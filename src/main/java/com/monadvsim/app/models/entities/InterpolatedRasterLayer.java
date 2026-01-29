@@ -3,29 +3,36 @@ package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.engine.TimeManager;
 import ucar.ma2.Array;
 import ucar.ma2.Index;
-import ucar.ma2.InvalidRangeException;
 import ucar.nc2.NetcdfFile;
 import ucar.nc2.NetcdfFiles;
 import ucar.nc2.Variable;
 import ucar.nc2.Dimension;
 import ucar.nc2.Attribute;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.List;
-import java.util.ArrayList;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.logging.Level;
 import java.util.logging.Logger;
 
+
 /**
- * Interpolated raster layer that reads NetCDF climate files (ERA5, etc.)
- * and performs temporal interpolation between time steps.
+ * Time-Varying Raster
+ *
+ * Extends RasterLayer for climate/time-series data
+ *
+ * Loads NetCDF climate data with temporal interpolation
+ *
+ * Implements bilinear interpolation for smooth value retrieval
+ *
+ * Caches interpolated values for performance
+ * 
+ * 
+ * @author void
  */
+
+
 public class InterpolatedRasterLayer extends Layer {
     private static final Logger LOGGER = Logger.getLogger(InterpolatedRasterLayer.class.getName());
     

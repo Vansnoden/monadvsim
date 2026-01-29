@@ -5,12 +5,30 @@ import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.Source;
 import org.graalvm.polyglot.Value;
-
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
+
+
+/**
+ * JavaScript Rule Evaluator
+ *
+ * Evaluates agent behavior rules using GraalVM JavaScript engine
+ *
+ * Supports dynamic rule evaluation with environmental context access
+ *
+ * Implements thread-local contexts for concurrent rule evaluation
+ *
+ * Executes predefined actions (die, lay_eggs, hatch, move_random, etc.)
+ *
+ * Includes caching for rule conditions and results
+ * 
+ * 
+ * @author void
+ */
+
 
 public class RuleEngine {
 

@@ -8,9 +8,23 @@ import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
+
 /**
+ * Climate Data Handler
+ *
  * Manages multiple climate variables from NetCDF files
+ *
+ * Supports ERA5 climate data format (temperature, precipitation, wind, etc.)
+ *
+ * Provides value interpolation and unit conversions
+ *
+ * Integrates with TimeManager for temporal interpolation
+ * 
+ * 
+ * @author void
  */
+
+
 public class ClimateDatasetManager {
     private final TimeManager timeManager;
     private final Map<String, InterpolatedRasterLayer> layers = new HashMap<>();

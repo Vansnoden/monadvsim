@@ -4,15 +4,28 @@ import java.io.*;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
-import java.nio.file.Path;
 import java.nio.file.StandardOpenOption;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+
 /**
- * Memory-mapped raster layer for handling large datasets
+ * Large DataSet Handler
+ *
+ * Uses memory-mapped files for large raster dataSets
+ *
+ * Reduces memory footprint for high-resolution data
+ *
+ * Implements automatic memory management
+ *
+ * Falls back to in-memory storage for small dataSets
+ * 
+ * 
+ * @author void
  */
+
+
 public class MemoryMappedRasterLayer extends RasterLayer {
     private static final int DOUBLE_BYTES = Double.BYTES;
     

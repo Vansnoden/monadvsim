@@ -7,8 +7,25 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
+/**
+ * Agent LifeCycle Controller
+ *
+ * Manages agent birth, death, and movement events in batches
+ *
+ * Implements object pooling for agent reuse (reduces GC pressure)
+ *
+ * Processes lifeCycle events asynchronously using executor service
+ *
+ * Coordinates with SpatialRegistry for spatial updates
+ *
+ * Provides statistics on agent lifeCycle events
+ * 
+ * @author void
+ */
 
-public class AgentLifecycleManager {
+
+
+public class AgentLifeCycleManager {
     private final SpatialRegistry spatialRegistry;
     
     // Lifecycle queues
@@ -31,7 +48,7 @@ public class AgentLifecycleManager {
     private final int batchSize = 1000;
     private final ExecutorService lifecycleExecutor;
     
-    public AgentLifecycleManager(SpatialRegistry spatialRegistry) {
+    public AgentLifeCycleManager(SpatialRegistry spatialRegistry) {
         this.spatialRegistry = spatialRegistry;
         
         // Create executor for lifecycle processing

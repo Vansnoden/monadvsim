@@ -7,7 +7,22 @@ import java.util.List;
 import java.util.Objects;
 
 
-//for optimal memory usage
+/**
+ * Spatial Partition Cell
+ *
+ * Represents a cell in the spatial registry grid
+ *
+ * Stores agents within a specific spatial region
+ *
+ * Provides thread-safe agent management
+ *
+ * Used for efficient spatial queries
+ * 
+ * 
+ * @author void
+ */
+
+
 public class GridCell {
     public final int gridX;
     public final int gridY;

@@ -4,6 +4,20 @@ package com.monadvsim.app.models.engine;
 import java.util.concurrent.atomic.AtomicLong;
 
 
+/**
+ * Performance Metrics Tracker
+ *
+ * Records simulation performance statistics
+ *
+ * Tracks agents processed, rules evaluated, spatial queries, births/deaths
+ *
+ * Provides performance reporting functionality
+ * 
+ * 
+ * @author void
+ */
+
+
 public class SimulationMetrics {
     private final AtomicLong agentsProcessed = new AtomicLong(0);
     private final AtomicLong rulesEvaluated = new AtomicLong(0);

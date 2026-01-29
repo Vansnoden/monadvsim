@@ -16,6 +16,25 @@ import org.geotools.coverage.grid.io.GridCoverage2DReader;
 import org.geotools.coverage.grid.io.GridFormatFinder;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 
+
+/**
+ * Data Loading/Export Service
+ *
+ * Loads raster data (TIFF/GeoTIFF) using GeoTools
+ *
+ * Loads climate data from NetCDF files
+ *
+ * Exports simulation snapshots to CSV with comprehensive agent data
+ *
+ * Handles coordinate transformations and data formatting
+ *
+ * Manages file I/O for simulation results
+ * 
+ * 
+ * @author void
+ */
+
+
 public class ProjectPersistenceService {
     
     private final ResourceManager resourceManager = ResourceManager.getInstance();

@@ -1,15 +1,13 @@
 package com.monadvsim.app.models.entities;
 
 
-import com.monadvsim.app.models.engine.AgentLifecycleManager;
+import com.monadvsim.app.models.engine.AgentLifeCycleManager;
 import com.monadvsim.app.models.engine.RuleEngine;
 import java.util.ArrayList;
-import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -20,7 +18,24 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import java.util.stream.Collectors;
+
+
+/**
+ * Agent Container & Rule Processor
+ *
+ * Contains and manages agents within a simulation layer
+ *
+ * Processes agent rules in parallel batches
+ *
+ * Integrates with RuleEngine for behavior evaluation
+ *
+ * Manages agent lifeCycle events (births, deaths)
+ *
+ * Provides statistics and performance monitoring
+ * 
+ * 
+ * @author void
+ */
 
 
 public class AgentLayer extends Layer {
@@ -28,7 +43,7 @@ public class AgentLayer extends Layer {
     private final AgentContainer agentContainer;
     private final List<RuleDefinition> rules;
     private final RuleEngine ruleEngine;
-    private AgentLifecycleManager lifecycleManager;
+    private AgentLifeCycleManager lifecycleManager;
     private final ExecutorService ruleExecutor;
     private int batchSize;
     // Statistics
@@ -46,7 +61,7 @@ public class AgentLayer extends Layer {
     
     
     public AgentLayer(String name, RuleEngine ruleEngine, 
-                     AgentLifecycleManager lifecycleManager) {
+                     AgentLifeCycleManager lifecycleManager) {
         super(name);
         this.ruleEngine = ruleEngine;
         this.lifecycleManager = lifecycleManager;
@@ -568,7 +583,7 @@ public class AgentLayer extends Layer {
     }
     
     
-    public AgentLifecycleManager getLifecycleManager(){
+    public AgentLifeCycleManager getLifecycleManager(){
         return lifecycleManager;
     }
     
@@ -579,7 +594,7 @@ public class AgentLayer extends Layer {
     }
     
     // Add this setter method to AgentLayer class:
-    public void setLifecycleManager(AgentLifecycleManager lifecycleManager) {
+    public void setLifecycleManager(AgentLifeCycleManager lifecycleManager) {
         this.lifecycleManager = lifecycleManager;
     }
     
