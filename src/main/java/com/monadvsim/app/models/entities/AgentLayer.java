@@ -269,13 +269,13 @@ public class AgentLayer extends Layer {
                 }
 
                 // Evaluate rules with a limit per agent
-                int maxRulesPerAgent = 10;
-                int rulesChecked = 0;
+//                int maxRulesPerAgent = 100;
+//                int rulesChecked = 0;
 
                 for (RuleDefinition rule : rules) {
-                    if (rulesChecked++ >= maxRulesPerAgent) {
-                        break; // Prevent infinite rule evaluation
-                    }
+//                    if (rulesChecked++ >= maxRulesPerAgent) {
+//                        break; // Prevent infinite rule evaluation
+//                    }
 
                     rulesEvaluated.incrementAndGet();
 
@@ -532,9 +532,9 @@ public class AgentLayer extends Layer {
         }
         
         // Handle hatching for InertAgents
-        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
-            handleHatching(ia, newborns);
-        }
+//        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
+//            handleHatching(ia, newborns);
+//        }
     }
     
     

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 import warnings
 import os
 
+
 warnings.filterwarnings('ignore')
 
 # --- Configuration ---
@@ -18,7 +19,7 @@ STAGE_COLORS = {'ADULT': '#2E8B57', 'LARVA': '#4169E1', 'PUPA': '#FF8C00'}
 os.makedirs('output', exist_ok=True)
 
 # --- Load Data ---
-file_name = 'results/merged_snapshots_20260129_100834.csv'
+file_name = 'results/merged_snapshots_20260129_103310.csv'
 df = pd.read_csv(file_name)
 
 # --- Data Processing ---
@@ -88,26 +89,12 @@ plt.close()
 
 # 2. REFINED SPATIAL EVOLUTION (Mosquitoes + Water Tanks)
 mosquito_ticks = sorted(mosquito_df['TickCount'].unique())
-# 1. Calculate the 4 specific indices for the snapshots
 n_total_ticks = len(mosquito_ticks)
-
-# We define the indices: 0 (start), 1/3 way, 2/3 way, and -1 (end)
-# This ensures we get a "1st middle" and "2nd middle" as requested.
-indices = [
-    0, 
-    n_total_ticks // 3, 
-    (2 * n_total_ticks) // 3, 
-    n_total_ticks - 1
-]
-
-# Filter the ticks to only these four
+indices = [0, n_total_ticks // 3, (2 * n_total_ticks) // 3, n_total_ticks - 1]
 selected_ticks = [mosquito_ticks[i] for i in indices]
 
-# 2. REFINED SPATIAL EVOLUTION (Updated for 4 Snapshots)
-n_cols = 2
-n_rows = 2  # Fixed to 2x2 for your 4 selected days
-
-fig, axes = plt.subplots(n_rows, n_cols, figsize=(14, 12))
+# 2. Setup the 2x2 grid
+fig, axes = plt.subplots(2, 2, figsize=(16, 14))
 axes = axes.flatten()
 
 for i, tick in enumerate(selected_ticks):
@@ -115,36 +102,40 @@ for i, tick in enumerate(selected_ticks):
     m_data = mosquito_df[mosquito_df['TickCount'] == tick]
     wt_data = watertank_df[watertank_df['TickCount'] == tick]
     
-    # Fallback for water tank background
+    # Fallback for water tanks
     if wt_data.empty and not watertank_df.empty:
         wt_data = watertank_df[watertank_df['TickCount'] == watertank_df['TickCount'].min()]
     
+    # --- ADDED: Density Heatmap Layer ---
+    if len(m_data) > 1:
+        sns.kdeplot(
+            data=m_data, x='X', y='Trend', 
+            fill=True, thresh=0.05, levels=10, 
+            cmap="Reds", alpha=0.3, ax=ax, zorder=1
+        )
+
     # Plot Mosquitoes by Stage
     for stage, color in STAGE_COLORS.items():
         subset = m_data[m_data['Stage'] == stage]
         if not subset.empty:
-            ax.scatter(subset['X'], subset['Y'], c=color, s=25, alpha=0.8, 
-                       label=stage, edgecolors='white', linewidths=0.3)
+            ax.scatter(subset['X'], subset['Y'], c=color, s=20, alpha=0.6, 
+                       label=stage, edgecolors='white', linewidths=0.2, zorder=3)
 
     # Plot Water Tanks
     ax.scatter(wt_data['X'], wt_data['Y'], marker='x', color='black', 
-               s=50, alpha=0.5, label='Water Tank', linewidths=1.5)
+               s=60, alpha=0.7, label='Water Tank', linewidths=1.5, zorder=4)
     
-    # Assuming TICKS_PER_DAY = 96 (since 1 tick = 15 min)
     day_val = tick / 96 
-    ax.set_title(f'Snapshot {i+1}: Day {day_val:.2f} (Tick {tick})\n'
-                 f'Mosquitoes: {len(m_data)}', fontsize=12, fontweight='bold')
-    ax.set_xlabel('Longitude')
-    ax.set_ylabel('Latitude')
-    ax.grid(True, alpha=0.2)
+    ax.set_title(f'Snapshot {i+1}: Day {day_val:.2f}\nPopulation: {len(m_data)}', 
+                 fontsize=14, fontweight='bold')
+    ax.grid(True, linestyle='--', alpha=0.4)
     
     if i == 0:
-        ax.legend(loc='upper right', frameon=True, fontsize='small')
+        ax.legend(loc='upper right', frameon=True)
 
-plt.suptitle('Spatial Trend: Start, Mid-Point 1, Mid-Point 2, and Final State', 
-             fontsize=16, fontweight='bold', y=0.98)
-plt.tight_layout(rect=[0, 0.03, 1, 0.96])
-plt.savefig('output/spatial_evolution.png', dpi=300)
+plt.suptitle('Spatial Evolution & Population Density Heatmap', fontsize=20, fontweight='bold', y=0.98)
+plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+plt.savefig('output/mosquito_density_trend.png', dpi=300)
 plt.show()
 
 # 3. DIURNAL PATTERNS

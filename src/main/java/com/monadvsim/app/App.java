@@ -339,7 +339,7 @@ public class App {
             habitatLayer.addRule(
                 "temperature > 287.15 && temperature < 306.15 && agent.waterVolume > 10", 
                 "hatch",
-                1
+                3
             );
 
             // Tank dries out: No water OR too hot
@@ -348,7 +348,7 @@ public class App {
                 "temperature >= 293.15 && temperature <= 303.15 && " +  // 20-30°C optimal range
                 "agent.waterVolume > 20 && agent.eggCount > 0", 
                 "hatch",
-                1
+                3
             );
 
             // Freeze when temperature < 0°C (273.15K)
@@ -576,7 +576,7 @@ public class App {
 
         System.out.println("\nSeeding initial population with ADJUSTED thresholds...");
 
-        int tanksToSeed = 1000;  // Start smaller for testing
+        int tanksToSeed = 10000;  // Start smaller for testing
         int mosquitoesToSeed = 500000;  // Start smaller for testing
 
         // Create habitat calculator with adjusted thresholds

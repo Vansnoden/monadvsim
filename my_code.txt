@@ -745,13 +745,13 @@ public class SimulationEngine implements Runnable {
                     break;
                 }
                 
-                if (!areAnyLivingAgentsAlive()) {
-                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
-                            + timeManager.getTickCount());
-                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
-                    running.set(false);
-                    break;
-                }
+//                if (!areAnyLivingAgentsAlive()) {
+//                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
+//                            + timeManager.getTickCount());
+//                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
+//                    running.set(false);
+//                    break;
+//                }
 
                 // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());
@@ -4488,13 +4488,13 @@ public class AgentLayer extends Layer {
                 }
 
                 // Evaluate rules with a limit per agent
-                int maxRulesPerAgent = 10;
-                int rulesChecked = 0;
+//                int maxRulesPerAgent = 100;
+//                int rulesChecked = 0;
 
                 for (RuleDefinition rule : rules) {
-                    if (rulesChecked++ >= maxRulesPerAgent) {
-                        break; // Prevent infinite rule evaluation
-                    }
+//                    if (rulesChecked++ >= maxRulesPerAgent) {
+//                        break; // Prevent infinite rule evaluation
+//                    }
 
                     rulesEvaluated.incrementAndGet();
 
@@ -4751,9 +4751,9 @@ public class AgentLayer extends Layer {
         }
         
         // Handle hatching for InertAgents
-        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
-            handleHatching(ia, newborns);
-        }
+//        if (agent instanceof InertAgent ia && ia.getEggCount() > 0) {
+//            handleHatching(ia, newborns);
+//        }
     }
     
     
@@ -7209,8 +7209,8 @@ public class App {
             // configure simulation bounds (world bounds)
             // Create spatial registry
             worldBounds = createWorldBounds(
-                                9.604134790332163, // latitude
                                 41.8562149505558, // longitude
+                                9.604134790332163, // latitude
                                 5 // Buffer in km
                             );
             // initialize project persistence service
@@ -7343,7 +7343,7 @@ public class App {
 
             // An. stephensi prefers populated urban container
             mosquitoLayer.addRule(
-                "agent.gravid == true && temperature > 293.15 && building_density > 0.1 && population > 5", 
+                "agent.gravid == true && temperature > 293.15 && building_density > 0.1 && population > 0.05", 
                 "lay_eggs", 
                 6
             );
@@ -7369,7 +7369,7 @@ public class App {
                 10
             );
             mosquitoLayer.addRule(
-                "agent.stage == 'ADULT' && agent.energy < 0.5 && population > 10", 
+                "agent.stage == 'ADULT' && agent.energy < 0.5 && population > 0.10", 
                 "feed", 
                 5
             );
@@ -7460,14 +7460,14 @@ public class App {
             );
             // Enhanced feeding rule (was incorrect)
             mosquitoLayer.addRule(
-                "agent.stage == 'ADULT' && agent.energy < 0.4 && population > 15 && !agent.resting", 
+                "agent.stage == 'ADULT' && agent.energy < 0.4 && population > 0.15 && !agent.resting", 
                 "feed", 
                 5
             );
 
             // Enhanced egg-laying with habitat preference
             mosquitoLayer.addRule(
-                "agent.gravid == true && temperature > 293.15 && building_density > 0.15 && population > 10", 
+                "agent.gravid == true && temperature > 293.15 && building_density > 0.15 && population > 0.10", 
                 "lay_eggs", 
                 6
             );
@@ -7478,7 +7478,7 @@ public class App {
             habitatLayer.addRule(
                 "temperature > 287.15 && temperature < 306.15 && agent.waterVolume > 10", 
                 "hatch",
-                1
+                3
             );
 
             // Tank dries out: No water OR too hot
@@ -7487,7 +7487,7 @@ public class App {
                 "temperature >= 293.15 && temperature <= 303.15 && " +  // 20-30°C optimal range
                 "agent.waterVolume > 20 && agent.eggCount > 0", 
                 "hatch",
-                1
+                3
             );
 
             // Freeze when temperature < 0°C (273.15K)
@@ -7700,92 +7700,80 @@ public class App {
                                          RasterLayer population,
                                          SpatialRegistry spatialRegistry,
                                          Rectangle2D worldBounds) {
-        System.out.println("Seeding initial population with habitat-weighted distribution...");
+        System.out.println("=== DEBUG: Checking raster values ===");
 
+        // Test some points to understand the raster values
         Random rand = new Random();
-        int tanksToSeed = 10000; 
-        int mosquitoesToSeed = 500000;
+        for (int i = 0; i < 5; i++) {
+            double testX = worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth();
+            double testY = worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight();
+            double buildingVal = buildings.getValueAt(testX, testY);
+            double popVal = population.getValueAt(testX, testY);
+            System.out.printf("Test point %d (%.6f, %.6f): buildings=%.6f, population=%.6f%n",
+                             i, testX, testY, buildingVal, popVal);
+        }
 
-        // Create habitat calculator
+        System.out.println("\nSeeding initial population with ADJUSTED thresholds...");
+
+        int tanksToSeed = 10000;  // Start smaller for testing
+        int mosquitoesToSeed = 500000;  // Start smaller for testing
+
+        // Create habitat calculator with adjusted thresholds
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, 
-                                                             worldBounds, 100, 100);
+                                                             worldBounds, 50, 50); // Smaller grid for testing
 
-        // Seed water tanks - prefer areas with buildings but moderate density
+        // Seed water tanks
+        System.out.println("\nSeeding water tanks...");
         int tanksPlaced = 0;
-        int attempts = 0;
-        int maxAttempts = tanksToSeed * 10; // Prevent infinite loop
-
-        while (tanksPlaced < tanksToSeed && attempts < maxAttempts) {
-            attempts++;
-
-            // Get weighted random point
+        for (int i = 0; i < tanksToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
             double rx = point[0];
             double ry = point[1];
 
-            // Additional constraints for water tanks
             double buildingDensity = buildings.getValueAt(rx, ry);
-            double suitability = habitatCalc.getSuitabilityAt(rx, ry);
+            double popDensity = population.getValueAt(rx, ry);
 
-            // Water tanks prefer moderate-high building density (peri-urban)
-            if ((buildingDensity > 15 && suitability > 0.1) || 
-                (rand.nextDouble() < 0.3 && suitability > 0.05)) {
-
+            if (buildingDensity > 0.15 && popDensity > 0.05) {
                 InertAgent tank = new InertAgent(rx, ry);
 
-                // Initialize based on season (September = end of rainy season)
-                boolean peakSeason = true; // September in Ethiopia
-
-                if (peakSeason) {
-                    // Post-rainy season: containers mostly full
-                    tank.setWaterVolume(70 + rand.nextDouble() * 30); // 70-100%
-                    tank.setLarvalCount(rand.nextInt(30) + 10);      // 10-40 larvae
-                    tank.setEggCount(rand.nextInt(80) + 20);         // 20-100 eggs
-                } else {
-                    // Dry season: containers may be drying
-                    tank.setWaterVolume(30 + rand.nextDouble() * 40); // 30-70%
-                    tank.setLarvalCount(rand.nextInt(20));           // 0-20 larvae
-                    tank.setEggCount(rand.nextInt(50));              // 0-50 eggs
-                }
-
+                // Initialize tank properties
+                tank.setWaterVolume(70 + rand.nextDouble() * 30); // 70-100%
+                tank.setLarvalCount(rand.nextInt(30) + 10);      // 10-40 larvae
+                tank.setEggCount(rand.nextInt(80) + 20);         // 20-100 eggs
                 tank.setCapacity(300 + rand.nextDouble() * 200); // 300-500 capacity
 
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
 
-                if (tanksPlaced % 1000 == 0) {
-                    System.out.printf("  Placed %d/%d water tanks\n", tanksPlaced, tanksToSeed);
+                if (tanksPlaced % 100 == 0) {
+                    System.out.printf("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n", 
+                                     tanksPlaced, tanksToSeed, buildingDensity, popDensity);
                 }
             }
         }
 
-        System.out.printf("Seeded %d water tanks (%.1f%% success rate)\n", 
-                          tanksPlaced, (tanksPlaced * 100.0 / attempts));
+        System.out.printf("Seeded %d water tanks%n", tanksPlaced);
 
-        // Seed mosquitoes - prefer high suitability areas
+        // Seed mosquitoes
+        System.out.println("\nSeeding mosquitoes...");
         int mosquitoesPlaced = 0;
-        attempts = 0;
-        maxAttempts = mosquitoesToSeed * 5;
-
-        while (mosquitoesPlaced < mosquitoesToSeed && attempts < maxAttempts) {
-            attempts++;
-
+        for (int i = 0; i < mosquitoesToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
             double rx = point[0];
             double ry = point[1];
 
-            double suitability = habitatCalc.getSuitabilityAt(rx, ry);
+            double buildingDensity = buildings.getValueAt(rx, ry);
             double popDensity = population.getValueAt(rx, ry);
 
-            // Higher threshold for mosquito placement
-            if (suitability > 0.15 || (rand.nextDouble() < 0.2 && popDensity > 5)) {
+            // ADJUSTED: Lower thresholds for mosquitoes
+            if (buildingDensity > 0.05 || popDensity > 0.02) {
+                LivingAgent mosquito = new LivingAgent(rx, ry);
 
-                // Determine life stage distribution based on season
+                // Determine stage
                 double stageRand = rand.nextDouble();
                 LifecycleStage stage;
-
-                if (stageRand < 0.6) {      // 60% adults (higher in post-rainy)
+                if (stageRand < 0.6) {      // 60% adults
                     stage = LifecycleStage.ADULT;
                 } else if (stageRand < 0.85) { // 25% larvae
                     stage = LifecycleStage.LARVA;
@@ -7793,16 +7781,14 @@ public class App {
                     stage = LifecycleStage.PUPA;
                 }
 
-                LivingAgent mosquito = new LivingAgent(rx, ry);
                 mosquito.setStage(stage);
 
-                // Age based on stage
+                // Set properties based on stage
                 switch (stage) {
                     case ADULT:
-                        mosquito.setAge(rand.nextInt(20 * 24 * 4)); // Up to 20 days
-                        mosquito.setGravid(rand.nextDouble() < 0.2); // 20% gravid initially
-                        mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5); // 30-80% energy
-                        // Some start resting
+                        mosquito.setAge(rand.nextInt(20 * 24 * 4));
+                        mosquito.setGravid(rand.nextDouble() < 0.2);
+                        mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5);
                         if (rand.nextDouble() < 0.3) {
                             mosquito.setResting(true);
                             mosquito.setRestingDuration(rand.nextInt(4));
@@ -7810,15 +7796,15 @@ public class App {
                         break;
 
                     case LARVA:
-                        mosquito.setAge(rand.nextInt(10 * 24 * 4)); // Up to 10 days
-                        mosquito.setEnergy(0.6 + rand.nextDouble() * 0.3); // 60-90% energy
-                        mosquito.setDaysToPupa(5 + rand.nextInt(3)); // 5-7 days to pupate
+                        mosquito.setAge(rand.nextInt(10 * 24 * 4));
+                        mosquito.setEnergy(0.6 + rand.nextDouble() * 0.3);
+                        mosquito.setDaysToPupa(5 + rand.nextInt(3));
                         break;
 
                     case PUPA:
-                        mosquito.setAge(rand.nextInt(3 * 24 * 4)); // Up to 3 days
-                        mosquito.setEnergy(0.5 + rand.nextDouble() * 0.3); // 50-80% energy
-                        mosquito.setDaysToAdult(2 + rand.nextInt(2)); // 2-3 days to emerge
+                        mosquito.setAge(rand.nextInt(3 * 24 * 4));
+                        mosquito.setEnergy(0.5 + rand.nextDouble() * 0.3);
+                        mosquito.setDaysToAdult(2 + rand.nextInt(2));
                         break;
                 }
 
@@ -7826,52 +7812,19 @@ public class App {
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
 
-                // Small clusters near high suitability areas
-                if (suitability > 0.3 && rand.nextDouble() < 0.7) {
-                    // Add 1-5 more mosquitoes nearby (micro-clustering)
-                    int clusterSize = 1 + rand.nextInt(4);
-                    for (int i = 0; i < clusterSize && mosquitoesPlaced < mosquitoesToSeed; i++) {
-                        double offsetX = rx + (rand.nextDouble() - 0.5) * 0.001; // ~100m
-                        double offsetY = ry + (rand.nextDouble() - 0.5) * 0.001;
-
-                        LivingAgent clusterMosquito = new LivingAgent(offsetX, offsetY);
-                        clusterMosquito.setStage(stage);
-                        clusterMosquito.setAge(mosquito.getAge() + rand.nextInt(10));
-                        clusterMosquito.setEnergy(mosquito.getEnergy() * (0.8 + rand.nextDouble() * 0.4));
-
-                        mosquitoLayer.addAgent(clusterMosquito);
-                        spatialRegistry.registerAgent(clusterMosquito);
-                        mosquitoesPlaced++;
-                    }
-                }
-
-                if (mosquitoesPlaced % 50000 == 0) {
-                    System.out.printf("  Placed %d/%d mosquitoes\n", mosquitoesPlaced, mosquitoesToSeed);
+                if (mosquitoesPlaced % 500 == 0) {
+                    System.out.printf("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n", 
+                                     mosquitoesPlaced, mosquitoesToSeed, buildingDensity, popDensity);
                 }
             }
         }
 
-        System.out.printf("Seeded %d mosquitoes (%.1f%% success rate)\n", 
-                          mosquitoesPlaced, (mosquitoesPlaced * 100.0 / attempts));
+        System.out.printf("Seeded %d mosquitoes%n", mosquitoesPlaced);
 
-        // Print distribution statistics
-        System.out.println("\n=== Initial Population Distribution ===");
-        System.out.printf("Water tanks: %d (target: %d)\n", tanksPlaced, tanksToSeed);
-        System.out.printf("Mosquitoes: %d (target: %d)\n", mosquitoesPlaced, mosquitoesToSeed);
-
-        // Stage distribution
-        List<Agent> mosquitoes = mosquitoLayer.getAgents();
-        long adults = mosquitoes.stream().filter(a -> 
-            a instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT).count();
-        long larvae = mosquitoes.stream().filter(a -> 
-            a instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA).count();
-        long pupae = mosquitoes.stream().filter(a -> 
-            a instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA).count();
-
-        System.out.printf("Mosquito stages: Adults=%d (%.1f%%), Larvae=%d (%.1f%%), Pupae=%d (%.1f%%)\n",
-            adults, (adults * 100.0 / mosquitoesPlaced),
-            larvae, (larvae * 100.0 / mosquitoesPlaced),
-            pupae, (pupae * 100.0 / mosquitoesPlaced));
+        // Print summary
+        System.out.println("\n=== Seeding Summary ===");
+        System.out.printf("Water tanks: %d (target: %d)%n", tanksPlaced, tanksToSeed);
+        System.out.printf("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, mosquitoesToSeed);
     }
     
     
@@ -8268,16 +8221,18 @@ public class App {
 
                     // Get environmental values
                     double buildingDensity = Math.max(0, buildings.getValueAt(x, y));
+//                    System.out.println("####> Building Density :"+buildingDensity);
                     double popDensity = Math.max(0, population.getValueAt(x, y));
+                    System.out.println("----> Population Density :"+popDensity);
 
                     // Calculate suitability for Anopheles stephensi
                     // Prefers areas with both buildings AND people
                     double suitability = 0.0;
 
-                    if (buildingDensity > 0.2 && popDensity > 10) {
+                    if (buildingDensity > 0.2 && popDensity > 0.1) {
                         // High suitability: urban core with both buildings and people
                         suitability = buildingDensity * 0.6 + (Math.min(popDensity, 100) / 100.0) * 0.4;
-                    } else if (buildingDensity > 0.1 || popDensity > 5) {
+                    } else if (buildingDensity > 0.1 || popDensity > 0.05) {
                         // Medium suitability: suburban areas
                         suitability = (buildingDensity * 0.3 + (Math.min(popDensity, 50) / 50.0) * 0.2) * 0.5;
                     } else {
