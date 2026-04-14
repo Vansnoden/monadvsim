@@ -7913,7 +7913,7 @@ public class App {
         System.out.println("\nSeeding initial population with ADJUSTED thresholds...");
 
         int tanksToSeed = 10000;  // Start smaller for testing
-        int mosquitoesToSeed = 500000;  // Start smaller for testing
+        int mosquitoesToSeed = 250000;  // Start smaller for testing
 
         // Create habitat calculator with adjusted thresholds
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, 

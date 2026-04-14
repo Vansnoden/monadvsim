@@ -38,6 +38,7 @@
     </dependencyManagement>
 
     <dependencies>
+        <!-- GeoTools -->
         <dependency>
             <groupId>org.geotools</groupId>
             <artifactId>gt-main</artifactId>
@@ -56,7 +57,7 @@
         </dependency>
         <dependency>
             <groupId>org.geotools</groupId>
-            <artifactId>gt-geotiff</artifactId> 
+            <artifactId>gt-geotiff</artifactId>
         </dependency>
         <dependency>
             <groupId>org.geotools</groupId>
@@ -71,35 +72,47 @@
             <artifactId>gt-referencing</artifactId>
         </dependency>
         <dependency>
+            <groupId>org.geotools</groupId>
+            <artifactId>gt-coverage</artifactId>
+        </dependency>
+
+        <!-- NetCDF -->
+        <dependency>
             <groupId>edu.ucar</groupId>
             <artifactId>netcdf4</artifactId>
             <version>5.5.3</version>
         </dependency>
-        <dependency>
-            <groupId>org.geotools</groupId>
-            <artifactId>gt-coverage</artifactId>
-        </dependency>
+
+        <!-- JTS -->
         <dependency>
             <groupId>org.locationtech.jts</groupId>
             <artifactId>jts-core</artifactId>
             <version>1.19.0</version>
         </dependency>
 
+        <!-- JFreeChart -->
         <dependency>
             <groupId>org.jfree</groupId>
             <artifactId>jfreechart</artifactId>
             <version>1.5.4</version>
         </dependency>
 
+        <!-- Aparapi (GPU) -->
         <dependency>
             <groupId>com.aparapi</groupId>
             <artifactId>aparapi</artifactId>
             <version>3.0.2</version>
         </dependency>
 
+        <!-- Jackson (JSON/XML/YAML) -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-xml</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.dataformat</groupId>
+            <artifactId>jackson-dataformat-yaml</artifactId>
             <version>${jackson.version}</version>
         </dependency>
         <dependency>
@@ -113,6 +126,7 @@
             <version>${jackson.version}</version>
         </dependency>
 
+        <!-- GraalVM JavaScript -->
         <dependency>
             <groupId>org.graalvm.polyglot</groupId>
             <artifactId>polyglot</artifactId>
@@ -129,7 +143,8 @@
             <artifactId>js-scriptengine</artifactId>
             <version>${graalvm.version}</version>
         </dependency>
-        
+
+        <!-- Java Advanced Imaging (JAI) -->
         <dependency>
             <groupId>javax.media</groupId>
             <artifactId>jai_core</artifactId>
@@ -146,6 +161,7 @@
             <version>1.1</version>
         </dependency>
 
+        <!-- Testing -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter-api</artifactId>
@@ -189,27 +205,26 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>${exec.mainClass}</mainClass>
-                    <arguments>
-                        <argument>-Xmx8g</argument>
-                        <argument>-Xms4g</argument>
-                        <argument>-XX:+UseG1GC</argument>
-                        <argument>-XX:MaxGCPauseMillis=200</argument>
-                        <argument>-XX:+ParallelRefProcEnabled</argument>
-                        <argument>-XX:+UnlockExperimentalVMOptions</argument>
-                        <argument>-XX:G1NewSizePercent=20</argument>
-                        <argument>-XX:G1MaxNewSizePercent=50</argument>
-                        <argument>-XX:G1HeapRegionSize=32M</argument>
-                        <argument>-XX:G1ReservePercent=20</argument>
-                        <argument>-XX:InitiatingHeapOccupancyPercent=35</argument>
-                        <argument>--add-opens</argument>
-                        <argument>java.base/java.lang=ALL-UNNAMED</argument>
-                        <argument>--add-opens</argument>
-                        <argument>java.base/java.math=ALL-UNNAMED</argument>
-                        <argument>--add-opens</argument>
-                        <argument>java.base/java.util=ALL-UNNAMED</argument>
-                        <argument>--add-opens</argument>
-                        <argument>java.base/java.io=ALL-UNNAMED</argument>
-                    </arguments>
+                    <!-- JVM options go here, not as program arguments -->
+                    <jvmArgs>
+                        <jvmArg>-Xmx8g</jvmArg>
+                        <jvmArg>-Xms4g</jvmArg>
+                        <jvmArg>-XX:+UseG1GC</jvmArg>
+                        <jvmArg>-XX:MaxGCPauseMillis=200</jvmArg>
+                        <jvmArg>-XX:+ParallelRefProcEnabled</jvmArg>
+                        <jvmArg>-XX:+UnlockExperimentalVMOptions</jvmArg>
+                        <jvmArg>-XX:G1NewSizePercent=20</jvmArg>
+                        <jvmArg>-XX:G1MaxNewSizePercent=50</jvmArg>
+                        <jvmArg>-XX:G1HeapRegionSize=32M</jvmArg>
+                        <jvmArg>-XX:G1ReservePercent=20</jvmArg>
+                        <jvmArg>-XX:InitiatingHeapOccupancyPercent=35</jvmArg>
+                        <!-- Required for GraalVM and GeoTools -->
+                        <jvmArg>--add-opens=java.base/java.lang=ALL-UNNAMED</jvmArg>
+                        <jvmArg>--add-opens=java.base/java.math=ALL-UNNAMED</jvmArg>
+                        <jvmArg>--add-opens=java.base/java.util=ALL-UNNAMED</jvmArg>
+                        <jvmArg>--add-opens=java.base/java.io=ALL-UNNAMED</jvmArg>
+                    </jvmArgs>
+                    <!-- No program arguments by default -->
                 </configuration>
             </plugin>
         </plugins>

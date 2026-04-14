@@ -1,5 +1,6 @@
 package com.monadvsim.app.models.entities;
 
+import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.SpatialRegistry;
 import java.util.ArrayList;
 import java.util.List;
@@ -32,6 +33,7 @@ public class Project implements Serializable {
     private double defaultHatchingProbability;
     private double defaultAgentStep;
     private int defaultBirthRate; // number of eggs to be layeds
+    private transient LifecycleModel lifecycleModel;
             
     // The Environment
     private List<Layer> layers;
@@ -153,5 +155,15 @@ public class Project implements Serializable {
     public void setDefaultMaxAgentAge(int defaultMaxAgentAge) {
         this.defaultMaxAgentAge = defaultMaxAgentAge;
     }
+    
+    public void setLifecycleModel(LifecycleModel model) {
+    this.lifecycleModel = model;
+}
+
+    public LifecycleModel getLifecycleModel() {
+        return lifecycleModel;
+    }
+
+
     
 }

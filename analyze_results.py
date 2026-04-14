@@ -11,7 +11,7 @@ MINUTES_PER_TICK = 15
 SIMULATION_START_DATE = datetime(2025, 9, 1)
 STAGE_COLORS = {'ADULT': '#2E8B57', 'LARVA': '#4169E1', 'PUPA': '#FF8C00'}
 
-INPUT_FILE_PATH = "results/merged_snapshots_20260129_230247.csv"
+INPUT_FILE_PATH = "results/merged_snapshots_20260130_022232.csv"
 OUTPUT_FILE_FOLDER = "output"
 
 # Load
