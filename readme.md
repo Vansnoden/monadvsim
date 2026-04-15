@@ -149,6 +149,49 @@ project:
   defaultMaxAgentAge: 1920              # ticks (20 days)
 ```
 
+### Specie's specification details
+
+# Species Parameters in `simulation.yaml`
+
+The `species` section defines temperature‑dependent coefficients for the Metzler matrix life‑cycle model.  
+All temperatures in the equations are in **degrees Celsius**. The simulation automatically converts Kelvin (from climate data) to Celsius before applying these formulas.
+
+| Parameter | Description | Mathematical expression | Unit | Typical value (*An. stephensi*) |
+|-----------|-------------|------------------------|------|--------------------------------|
+| `fecundity_a` | Amplitude factor for fecundity | `F(T) = a · exp(b·T) – exp(b·Tmax – ((Tmax – T)/c)²)` | eggs·female⁻¹·day⁻¹ | 0.378 |
+| `fecundity_b` | Exponential coefficient for fecundity | – | °C⁻¹ | 0.173 |
+| `fecundity_Tmax` | Temperature where fecundity reaches zero | – | °C | 40.0 |
+| `fecundity_c` | Shape parameter for the descending limb | – | °C | 2.97 |
+| `egg_dev_a` | Quadratic coefficient for egg development rate | `dE(T) = max(0, a·T² + b·T + c)` | day⁻¹·°C⁻² | -0.0009 |
+| `egg_dev_b` | Linear coefficient for egg development rate | – | day⁻¹·°C⁻¹ | 0.048 |
+| `egg_dev_c` | Intercept for egg development rate | – | day⁻¹ | -0.345 |
+| `larva_dev_a` | Quadratic coefficient for larval development rate | same quadratic form | day⁻¹·°C⁻² | -0.0007 |
+| `larva_dev_b` | Linear coefficient for larval development rate | – | day⁻¹·°C⁻¹ | 0.039 |
+| `larva_dev_c` | Intercept for larval development rate | – | day⁻¹ | -0.32 |
+| `pupa_dev_a` | Quadratic coefficient for pupal development rate | same quadratic form | day⁻¹·°C⁻² | -0.0005 |
+| `pupa_dev_b` | Linear coefficient for pupal development rate | – | day⁻¹·°C⁻¹ | 0.026 |
+| `pupa_dev_c` | Intercept for pupal development rate | – | day⁻¹ | -0.2 |
+| `egg_survival_amp` | Maximum survival probability for eggs | `S_E(T) = amp · exp( –0.5 · ((T – μ)/σ)² )` | dimensionless | 1.01 |
+| `egg_survival_mean` | Optimal temperature for egg survival | μ | °C | 24.5 |
+| `egg_survival_sigma` | Temperature tolerance width for eggs | σ | °C | 4.8 |
+| `larva_survival_amp` | Maximum larval survival probability | same Gaussian form | dimensionless | 0.95 |
+| `larva_survival_mean` | Optimal temperature for larval survival | μ | °C | 27.0 |
+| `larva_survival_sigma` | Temperature tolerance width for larvae | σ | °C | 3.5 |
+| `pupa_survival_amp` | Maximum pupal survival probability | same Gaussian form | dimensionless | 0.93 |
+| `pupa_survival_mean` | Optimal temperature for pupal survival | μ | °C | 26.8 |
+| `pupa_survival_sigma` | Temperature tolerance width for pupae | σ | °C | 3.8 |
+| `adult_mort_a` | Quadratic coefficient for adult mortality rate | `μ_A(T) = max(0, a·T² + b·T + c)` | day⁻¹·°C⁻² | -0.00065 |
+| `adult_mort_b` | Linear coefficient for adult mortality rate | – | day⁻¹·°C⁻¹ | 0.0364 |
+| `adult_mort_c` | Intercept for adult mortality rate | – | day⁻¹ | -0.4882 |
+
+**Notes:**
+
+- Development rates (`dE`, `dL`, `dP`) are in **1/day**. The probability of completing a stage in one tick is `1 – exp(–rate · dt)`, where `dt` is the tick duration in days (e.g., 0.25/24 = 0.0104167 days for a 15‑minute tick).
+- Survival probabilities (`S_E`, `S_L`, `S_P`) are applied **once** when the stage is completed (i.e., a larva that finishes development survives with probability `S_L`).
+- Adult mortality is applied every tick as a daily rate converted to a per‑tick probability: `p_die = 1 – exp(–μ_A · dt)`.
+- Fecundity `F(T)` is in **eggs per female per day**. The actual number of eggs laid per tick is:
+
+
 ### Preparing Input Data
 
 - **Raster layers** (GeoTIFF): elevation, building density, population density.  
