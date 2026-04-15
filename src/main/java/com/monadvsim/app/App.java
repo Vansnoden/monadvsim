@@ -19,6 +19,10 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
+import org.locationtech.jts.geom.Coordinate;
 
 /**
  * Main Application Entry Point
@@ -55,30 +59,40 @@ public class App {
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
-            // 4. World bounds from study site file (shapefile or QGIS project)
+            // 4. World bounds from study site file (shapefile)
             worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
             System.out.println("World bounds from study site: " + worldBounds);
 
-            // 5. Spatial registry with grid cell size from config
+            // 5. Load study area geometry for seeding constraints
+            Geometry studyAreaGeometry = null;
+            try {
+                studyAreaGeometry = VectorBoundsLoader.getStudyAreaGeometry(config.files.studySite);
+                System.out.println("Loaded study area polygon for seeding constraints.");
+            } catch (Exception e) {
+                System.err.println("Could not load study area geometry: " + e.getMessage());
+                System.err.println("Seeding will use rectangular bounds only.");
+            }
+
+            // 6. Spatial registry with grid cell size from config
             spatialRegistry = new SpatialRegistry(worldBounds, config.gridCellSizeDegrees);
 
-            // 6. Create project and configure
+            // 7. Create project and configure (pass geometry)
             project = new Project("Mosquito Simulation");
-            configureSimulation(project, spatialRegistry, timeManager, worldBounds, config);
+            configureSimulation(project, spatialRegistry, timeManager, worldBounds, config, studyAreaGeometry);
 
-            // 7. Start simulation
+            // 8. Start simulation
             createAndStartSimulation(project, timeManager, spatialRegistry);
 
-            // 8. Shutdown hook
+            // 9. Shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
-            // 9. Wait for completion
+            // 10. Wait for completion
             if (simulationThread != null && simulationThread.isAlive()) simulationThread.join();
 
-            // 10. Final statistics and merge
+            // 11. Final statistics and merge
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
             SnapshotMerger.mergeAfterSimulation();
 
@@ -130,7 +144,8 @@ public class App {
                                             SpatialRegistry spatialRegistry,
                                             TimeManager timeManager,
                                             Rectangle2D worldBounds,
-                                            SimulationConfig config) {
+                                            SimulationConfig config,
+                                            Geometry studyAreaGeometry) {  // NEW: added geometry parameter
         System.out.println("Configuring project from YAML");
         try {
             // ---- Project defaults from config ----
@@ -219,7 +234,7 @@ public class App {
 
             // ---- Seed initial population using config seeding parameters ----
             System.out.println("Seeding initial agents population...");
-            seedInitialPopulation(project, config.seeding, buildings, population, spatialRegistry, worldBounds);
+            seedInitialPopulation(project, config.seeding, buildings, population, spatialRegistry, worldBounds, studyAreaGeometry);
 
             int totalTanks = project.getAgentLayers().stream()
                     .filter(l -> l.getName().equals("WaterTanks"))
@@ -236,7 +251,7 @@ public class App {
     }
 
     // ------------------------------------------------------------------------
-    // Helper methods (unchanged except where noted)
+    // Helper methods
     // ------------------------------------------------------------------------
 
     private static void copySpeciesParams(SpeciesParameters target, SimulationConfig.SpeciesParameters source) {
@@ -272,7 +287,8 @@ public class App {
                                               RasterLayer buildings,
                                               RasterLayer population,
                                               SpatialRegistry spatialRegistry,
-                                              Rectangle2D worldBounds) {
+                                              Rectangle2D worldBounds,
+                                              Geometry studyAreaGeometry) {  // NEW: added geometry parameter
         Random rand = new Random();
 
         AgentLayer habitatLayer = project.getAgentLayers().stream()
@@ -284,8 +300,9 @@ public class App {
             return;
         }
 
+        // Create habitat calculator with study area geometry (if provided)
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
-                seeding.habitatGridSizeX, seeding.habitatGridSizeY);
+                seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
 
         // Seed water tanks
         System.out.println("\nSeeding water tanks...");
@@ -358,10 +375,7 @@ public class App {
     }
 
     // ------------------------------------------------------------------------
-    // The rest of the helper methods (createFallbackRasters, monitorSimulation,
-    // startWatchdog, saveFinalStatisticsToFile, HabitatCalculator, etc.)
-    // remain exactly as in your original App.java – they are omitted here for brevity.
-    // Please copy them from your current file.
+    // The rest of the helper methods (unchanged)
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
@@ -383,7 +397,6 @@ public class App {
         System.out.println("Simulation started! Press Ctrl+C to stop.");
         monitorSimulation(simulationEngine, project);
     }
-
 
     private static void createFallbackRasters(RasterLayer elev, RasterLayer buildings, RasterLayer population) {
         elev.initialize(100, 100, 1);
@@ -670,7 +683,7 @@ public class App {
         }
     }
 
-    // Helper inner class for weighted habitat selection (unchanged)
+    // Helper inner class for weighted habitat selection with polygon constraint
     private static class HabitatCalculator {
         private final double[][] suitabilityGrid;
         private final double[] cumulativeDistribution;
@@ -678,14 +691,24 @@ public class App {
         private final double minX, minY;
         private final int gridSizeX, gridSizeY;
         private final Random random = new Random();
+        private final Geometry studyArea;
 
+        // Constructor without geometry (fallback to rectangular bounds)
         public HabitatCalculator(RasterLayer buildings, RasterLayer population,
                                  Rectangle2D worldBounds, int gridSizeX, int gridSizeY) {
+            this(buildings, population, worldBounds, gridSizeX, gridSizeY, null);
+        }
+
+        // New constructor with study area polygon
+        public HabitatCalculator(RasterLayer buildings, RasterLayer population,
+                                 Rectangle2D worldBounds, int gridSizeX, int gridSizeY,
+                                 Geometry studyArea) {
             this.gridSizeX = gridSizeX;
             this.gridSizeY = gridSizeY;
             this.cellSize = Math.min(worldBounds.getWidth() / gridSizeX, worldBounds.getHeight() / gridSizeY);
             this.minX = worldBounds.getMinX();
             this.minY = worldBounds.getMinY();
+            this.studyArea = studyArea;
             this.suitabilityGrid = new double[gridSizeX][gridSizeY];
             calculateSuitability(buildings, population);
             this.cumulativeDistribution = buildCumulativeDistribution();
@@ -693,10 +716,21 @@ public class App {
 
         private void calculateSuitability(RasterLayer buildings, RasterLayer population) {
             double total = 0.0;
+            GeometryFactory geomFactory = new GeometryFactory();
             for (int i = 0; i < gridSizeX; i++) {
                 for (int j = 0; j < gridSizeY; j++) {
                     double x = minX + (i + 0.5) * cellSize;
                     double y = minY + (j + 0.5) * cellSize;
+
+                    // If study area polygon is provided, skip cells that lie outside it
+                    if (studyArea != null) {
+                        Point point = geomFactory.createPoint(new Coordinate(x, y));
+                        if (!studyArea.contains(point)) {
+                            suitabilityGrid[i][j] = 0.0;
+                            continue;
+                        }
+                    }
+
                     double b = Math.max(0, buildings.getValueAt(x, y));
                     double p = Math.max(0, population.getValueAt(x, y));
                     double suit;
@@ -713,9 +747,11 @@ public class App {
                 }
             }
             if (total > 0) {
-                for (int i = 0; i < gridSizeX; i++)
-                    for (int j = 0; j < gridSizeY; j++)
+                for (int i = 0; i < gridSizeX; i++) {
+                    for (int j = 0; j < gridSizeY; j++) {
                         suitabilityGrid[i][j] /= total;
+                    }
+                }
             }
         }
 

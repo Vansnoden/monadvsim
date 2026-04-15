@@ -1,7 +1,7 @@
 # Simulation configuration for Anopheles stephensi in Dire Dawa
 
 time:
-  startDateTime: "2025-09-01T00:00:00"
+  startDateTime: "2020-01-01T00:00:00"
   totalTicks: 5760      # 12 * 30 days * 24 * 4 (15‑min ticks) # 34560 --
   tickMinutes: 15
 
