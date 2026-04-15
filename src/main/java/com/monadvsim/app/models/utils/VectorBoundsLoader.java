@@ -7,6 +7,7 @@ import org.geotools.data.shapefile.ShapefileDataStore;
 import org.geotools.data.simple.SimpleFeatureCollection;
 import org.geotools.data.simple.SimpleFeatureIterator;
 import org.geotools.geometry.jts.ReferencedEnvelope;
+import org.geotools.referencing.CRS;
 import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 
@@ -18,21 +19,24 @@ import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import org.geotools.api.feature.simple.SimpleFeature;
+import org.geotools.api.geometry.MismatchedDimensionException;
+import org.geotools.api.referencing.FactoryException;
+import org.geotools.api.referencing.crs.CoordinateReferenceSystem;
+import org.geotools.api.referencing.operation.MathTransform;
+import org.geotools.api.referencing.operation.TransformException;
 
 /**
  * Utility to read the geographic extent (bounding box) and geometry of a Shapefile.
- * Assumes the shapefile is in WGS84 (EPSG:4326). If not, reproject it first.
+ * Automatically reprojects the geometry to EPSG:4326 (WGS84) if needed.
  */
 public class VectorBoundsLoader {
 
+    private static final String TARGET_CRS = "EPSG:4326";
+
     /**
-     * Loads the bounding envelope from a shapefile.
-     *
-     * @param shapefilePath path to .shp file
-     * @return Rectangle2D in longitude/latitude (x=lon, y=lat)
-     * @throws IOException if file not found or cannot be read
+     * Loads the bounding envelope from a shapefile, transformed to EPSG:4326.
      */
-    public static Rectangle2D getBoundsFromShapefile(String shapefilePath) throws IOException {
+    public static Rectangle2D getBoundsFromShapefile(String shapefilePath) throws IOException, FactoryException, TransformException {
         File file = new File(shapefilePath);
         if (!file.exists()) {
             throw new IOException("Shapefile not found: " + shapefilePath);
@@ -45,6 +49,19 @@ public class VectorBoundsLoader {
             store.setCharset(StandardCharsets.UTF_8);
             SimpleFeatureSource featureSource = store.getFeatureSource();
             ReferencedEnvelope envelope = featureSource.getBounds();
+            CoordinateReferenceSystem sourceCRS = envelope.getCoordinateReferenceSystem();
+            CoordinateReferenceSystem targetCRS = CRS.decode(TARGET_CRS, true);
+
+            System.out.println("Source CRS: " + sourceCRS.getName());
+            System.out.println("Target CRS: " + targetCRS.getName());
+
+            // Transform envelope to WGS84 if needed
+            if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
+                envelope = envelope.transform(targetCRS, true);
+                System.out.println("Transformed envelope: " + envelope);
+            } else {
+                System.out.println("No transformation needed (already WGS84).");
+            }
 
             // Optional: add a small buffer (approx 100 m)
             double buffer = 0.001;
@@ -73,14 +90,9 @@ public class VectorBoundsLoader {
     }
 
     /**
-     * Reads the first feature's geometry (or union of all features) from a shapefile.
-     * Returns a Geometry (usually a MultiPolygon) representing the entire study area.
-     *
-     * @param shapefilePath path to .shp file
-     * @return union of all geometries in the shapefile
-     * @throws IOException if file not found or cannot be read
+     * Reads all geometries from a shapefile and returns their union, transformed to EPSG:4326.
      */
-    public static Geometry getStudyAreaGeometry(String shapefilePath) throws IOException {
+    public static Geometry getStudyAreaGeometry(String shapefilePath) throws IOException, FactoryException, TransformException {
         File file = new File(shapefilePath);
         if (!file.exists()) {
             throw new IOException("Shapefile not found: " + shapefilePath);
@@ -92,14 +104,24 @@ public class VectorBoundsLoader {
         try {
             SimpleFeatureSource featureSource = store.getFeatureSource();
             SimpleFeatureCollection features = featureSource.getFeatures();
-            List<Geometry> geoms = new ArrayList<>();
+            CoordinateReferenceSystem sourceCRS = featureSource.getSchema().getCoordinateReferenceSystem();
+            CoordinateReferenceSystem targetCRS = CRS.decode(TARGET_CRS, true);
 
-            // Use FeatureIterator (AutoCloseable) to iterate safely
+            MathTransform transform = null;
+            if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
+                transform = CRS.findMathTransform(sourceCRS, targetCRS, true);
+                System.out.println("Geometry will be transformed from " + sourceCRS.getName() + " to " + targetCRS.getName());
+            }
+
+            List<Geometry> geoms = new ArrayList<>();
             try (SimpleFeatureIterator iterator = features.features()) {
                 while (iterator.hasNext()) {
                     SimpleFeature feature = iterator.next();
                     Geometry geom = (Geometry) feature.getDefaultGeometry();
                     if (geom != null) {
+                        if (transform != null) {
+                            geom = org.geotools.geometry.jts.JTS.transform(geom, transform);
+                        }
                         geoms.add(geom);
                     }
                 }
@@ -108,7 +130,7 @@ public class VectorBoundsLoader {
             if (geoms.isEmpty()) {
                 throw new IOException("No geometry found in shapefile");
             }
-            // Union all geometries (if multiple polygons)
+            // Union all geometries
             GeometryFactory factory = new GeometryFactory();
             Geometry union = geoms.get(0);
             for (int i = 1; i < geoms.size(); i++) {
