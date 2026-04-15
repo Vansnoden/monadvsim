@@ -7,9 +7,7 @@ public class SimulationConfig {
 
     // Simulation time
     public SimulationTime time;
-    // World bounds
-    public WorldBounds world;
-    // File paths
+    // File paths (including study site)
     public FilePaths files;
     // Species parameters (merged)
     public SpeciesParameters species;
@@ -19,6 +17,12 @@ public class SimulationConfig {
     public SeedingConfig seeding;
     // Project defaults
     public ProjectDefaults project;
+    
+    // Spatial registry grid cell size (degrees)
+    public double gridCellSizeDegrees;
+    
+    // Tokens for rule engine (maps token name to layer name)
+    public List<TokenMapping> tokens;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"
@@ -26,14 +30,8 @@ public class SimulationConfig {
         public int tickMinutes;      // e.g. 15
     }
 
-    public static class WorldBounds {
-        public double centerLat;
-        public double centerLon;
-        public double bufferKm;
-        public double cellSize;      // for spatial registry
-    }
-
     public static class FilePaths {
+        public String studySite;      // path to shapefile or QGIS project for bounds
         public String elevation;
         public String buildings;
         public String population;
@@ -41,14 +39,17 @@ public class SimulationConfig {
     }
 
     public static class SpeciesParameters {
-        // same fields as your existing SpeciesParameters class
+        // Fecundity
         public double fecundity_a, fecundity_b, fecundity_Tmax, fecundity_c;
+        // Development rates
         public double egg_dev_a, egg_dev_b, egg_dev_c;
         public double larva_dev_a, larva_dev_b, larva_dev_c;
         public double pupa_dev_a, pupa_dev_b, pupa_dev_c;
+        // Survival
         public double egg_survival_amp, egg_survival_mean, egg_survival_sigma;
         public double larva_survival_amp, larva_survival_mean, larva_survival_sigma;
         public double pupa_survival_amp, pupa_survival_mean, pupa_survival_sigma;
+        // Adult mortality
         public double adult_mort_a, adult_mort_b, adult_mort_c;
     }
 
@@ -78,5 +79,10 @@ public class SimulationConfig {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
+    }
+
+    public static class TokenMapping {
+        public String token;
+        public String layer;
     }
 }

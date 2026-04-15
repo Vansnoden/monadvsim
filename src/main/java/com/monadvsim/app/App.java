@@ -6,10 +6,12 @@ import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ConfigLoader;
 import com.monadvsim.app.models.utils.SnapshotMerger;
+import com.monadvsim.app.models.utils.VectorBoundsLoader;
 
 import java.awt.geom.Rectangle2D;
 import java.io.File;
 import java.io.FileWriter;
+import java.io.IOException;
 import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -53,27 +55,30 @@ public class App {
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
-            // 4. World bounds and spatial registry
-            worldBounds = createWorldBounds(config.world.centerLat, config.world.centerLon, config.world.bufferKm);
-            spatialRegistry = new SpatialRegistry(worldBounds, config.world.cellSize);
+            // 4. World bounds from study site file (shapefile or QGIS project)
+            worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
+            System.out.println("World bounds from study site: " + worldBounds);
 
-            // 5. Create project and configure
+            // 5. Spatial registry with grid cell size from config
+            spatialRegistry = new SpatialRegistry(worldBounds, config.gridCellSizeDegrees);
+
+            // 6. Create project and configure
             project = new Project("Mosquito Simulation");
             configureSimulation(project, spatialRegistry, timeManager, worldBounds, config);
 
-            // 6. Start simulation
+            // 7. Start simulation
             createAndStartSimulation(project, timeManager, spatialRegistry);
 
-            // 7. Shutdown hook
+            // 8. Shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 System.out.println("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
-            // 8. Wait for completion
+            // 9. Wait for completion
             if (simulationThread != null && simulationThread.isAlive()) simulationThread.join();
 
-            // 9. Final statistics and merge
+            // 10. Final statistics and merge
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
             SnapshotMerger.mergeAfterSimulation();
 
@@ -86,6 +91,38 @@ public class App {
             System.err.println("Unexpected error: " + e.getMessage());
             e.printStackTrace();
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+        }
+    }
+
+    /**
+     * Reads the bounding box from a shapefile or QGIS project.
+     * Falls back to a default centroid+radius if reading fails.
+     */
+    private static Rectangle2D getWorldBoundsFromStudySite(String studySitePath) {
+        try {
+            // Try to read as shapefile first
+            if (studySitePath.toLowerCase().endsWith(".shp")) {
+                return VectorBoundsLoader.getBoundsFromShapefile(studySitePath);
+            } else if (studySitePath.toLowerCase().endsWith(".qgz") || studySitePath.toLowerCase().endsWith(".qgs")) {
+                // QGIS project – we cannot directly parse; recommend user provides a shapefile.
+                System.err.println("QGIS project files are not directly readable for bounds. " +
+                        "Please extract the bounding box manually or provide a shapefile.");
+                // Fallback: try to find a .shp with same name?
+                String shpPath = studySitePath.replaceAll("\\.qgz$", ".shp").replaceAll("\\.qgs$", ".shp");
+                File shpFile = new File(shpPath);
+                if (shpFile.exists()) {
+                    return VectorBoundsLoader.getBoundsFromShapefile(shpPath);
+                } else {
+                    throw new IOException("No shapefile found for QGIS project.");
+                }
+            } else {
+                throw new IOException("Unsupported file type for study site: " + studySitePath);
+            }
+        } catch (Exception e) {
+            System.err.println("Could not read study site file: " + e.getMessage());
+            System.err.println("Using fallback bounds (Dire Dawa centroid + 5 km buffer).");
+            // Fallback to centroid + buffer (Dire Dawa approximate coordinates)
+            return VectorBoundsLoader.createFallbackBounds(41.8562, 9.6041, 5.0);
         }
     }
 
@@ -158,13 +195,16 @@ public class App {
                 System.out.printf("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
             }
 
-            // ---- Tokens for rule engine (still static – can be externalised if needed) ----
-            List<String> tokens = List.of("temperature", "precipitation", "population",
-                    "building_density", "elevation", "age", "stage", "gravid");
-            List<String> layerNames = List.of("t2m", "tp", "Population", "Buildings",
-                    "Elevation", "Mosquitoes", "Mosquitoes", "Mosquitoes");
-            project.setTokens(new ArrayList<>(tokens));
-            project.setLayerNames(new ArrayList<>(layerNames));
+            // ---- Tokens for rule engine (loaded from YAML) ----
+            List<String> tokens = new ArrayList<>();
+            List<String> layerNames = new ArrayList<>();
+            for (var tokenMapping : config.tokens) {
+                tokens.add(tokenMapping.token);
+                layerNames.add(tokenMapping.layer);
+            }
+            project.setTokens(tokens);
+            project.setLayerNames(layerNames);
+            System.out.printf("Loaded %d tokens from YAML%n", tokens.size());
 
             // ---- Standardise geographic bounds for all raster layers ----
             double minLon = worldBounds.getMinX();
@@ -194,6 +234,10 @@ public class App {
             e.printStackTrace();
         }
     }
+
+    // ------------------------------------------------------------------------
+    // Helper methods (unchanged except where noted)
+    // ------------------------------------------------------------------------
 
     private static void copySpeciesParams(SpeciesParameters target, SimulationConfig.SpeciesParameters source) {
         target.fecundityA = source.fecundity_a;
@@ -231,7 +275,6 @@ public class App {
                                               Rectangle2D worldBounds) {
         Random rand = new Random();
 
-        // Find layers (they were added earlier)
         AgentLayer habitatLayer = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("WaterTanks")).findFirst().orElse(null);
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
@@ -315,13 +358,15 @@ public class App {
     }
 
     // ------------------------------------------------------------------------
-    // Helper methods (unchanged except where they use config)
+    // The rest of the helper methods (createFallbackRasters, monitorSimulation,
+    // startWatchdog, saveFinalStatisticsToFile, HabitatCalculator, etc.)
+    // remain exactly as in your original App.java – they are omitted here for brevity.
+    // Please copy them from your current file.
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
         System.out.println("Creating simulation engine...");
         simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
-
         simulationThread = new Thread(() -> {
             try {
                 simulationEngine.run();
@@ -334,11 +379,11 @@ public class App {
         simulationThread.setName("Simulation-Thread");
         simulationThread.setDaemon(false);
         simulationThread.start();
-
         startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
         System.out.println("Simulation started! Press Ctrl+C to stop.");
         monitorSimulation(simulationEngine, project);
     }
+
 
     private static void createFallbackRasters(RasterLayer elev, RasterLayer buildings, RasterLayer population) {
         elev.initialize(100, 100, 1);

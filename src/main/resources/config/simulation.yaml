@@ -2,20 +2,18 @@
 
 time:
   startDateTime: "2025-09-01T00:00:00"
-  totalTicks: 5760      # 30 days * 24 * 4 (15‑min ticks)
+  totalTicks: 5760      # 12 * 30 days * 24 * 4 (15‑min ticks) # 34560 --
   tickMinutes: 15
 
-world:
-  centerLat: 41.8562149505558
-  centerLon: 9.604134790332163
-  bufferKm: 5
-  cellSize: 0.001
-
 files:
-  elevation: "prepared_data/elevation_5_km.tiff"
-  buildings: "prepared_data/buildings_100_km.tif"
-  population: "prepared_data/population_density_100m.tif"
-  climateNetCDF: "prepared_data/historical_climate_2025_5_km_9_12.nc"
+  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – the bounding box will be read from this file
+  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
+  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
+  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
+  climateNetCDF: "prepared_data/dire_dawa/2020_data/2020_data_Dire_Dawa_ETDD.nc"
+
+# Spatial registry grid cell size (degrees)
+gridCellSizeDegrees: 0.001
 
 species:
   fecundity_a: 0.378
@@ -43,6 +41,25 @@ species:
   adult_mort_a: -0.00065
   adult_mort_b: 0.0364
   adult_mort_c: -0.4882
+
+# Tokens for rule engine: each maps a token (used in rules) to a layer name
+tokens:
+  - token: "temperature"
+    layer: "t2m"
+  - token: "precipitation"
+    layer: "tp"
+  - token: "population"
+    layer: "Population"
+  - token: "building_density"
+    layer: "Buildings"
+  - token: "elevation"
+    layer: "Elevation"
+  - token: "age"
+    layer: "Mosquitoes"
+  - token: "stage"
+    layer: "Mosquitoes"
+  - token: "gravid"
+    layer: "Mosquitoes"
 
 agentLayers:
   - name: "Mosquitoes"
