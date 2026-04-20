@@ -5,11 +5,11 @@
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 17280        # 6 months (180 days * 96 ticks)
+  totalTicks: 8640        # 3 months (180 days * 96 ticks)
   tickMinutes: 15
 
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – bounding box read from this file
+  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
   elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
   buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
   population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
