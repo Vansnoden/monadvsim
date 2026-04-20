@@ -163,6 +163,7 @@ public class AgentLayer extends Layer {
     }
 
     private void processAgentRules(Agent agent, Project project) {
+//        System.out.println("Processing agent " + agent.getId() + " with " + rules.size() + " rules");
         if (agent == null) return;
 
         if (agent instanceof LivingAgent la && !la.isAlive()) {

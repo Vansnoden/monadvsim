@@ -407,30 +407,50 @@ public class ProjectPersistenceService {
         ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
         
         try {
-            // Load standard ERA5 variables
+            // Load available variables (t2m, tp, etc.) – now uses revised InterpolatedRasterLayer
             climateManager.loadAvailableVariables(netcdfFilePath);
             
             // Add layers to project
             for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
                 project.addLayer(layer);
-
-                // Set up tokens for rule engine
                 if (project.getTokens() == null) {
                     project.setTokens(new ArrayList<>());
                 }
                 if (project.getLayerNames() == null) {
                     project.setLayerNames(new ArrayList<>());
                 }
-
-                // Map variable names to tokens
                 String token = ProjectPersistenceService.getTokenForVariable(layer.getName());
                 project.getTokens().add(token);
                 project.getLayerNames().add(layer.getName());
             }
             
             climateManager.printStatistics();
-            System.out.println("Climate data loaded successfully");
             
+            // ---- SANITY CHECK for temperature (t2m) ----
+            Layer t2mLayer = project.getLayerByName("t2m");
+            if (t2mLayer != null && t2mLayer instanceof InterpolatedRasterLayer) {
+                // Use the layer's own bounds if available, otherwise fallback to a central point
+                double testLon = 41.85;   // approximate center of Dire Dawa
+                double testLat = 9.60;
+                if (t2mLayer instanceof RasterLayer rl) {
+                    testLon = (rl.getMinLon() + rl.getMaxLon()) / 2;
+                    testLat = (rl.getMinLat() + rl.getMaxLat()) / 2;
+                }
+                double sampleTemp = t2mLayer.getValueAt(testLon, testLat);
+                if (!Double.isNaN(sampleTemp)) {
+                    if (sampleTemp < 250 || sampleTemp > 330) {
+                        System.err.printf("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
+                    } else {
+                        System.out.printf("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
+                    }
+                } else {
+                    System.err.println("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
+                }
+            } else {
+                System.err.println("WARNING: No 't2m' layer found in climate data.");
+            }
+            
+            System.out.println("Climate data loaded successfully");
             return climateManager;
             
         } catch (IOException e) {
@@ -438,6 +458,7 @@ public class ProjectPersistenceService {
             throw new Exception("Failed to load climate data", e);
         }
     }
+    
     
     public static String getTokenForVariable(String variableName) {
         // Map NetCDF variable names to tokens used in rules

@@ -1,15 +1,12 @@
-# ======================================================================
 # Simulation configuration for Anopheles stephensi in Dire Dawa
-# 6‑MONTH SIMULATION (April – September 2020)
-# ======================================================================
 
 time:
-  startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 17280        # 6 months (180 days * 96 ticks)
+  startDateTime: "2020-01-01T00:00:00"
+  totalTicks: 34560      # 12 * 30 days * 24 * 4 (15‑min ticks) # 5760 --
   tickMinutes: 15
 
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – bounding box read from this file
+  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – the bounding box will be read from this file
   elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
   buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
   population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
@@ -67,51 +64,34 @@ tokens:
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      # ----- FORCED LIFE‑CYCLE TRANSITIONS (high priority) -----
-      - condition: "stage == 'LARVA' && age > 480"          # >5 days
-        action: "pupate"
-        priority: 10
-      - condition: "stage == 'PUPA' && age > 192"           # >2 days
-        action: "emerge"
-        priority: 10
-
-      # ----- BEHAVIOURAL RULES (medium priority) -----
-      - condition: "stage == 'ADULT' && energy < 0.5"
+      - condition: "agent.stage == 'ADULT' && agent.energy < 0.5"
         action: "feed"
         priority: 5
-      - condition: "stage == 'ADULT' && energy > 0.3"
+      - condition: "agent.stage == 'ADULT' && agent.energy > 0.3"
         action: "get_gravid"
         priority: 4
-      - condition: "gravid == true && temperature > 285.15 && building_density > 0.1 && population > 0.05"
+      - condition: "agent.gravid == true && temperature > 293.15 && building_density > 0.1 && population > 0.05"
         action: "lay_eggs"
         priority: 6
       - condition: "temperature < 283.15 || temperature > 313.15"
         action: "die"
-        priority: 9
-      - condition: "stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !resting"
+        priority: 10
+      - condition: "agent.stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !agent.resting"
         action: "rest_in_building"
         priority: 4
-      - condition: "stage == 'ADULT' && energy < 0.8"
-        action: "feed"
-        priority: 3
-
-      # ----- LOW PRIORITY / FALLBACK -----
-      - condition: "true"
-        action: "rest"
-        priority: 1
-
+      # ... add all other behavioural rules here ...
   - name: "WaterTanks"
     rules:
-      - condition: "waterVolume <= 5 && waterVolume > 0"
+      - condition: "agent.waterVolume <= 5 && agent.waterVolume > 0"
         action: "dry_out"
         priority: 3
-      - condition: "temperature < 273.15 && waterVolume > 0"
+      - condition: "temperature < 273.15 && agent.waterVolume > 0"
         action: "freeze"
         priority: 2
       - condition: "temperature > 303.15 && precipitation < 0.001"
         action: "evaporate"
         priority: 5
-      - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
+      - condition: "agent.waterVolume == 0 && agent.eggCount == 0 && agent.larvalCount == 0"
         action: "die"
         priority: 4
 

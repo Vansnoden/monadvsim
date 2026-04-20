@@ -3,6 +3,7 @@ package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.TimeManager;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -125,15 +126,38 @@ public class InertAgent extends Agent {
         }
     }
     
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        double dE = model.eggDevelopmentRate(temperature);
+//        double SE = model.eggSurvival(temperature);
+//        double pHatch = model.transitionProb(dE) * SE; // probability per egg per tick
+//        int currentEggs = eggCount.get();
+//        if (currentEggs == 0) return 0;
+//        // Binomial sampling
+//        int eggsToHatch = (int) Math.round(currentEggs * pHatch);
+//        eggsToHatch = Math.min(eggsToHatch, currentEggs);
+//        if (eggsToHatch > 0) {
+//            eggCount.addAndGet(-eggsToHatch);
+//            larvalCount.addAndGet(eggsToHatch);
+//        }
+//        return eggsToHatch;
+//    }
+//    
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         double dE = model.eggDevelopmentRate(temperature);
         double SE = model.eggSurvival(temperature);
         double pHatch = model.transitionProb(dE) * SE; // probability per egg per tick
         int currentEggs = eggCount.get();
         if (currentEggs == 0) return 0;
-        // Binomial sampling
-        int eggsToHatch = (int) Math.round(currentEggs * pHatch);
-        eggsToHatch = Math.min(eggsToHatch, currentEggs);
+
+        // Stochastic binomial sampling
+        int eggsToHatch = 0;
+        ThreadLocalRandom rng = ThreadLocalRandom.current();
+        for (int i = 0; i < currentEggs; i++) {
+            if (rng.nextDouble() < pHatch) {
+                eggsToHatch++;
+            }
+        }
         if (eggsToHatch > 0) {
             eggCount.addAndGet(-eggsToHatch);
             larvalCount.addAndGet(eggsToHatch);
