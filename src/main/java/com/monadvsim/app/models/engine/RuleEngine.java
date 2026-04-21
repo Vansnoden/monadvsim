@@ -129,21 +129,21 @@ public class RuleEngine {
             la.setResting(true);
             la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
             la.resetTimeWithoutRest();
-            System.out.println("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
+//            System.out.println("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
         }
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(false);
-            System.out.println("Mosquito " + agent.getId() + " stopped resting");
+//            System.out.println("Mosquito " + agent.getId() + " stopped resting");
         }
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
-            System.out.println("Mosquito " + agent.getId() + " died from exhaustion after " +
-                    la.getTimeWithoutRest() + " ticks without rest");
+//            System.out.println("Mosquito " + agent.getId() + " died from exhaustion after " +
+//                    la.getTimeWithoutRest() + " ticks without rest");
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
         }

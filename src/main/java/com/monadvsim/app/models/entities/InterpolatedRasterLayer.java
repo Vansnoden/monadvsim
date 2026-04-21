@@ -137,6 +137,48 @@ public class InterpolatedRasterLayer extends Layer {
                 reverseLatitudeData();
             }
             
+            // --- HEURISTIC FIX FOR TEMPERATURE UNITS ---
+            // If this is a temperature variable and the average raw value is below 200 K,
+            // assume it was stored in Celsius and convert to Kelvin.
+            if (variableName.equalsIgnoreCase("t2m") || variableName.equalsIgnoreCase("temperature")) {
+                double sum = 0.0;
+                int count = 0;
+                for (int t = 0; t < Math.min(timeSize, 3); t++) {
+                    for (int lat = 0; lat < Math.min(latSize, 5); lat++) {
+                        for (int lon = 0; lon < Math.min(lonSize, 5); lon++) {
+                            double val = dataGrid[t][lat][lon];
+                            if (!Double.isNaN(val)) {
+                                sum += val;
+                                count++;
+                            }
+                        }
+                    }
+                }
+                if (count > 0) {
+                    double avg = sum / count;
+                    if (avg < 200) {
+                        LOGGER.warning(String.format("Temperature average (%.2f) is below 200 K – assuming data is in Celsius and converting to Kelvin.", avg));
+                        for (int t = 0; t < timeSize; t++) {
+                            for (int lat = 0; lat < latSize; lat++) {
+                                for (int lon = 0; lon < lonSize; lon++) {
+                                    if (!Double.isNaN(dataGrid[t][lat][lon])) {
+                                        dataGrid[t][lat][lon] += 273.15;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        LOGGER.info(String.format("Temperature average (%.2f K) is within expected range.", avg));
+                    }
+                }
+            }
+            
+            // Debug: print first few values of the loaded data
+            LOGGER.info("First few loaded values (time=0, lat=0, lon=0..2):");
+            for (int lon = 0; lon < Math.min(3, lonSize); lon++) {
+                LOGGER.info(String.format("  [%d] = %.4f", lon, dataGrid[0][0][lon]));
+            }
+            
             dataLoaded = true;
             cacheValid = false;
             LOGGER.info(String.format("Successfully loaded %s: %d time steps, [%.2f..%.2f]° lat, [%.2f..%.2f]° lon",
@@ -221,9 +263,6 @@ public class InterpolatedRasterLayer extends Layer {
                             count++;
                         }
                     }
-                    // For accumulated variables (like tp), sum is correct.
-                    // For instant variables, average would be more appropriate.
-                    // Here we sum across steps (typical for forecast accumulations).
                     double finalVal = (count > 0) ? sum : Double.NaN;
                     dataGrid[t][lat][lon] = finalVal;
                 }

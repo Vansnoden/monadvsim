@@ -13,7 +13,7 @@ files:
   elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
   buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
   population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
-  climateNetCDF: "prepared_data/dire_dawa/2020_data/2020_data_Dire_Dawa_ETDD.nc"
+  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_2020.nc"
 
 # Spatial registry grid cell size (degrees)
 gridCellSizeDegrees: 0.001
