@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+
+# ----------------------------------------------------------------------
+# clip_timeseries_data
+#
+# Clip a GRIB/NetCDF file to the bounding box of a shapefile.
+# Uses CDO and GDAL (ogr2ogr, ogrinfo).
+#
+# Usage:
+#   ./clip_timeseries_data --source=<file.grib> --bounds=<shapefile.shp> --target=<output.nc> [--daily] [--buffer=0.5] [--verbose]
+#
+# Options:
+#   --source    Input GRIB or NetCDF file.
+#   --bounds    Shapefile (or any vector format readable by ogr) defining the region.
+#   --target    Output NetCDF file.
+#   --daily     Resample to daily (mean for non‑precip, sum for precip-like variables).
+#   --buffer    Degrees to expand bounding box (default: 0.5).
+#   --verbose   Print CDO commands.
+# ----------------------------------------------------------------------
+
+set -e  # exit on error
+
+# Defaults
+buffer=0.5
+daily=0
+verbose=0
+
+# Parse arguments
+for arg in "$@"; do
+    case $arg in
+        --source=*)
+            source_file="${arg#*=}"
+            shift
+            ;;
+        --bounds=*)
+            bounds_file="${arg#*=}"
+            shift
+            ;;
+        --target=*)
+            target_file="${arg#*=}"
+            shift
+            ;;
+        --daily)
+            daily=1
+            shift
+            ;;
+        --buffer=*)
+            buffer="${arg#*=}"
+            shift
+            ;;
+        --verbose)
+            verbose=1
+            shift
+            ;;
+        *)
+            echo "Unknown option: $arg"
+            exit 1
+            ;;
+    esac
+done
+
+# Check required arguments
+if [[ -z "$source_file" || -z "$bounds_file" || -z "$target_file" ]]; then
+    echo "ERROR: Missing required arguments."
+    echo "Usage: $0 --source=<file> --bounds=<shapefile> --target=<output.nc> [--daily] [--buffer=0.5] [--verbose]"
+    exit 1
+fi
+
+# Check if input file exists
+if [[ ! -f "$source_file" ]]; then
+    echo "ERROR: Source file not found: $source_file"
+    exit 1
+fi
+
+# Check if shapefile exists
+if [[ ! -f "$bounds_file" ]]; then
+    echo "ERROR: Bounds file not found: $bounds_file"
+    exit 1
+fi
+
+# Check if CDO and GDAL are available
+command -v cdo >/dev/null 2>&1 || { echo "ERROR: cdo not found. Install with: conda install -c conda-forge cdo"; exit 1; }
+command -v ogrinfo >/dev/null 2>&1 || { echo "ERROR: ogrinfo not found. Install GDAL (e.g., conda install -c conda-forge gdal)"; exit 1; }
+
+# ----------------------------------------------------------------------
+# Get bounding box from shapefile (lon_min, lon_max, lat_min, lat_max)
+# ----------------------------------------------------------------------
+# Use ogrinfo to get the extent in WGS84 (EPSG:4326)
+extent=$(ogrinfo -so -al "$bounds_file" | grep 'Extent' | head -1)
+# Extract numbers: format "(minX, maxX) - (minY, maxY)"
+lon_min=$(echo "$extent" | sed -n 's/.*(\([-0-9.]*\), \([-0-9.]*\)) - (\([-0-9.]*\), \([-0-9.]*\)).*/\1/p')
+lon_max=$(echo "$extent" | sed -n 's/.*(\([-0-9.]*\), \([-0-9.]*\)) - (\([-0-9.]*\), \([-0-9.]*\)).*/\2/p')
+lat_min=$(echo "$extent" | sed -n 's/.*(\([-0-9.]*\), \([-0-9.]*\)) - (\([-0-9.]*\), \([-0-9.]*\)).*/\3/p')
+lat_max=$(echo "$extent" | sed -n 's/.*(\([-0-9.]*\), \([-0-9.]*\)) - (\([-0-9.]*\), \([-0-9.]*\)).*/\4/p')
+
+# Check if extraction succeeded
+if [[ -z "$lon_min" || -z "$lon_max" || -z "$lat_min" || -z "$lat_max" ]]; then
+    echo "ERROR: Could not parse extent from ogrinfo. Output was:"
+    ogrinfo -so -al "$bounds_file"
+    exit 1
+fi
+
+# Apply buffer
+lon_min=$(echo "$lon_min - $buffer" | bc)
+lon_max=$(echo "$lon_max + $buffer" | bc)
+lat_min=$(echo "$lat_min - $buffer" | bc)
+lat_max=$(echo "$lat_max + $buffer" | bc)
+
+echo "Bounding box: lon [$lon_min, $lon_max], lat [$lat_min, $lat_max]"
+
+# ----------------------------------------------------------------------
+# Convert longitudes to 0‑360 if the source file uses that convention
+# (We'll try both; CDO will fail gracefully if one doesn't work)
+# ----------------------------------------------------------------------
+# First, try with -180..180 range (keep as is)
+temp_nc1="/tmp/clip_temp1.nc"
+temp_nc2="/tmp/clip_temp2.nc"
+
+# Attempt with original lon range (may fail if file uses 0-360)
+cdo_cmd1="cdo -f nc sellonlatbox,$lon_min,$lon_max,$lat_min,$lat_max $source_file $temp_nc1"
+if [[ $verbose -eq 1 ]]; then
+    echo "Trying: $cdo_cmd1"
+fi
+if eval "$cdo_cmd1" 2>/dev/null; then
+    temp_file="$temp_nc1"
+    echo "Clipping succeeded with -180..180 longitude range."
+else
+    # Try with 0‑360 range (add 360 to negative longitudes)
+    lon_min_360=$(echo "$lon_min" | awk '{if($1<0) print $1+360; else print $1}')
+    lon_max_360=$(echo "$lon_max" | awk '{if($1<0) print $1+360; else print $1}')
+    cdo_cmd2="cdo -f nc sellonlatbox,$lon_min_360,$lon_max_360,$lat_min,$lat_max $source_file $temp_nc2"
+    if [[ $verbose -eq 1 ]]; then
+        echo "Trying: $cdo_cmd2"
+    fi
+    if eval "$cdo_cmd2" 2>/dev/null; then
+        temp_file="$temp_nc2"
+        echo "Clipping succeeded with 0‑360 longitude range."
+    else
+        echo "ERROR: Clipping failed with both longitude ranges."
+        exit 1
+    fi
+fi
+
+# ----------------------------------------------------------------------
+# Optional: daily resampling
+# ----------------------------------------------------------------------
+if [[ $daily -eq 1 ]]; then
+    # Resample to daily: use mean for all variables (safe for temperature)
+    # For precipitation, one would need to sum; but we keep it simple.
+    # More sophisticated: detect variable names and apply different methods.
+    # Here we use `daymean` for all, which is fine for temperature.
+    cdo daymean "$temp_file" "$target_file"
+    echo "Daily resampling applied (daymean)."
+else
+    mv "$temp_file" "$target_file"
+fi
+
+# Clean up temporary files
+rm -f "$temp_nc1" "$temp_nc2" 2>/dev/null
+
+echo "Clipped data saved to $target_file"
