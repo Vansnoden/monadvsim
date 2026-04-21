@@ -200,15 +200,33 @@ public class RuleEngine {
         }
     }
 
+//    private void executeFeed(Agent agent, Project project, AgentLayer layer) {
+//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
+//            Layer populationLayer = project.getLayerByName("Population");
+//            if (populationLayer != null) {
+//                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
+//                if (popDensity > 1.0) {
+//                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
+//                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+//                }
+//            }
+//        }
+//    }
+    
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
             if (populationLayer != null) {
                 double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-                if (popDensity > 1.0) {
-                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
-                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+                // Feed if any population exists (even low density)
+                if (popDensity > 0.01) {
+                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
+                    // Optional debug
+                    // System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
+            } else {
+                // Fallback: always feed a little
+                la.setEnergy(Math.min(1.0, la.getEnergy() + 0.1));
             }
         }
     }
