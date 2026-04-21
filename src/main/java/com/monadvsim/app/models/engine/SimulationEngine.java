@@ -978,21 +978,59 @@ public class SimulationEngine implements Runnable {
     }
     
     
+//    private void reportProgress() {
+//        AgentLayer mosquitoLayer = project.getAgentLayers().stream()
+//            .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
+//            .findFirst().orElse(null);
+//
+//        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
+//        
+//        long totalLarvae = project.getAgentLayers().stream()
+//            .flatMap(l -> l.getAgents().stream())
+//            .filter(a -> a instanceof InertAgent)
+//            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
+//            .sum();
+//
+//        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
+//            timeManager.getTickCount(), adults, totalLarvae,
+//            Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
+//    }
+    
     private void reportProgress() {
+        // Find the Mosquitoes layer
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
             .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
             .findFirst().orElse(null);
 
-        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-        
-        long totalLarvae = project.getAgentLayers().stream()
-            .flatMap(l -> l.getAgents().stream())
-            .filter(a -> a instanceof InertAgent)
-            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
-            .sum();
+        long adults = 0;
+        long pupae = 0;
+        if (mosquitoLayer != null) {
+            for (Agent agent : mosquitoLayer.getAgents()) {
+                if (agent instanceof LivingAgent la && la.isAlive()) {
+                    LifecycleStage stage = la.getStage();
+                    if (stage == LifecycleStage.ADULT) {
+                        adults++;
+                    } else if (stage == LifecycleStage.PUPA) {
+                        pupae++;
+                    }
+                }
+            }
+        }
 
-        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
-            timeManager.getTickCount(), adults, totalLarvae,
+        long totalLarvae = 0;
+        long totalEggs = 0;
+        // Sum over all InertAgent (water tanks) across all layers
+        for (AgentLayer layer : project.getAgentLayers()) {
+            for (Agent agent : layer.getAgents()) {
+                if (agent instanceof InertAgent ia) {
+                    totalLarvae += ia.getLarvalCount();
+                    totalEggs += ia.getEggCount();
+                }
+            }
+        }
+
+        System.out.println(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
+            timeManager.getTickCount(), adults, pupae, totalLarvae, totalEggs,
             Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
     }
     

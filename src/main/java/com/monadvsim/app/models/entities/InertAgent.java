@@ -143,6 +143,28 @@ public class InertAgent extends Agent {
 //    }
 //    
     
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        double dE = model.eggDevelopmentRate(temperature);
+//        double SE = model.eggSurvival(temperature);
+//        double pHatch = model.transitionProb(dE) * SE; // probability per egg per tick
+//        int currentEggs = eggCount.get();
+//        if (currentEggs == 0) return 0;
+//
+//        // Stochastic binomial sampling
+//        int eggsToHatch = 0;
+//        ThreadLocalRandom rng = ThreadLocalRandom.current();
+//        for (int i = 0; i < currentEggs; i++) {
+//            if (rng.nextDouble() < pHatch) {
+//                eggsToHatch++;
+//            }
+//        }
+//        if (eggsToHatch > 0) {
+//            eggCount.addAndGet(-eggsToHatch);
+//            larvalCount.addAndGet(eggsToHatch);
+//        }
+//        return eggsToHatch;
+//    }
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         double dE = model.eggDevelopmentRate(temperature);
         double SE = model.eggSurvival(temperature);
@@ -150,7 +172,7 @@ public class InertAgent extends Agent {
         int currentEggs = eggCount.get();
         if (currentEggs == 0) return 0;
 
-        // Stochastic binomial sampling
+        // Stochastic binomial sampling (loop over each egg)
         int eggsToHatch = 0;
         ThreadLocalRandom rng = ThreadLocalRandom.current();
         for (int i = 0; i < currentEggs; i++) {

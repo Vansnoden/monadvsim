@@ -373,3 +373,16 @@ If you use this framework in a publication, cite:
 > [Your name et al., "MONADSIM: A high‑performance multi‑agent mosquito simulation", Year, Journal/DOI] -->
 
 ```
+
+
+#### Inspect clipped data:
+
+```cdo sinfo /home/void/Documents/codes/monadvsim/prepared_data/dire_dawa/climate_t2m_tp_2020.nc```
+
+```cdo showvar /home/void/Documents/codes/monadvsim/prepared_data/dire_dawa/climate_t2m_tp_2020.nc```
+
+```ogrinfo -so -al /home/void/Documents/codes/monadvsim/prepared_data/dire_dawa/dire_dawa.shp```
+
+renaming variable:
+
+```cdo chname,2t,t2m,tp,tp climate_t2m_tp_2020.nc climate_t2m_tp_2020.nc```
