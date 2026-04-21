@@ -76,10 +76,10 @@ agentLayers:
         priority: 10
 
       # ----- BEHAVIOURAL RULES (medium priority) -----
-      - condition: "stage == 'ADULT' && energy < 0.5"
+      - condition: "stage == 'ADULT' && energy < 0.7"
         action: "feed"
         priority: 5
-      - condition: "stage == 'ADULT' && energy > 0.3"
+      - condition: "stage == 'ADULT' && energy > 0.2"
         action: "get_gravid"
         priority: 4
       - condition: "gravid == true && temperature > 285.15 && building_density > 0.1 && population > 0.05"
@@ -120,12 +120,12 @@ seeding:
   mosquitoesToSeed: 250000
   habitatGridSizeX: 50
   habitatGridSizeY: 50
-  tankBuildingThreshold: 0.15
-  tankPopulationThreshold: 0.05
-  mosquitoBuildingThreshold: 0.05
-  mosquitoPopulationThreshold: 0.02
+  tankBuildingThreshold: 0 #0.15
+  tankPopulationThreshold: 0 #0.05
+  mosquitoBuildingThreshold: 0 #0.05
+  mosquitoPopulationThreshold: 0 #0.02
 
 project:
-  defaultAgentSearchRadius: 0.0005    # ~55 m
+  defaultAgentSearchRadius: 0.002 #~220m #0.0005    # ~55 m
   defaultAgentStep: 0.00005           # ~5.5 m per tick
   defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day

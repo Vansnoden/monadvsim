@@ -714,47 +714,6 @@ public class App {
             this.cumulativeDistribution = buildCumulativeDistribution();
         }
 
-//        private void calculateSuitability(RasterLayer buildings, RasterLayer population) {
-//            double total = 0.0;
-//            GeometryFactory geomFactory = new GeometryFactory();
-//            for (int i = 0; i < gridSizeX; i++) {
-//                for (int j = 0; j < gridSizeY; j++) {
-//                    double x = minX + (i + 0.5) * cellSize;
-//                    double y = minY + (j + 0.5) * cellSize;
-//
-//                    // If study area polygon is provided, skip cells that lie outside it
-//                    if (studyArea != null) {
-//                        Point point = geomFactory.createPoint(new Coordinate(x, y));
-//                        if (!studyArea.contains(point)) {
-//                            suitabilityGrid[i][j] = 0.0;
-//                            continue;
-//                        }
-//                    }
-//
-//                    double b = Math.max(0, buildings.getValueAt(x, y));
-//                    double p = Math.max(0, population.getValueAt(x, y));
-//                    double suit;
-//                    if (b > 0.2 && p > 0.1) {
-//                        suit = b * 0.6 + (Math.min(p, 100) / 100.0) * 0.4;
-//                    } else if (b > 0.1 || p > 0.05) {
-//                        suit = (b * 0.3 + (Math.min(p, 50) / 50.0) * 0.2) * 0.5;
-//                    } else {
-//                        suit = 0.01;
-//                    }
-//                    suit *= (0.9 + random.nextDouble() * 0.2);
-//                    suitabilityGrid[i][j] = suit;
-//                    total += suit;
-//                }
-//            }
-//            if (total > 0) {
-//                for (int i = 0; i < gridSizeX; i++) {
-//                    for (int j = 0; j < gridSizeY; j++) {
-//                        suitabilityGrid[i][j] /= total;
-//                    }
-//                }
-//            }
-//        }
-        
         private void calculateSuitability(RasterLayer buildings, RasterLayer population) {
             double total = 0.0;
             GeometryFactory geomFactory = new GeometryFactory();
@@ -763,7 +722,7 @@ public class App {
                     double x = minX + (i + 0.5) * cellSize;
                     double y = minY + (j + 0.5) * cellSize;
 
-                    // Skip points outside study area if geometry provided
+                    // If study area polygon is provided, skip cells that lie outside it
                     if (studyArea != null) {
                         Point point = geomFactory.createPoint(new Coordinate(x, y));
                         if (!studyArea.contains(point)) {
@@ -774,14 +733,15 @@ public class App {
 
                     double b = Math.max(0, buildings.getValueAt(x, y));
                     double p = Math.max(0, population.getValueAt(x, y));
-
-                    // Stronger weighting: prefer areas with both high building and population
-                    double suit = (b * 0.7) + (Math.min(p, 100) / 100.0) * 0.3;
-                    // Boost areas where both are present
-                    if (b > 0.2 && p > 0.1) suit *= 1.5;
-                    // Add a small random factor to avoid exact ties
+                    double suit;
+                    if (b > 0.2 && p > 0.1) {
+                        suit = b * 0.6 + (Math.min(p, 100) / 100.0) * 0.4;
+                    } else if (b > 0.1 || p > 0.05) {
+                        suit = (b * 0.3 + (Math.min(p, 50) / 50.0) * 0.2) * 0.5;
+                    } else {
+                        suit = 0.01;
+                    }
                     suit *= (0.9 + random.nextDouble() * 0.2);
-
                     suitabilityGrid[i][j] = suit;
                     total += suit;
                 }
