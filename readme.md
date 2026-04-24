@@ -375,6 +375,21 @@ If you use this framework in a publication, cite:
 ```
 
 
+#### CLipped climatic data
+
+```
+./clip_timeseries_data \
+    --source=/mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/climatic_timeseries_data/2020_data.grib \
+    --bounds=/home/void/Documents/codes/monadvsim/prepared_data/dire/dire_dawa.shp \
+    --target=/home/void/Documents/codes/monadvsim/prepared_data/dire_dawa/climate_t2m_tp_2020.nc \
+    --daily \
+    --buffer=1.0 \
+    --variables=2t,tp \
+    --rename-t2m \
+    --verbose
+```
+
+
 #### Inspect clipped data:
 
 ```cdo sinfo /home/void/Documents/codes/monadvsim/prepared_data/dire_dawa/climate_t2m_tp_2020.nc```
