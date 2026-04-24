@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.engine.LifecycleModel;
@@ -97,6 +98,9 @@ public class InertAgent extends Agent {
     
     // Atomic operations for eggs
     public int addEggs(int eggsToAdd) {
+        int newCount = eggCount.addAndGet(eggsToAdd);
+        SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
+            getId(), eggsToAdd, newCount);
         return eggCount.addAndGet(eggsToAdd);
     }
     

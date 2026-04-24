@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -254,9 +255,9 @@ public class AgentContainer {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("Batch processing interrupted");
+            SimulationLogger.severe("Batch processing interrupted");
         } catch (ExecutionException e) {
-            System.err.println("Error in batch processing: " + e.getCause().getMessage());
+            SimulationLogger.severe("Error in batch processing: " + e.getCause().getMessage());
         }
     }
 

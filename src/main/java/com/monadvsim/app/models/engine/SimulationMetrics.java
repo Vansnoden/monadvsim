@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -54,15 +55,15 @@ public class SimulationMetrics {
         long currentTime = System.currentTimeMillis();
         double elapsedSeconds = (currentTime - startTime) / 1000.0;
         
-        System.out.println("\n=== SIMULATION METRICS ===");
-        System.out.printf("Elapsed Time: %.2f seconds%n", elapsedSeconds);
-        System.out.printf("Agents Processed: %,d (%.0f/sec)%n", 
+        SimulationLogger.info("\n=== SIMULATION METRICS ===");
+        SimulationLogger.info("Elapsed Time: %.2f seconds%n", elapsedSeconds);
+        SimulationLogger.info("Agents Processed: %,d (%.0f/sec)%n", 
             agentsProcessed.get(), agentsProcessed.get() / elapsedSeconds);
-        System.out.printf("Rules Evaluated: %,d (%.0f/sec)%n", 
+        SimulationLogger.info("Rules Evaluated: %,d (%.0f/sec)%n", 
             rulesEvaluated.get(), rulesEvaluated.get() / elapsedSeconds);
-        System.out.printf("Spatial Queries: %,d%n", spatialQueries.get());
-        System.out.printf("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
-        System.out.println("=========================\n");
+        SimulationLogger.info("Spatial Queries: %,d%n", spatialQueries.get());
+        SimulationLogger.info("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
+        SimulationLogger.info("=========================\n");
     }
     
     public void reset() {

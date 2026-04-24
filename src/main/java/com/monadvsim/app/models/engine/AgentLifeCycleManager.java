@@ -1,5 +1,5 @@
 package com.monadvsim.app.models.engine;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.LivingAgent;
@@ -145,9 +145,9 @@ public class AgentLifeCycleManager {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("Lifecycle processing interrupted");
+            SimulationLogger.severe("Lifecycle processing interrupted");
         } catch (ExecutionException e) {
-            System.err.println("Error in lifecycle processing: " + e.getCause().getMessage());
+            SimulationLogger.severe("Error in lifecycle processing: " + e.getCause().getMessage());
         }
         
         // Apply pending changes to spatial registry

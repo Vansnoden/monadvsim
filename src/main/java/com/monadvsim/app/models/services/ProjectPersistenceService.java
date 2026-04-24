@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.services;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.SpatialRegistry;
 import com.monadvsim.app.models.engine.TimeManager;
@@ -41,7 +42,7 @@ public class ProjectPersistenceService {
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
-        System.out.println("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
+        SimulationLogger.info("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
         
         File file = new File(filePath);
         if (!file.exists()) {
@@ -71,7 +72,7 @@ public class ProjectPersistenceService {
             int width = image.getWidth();
             int height = image.getHeight();
             
-            System.out.printf("  Raster dimensions: %d x %d%n", width, height);
+            SimulationLogger.info("  Raster dimensions: %d x %d%n", width, height);
             
             // Get the geographic bounds
             ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
@@ -80,7 +81,7 @@ public class ProjectPersistenceService {
             double minY = envelope.getMinY();
             double maxY = envelope.getMaxY();
             
-            System.out.printf("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
+            SimulationLogger.info("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
                 minX, minY, maxX, maxY);
             
             // Initialize the layer with correct dimensions
@@ -94,14 +95,14 @@ public class ProjectPersistenceService {
             // Track resource for cleanup
             resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
             
-            System.out.println("✅ Successfully loaded raster: " + layer.getName());
+            SimulationLogger.info("✅ Successfully loaded raster: " + layer.getName());
             
         } catch (Exception e) {
-            System.err.println("❌ Error loading raster: " + filePath + " - " + e.getMessage());
+            SimulationLogger.severe("❌ Error loading raster: " + filePath + " - " + e.getMessage());
             e.printStackTrace();
             
             // Fallback: create a 100x100 grid with default values
-            System.out.println("⚠️ Using fallback 100x100 grid for: " + layer.getName());
+            SimulationLogger.info("⚠️ Using fallback 100x100 grid for: " + layer.getName());
             fallbackRaster(layer);
         }
     }
@@ -141,7 +142,7 @@ public class ProjectPersistenceService {
         }
         
         // Print sample values for verification
-        System.out.printf("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
+        SimulationLogger.info("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
             layer.getDataGrid()[0][0][0],
             layer.getDataGrid()[0][width-1][0],
             layer.getDataGrid()[0][0][height-1],
@@ -154,7 +155,7 @@ public class ProjectPersistenceService {
     public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
         // This method should map '2m_temperature' -> tempLayer
         // and 'total_precipitation' -> rainLayer
-        System.out.println("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
+        SimulationLogger.info("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
         
         // Fallback to 22C and 0.0mm rain if file read fails
         for (int f = 0; f < 3000; f++) {
@@ -172,14 +173,14 @@ public class ProjectPersistenceService {
             File dir = new File("results");
             if (!dir.exists()) {
                 if (!dir.mkdirs()) {
-                    System.err.println("[Export] ERROR: Could not create results directory");
+                    SimulationLogger.severe("[Export] ERROR: Could not create results directory");
                     return false;
                 }
             }
 
             File file = new File(outputPath);
             if (file.exists()) {
-                System.out.println("[Export] WARNING: File already exists, overwriting: " + outputPath);
+                SimulationLogger.info("[Export] WARNING: File already exists, overwriting: " + outputPath);
             }
 
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
@@ -230,12 +231,12 @@ public class ProjectPersistenceService {
                 return true;
 
             } catch (IOException e) {
-                System.err.println("[Export] ERROR writing CSV: " + e.getMessage());
+                SimulationLogger.severe("[Export] ERROR writing CSV: " + e.getMessage());
                 return false;
             }
 
         } catch (Exception e) {
-            System.err.println("[Export] CRITICAL ERROR: " + e.getMessage());
+            SimulationLogger.severe("[Export] CRITICAL ERROR: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
@@ -243,13 +244,13 @@ public class ProjectPersistenceService {
     
     
     public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
-        System.out.printf("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
-        System.out.printf("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
+        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
+        SimulationLogger.info("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
     
         long startTime = System.currentTimeMillis();
     
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-            System.out.println("[Export-CSV] File writer created successfully");
+            SimulationLogger.info("[Export-CSV] File writer created successfully");
         
             // Collect all layers
             List<Layer> allLayers = project.getLayers();
@@ -380,19 +381,19 @@ public class ProjectPersistenceService {
                 }
             }
 
-            System.out.println("Results exported with Environmental Context to: " + outputPath);
+            SimulationLogger.info("Results exported with Environmental Context to: " + outputPath);
             System.out.println("Included " + allLayers.size() + " layers and " + 
                                   agentLayers.size() + " agent layers");
             return true;
         } catch (IOException e) {
-            System.err.println("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
             return false;
         } catch (Exception e) {
-            System.err.println("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
             return false;
         } finally {
             long endTime = System.currentTimeMillis();
-            System.out.printf("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
+            SimulationLogger.info("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
         }
     }
     
@@ -402,7 +403,7 @@ public class ProjectPersistenceService {
      */
     public ClimateDatasetManager loadClimateData(Project project, String netcdfFilePath, 
                                                 TimeManager timeManager) throws Exception {
-        System.out.println("Loading climate data from: " + netcdfFilePath);
+        SimulationLogger.info("Loading climate data from: " + netcdfFilePath);
         
         ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
         
@@ -439,22 +440,22 @@ public class ProjectPersistenceService {
                 double sampleTemp = t2mLayer.getValueAt(testLon, testLat);
                 if (!Double.isNaN(sampleTemp)) {
                     if (sampleTemp < 250 || sampleTemp > 330) {
-                        System.err.printf("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
+                        SimulationLogger.warning("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
                     } else {
-                        System.out.printf("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
+                        SimulationLogger.info("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
                     }
                 } else {
-                    System.err.println("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
+                    SimulationLogger.severe("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
                 }
             } else {
-                System.err.println("WARNING: No 't2m' layer found in climate data.");
+                SimulationLogger.severe("WARNING: No 't2m' layer found in climate data.");
             }
             
-            System.out.println("Climate data loaded successfully");
+            SimulationLogger.info("Climate data loaded successfully");
             return climateManager;
             
         } catch (IOException e) {
-            System.err.println("Error loading NetCDF file: " + e.getMessage());
+            SimulationLogger.severe("Error loading NetCDF file: " + e.getMessage());
             throw new Exception("Failed to load climate data", e);
         }
     }
@@ -491,7 +492,7 @@ public class ProjectPersistenceService {
         List<ClimateDatasetManager> managers = new ArrayList<>();
         
         for (String filePath : netcdfFiles) {
-            System.out.println("Loading: " + filePath);
+            SimulationLogger.info("Loading: " + filePath);
             ClimateDatasetManager manager = loadClimateData(project, filePath, timeManager);
             managers.add(manager);
         }

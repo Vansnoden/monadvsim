@@ -1,4 +1,5 @@
 package com.monadvsim.app;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

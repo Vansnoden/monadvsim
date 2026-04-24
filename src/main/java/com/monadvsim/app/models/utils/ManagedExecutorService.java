@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.util.*;
@@ -83,7 +84,7 @@ public class ManagedExecutorService implements ExecutorService {
             }
         };
         
-        System.out.printf("Created ManagedExecutorService: %s [core=%d, max=%d, queue=%d]%n",
+        SimulationLogger.info("Created ManagedExecutorService: %s [core=%d, max=%d, queue=%d]%n",
             name, corePoolSize, maxPoolSize, queueCapacity);
     }
     
@@ -143,14 +144,14 @@ public class ManagedExecutorService implements ExecutorService {
             }
             shuttingDown = true;
             
-            System.out.printf("Shutting down executor: %s%n", name);
+            SimulationLogger.info("Shutting down executor: %s%n", name);
             
             // Run shutdown hooks
             for (Runnable hook : shutdownHooks) {
                 try {
                     hook.run();
                 } catch (Exception e) {
-                    System.err.printf("Error in shutdown hook for %s: %s%n", name, e.getMessage());
+                    SimulationLogger.warning("Error in shutdown hook for %s: %s%n", name, e.getMessage());
                 }
             }
             
@@ -166,7 +167,7 @@ public class ManagedExecutorService implements ExecutorService {
         shutdownLock.lock();
         try {
             shuttingDown = true;
-            System.out.printf("Forcing shutdown of executor: %s%n", name);
+            SimulationLogger.info("Forcing shutdown of executor: %s%n", name);
             return delegate.shutdownNow();
         } finally {
             shutdownLock.unlock();
@@ -203,7 +204,7 @@ public class ManagedExecutorService implements ExecutorService {
             }
             
             // Report progress
-            System.out.printf("[%s] Waiting for termination: %d active, %d queue%n",
+            SimulationLogger.info("[%s] Waiting for termination: %d active, %d queue%n",
                 name, activeTasks.get(), getQueueSize());
             
             Thread.sleep(Math.min(checkInterval, deadline - System.currentTimeMillis()));
@@ -211,7 +212,7 @@ public class ManagedExecutorService implements ExecutorService {
         
         // Force shutdown if timeout reached
         if (!isTerminated()) {
-            System.out.printf("[%s] Timeout reached, forcing shutdown%n", name);
+            SimulationLogger.info("[%s] Timeout reached, forcing shutdown%n", name);
             shutdownNow();
         }
         
@@ -399,7 +400,7 @@ public class ManagedExecutorService implements ExecutorService {
             
             // Try to add to stats
             Map<String, Object> stats = getStatistics();
-            System.err.println("Executor state: " + stats);
+            SimulationLogger.severe("Executor state: " + stats);
             
             throw new RejectedExecutionException("Task rejected from " + name);
         }

@@ -1,5 +1,5 @@
 package com.monadvsim.app.models.config;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 

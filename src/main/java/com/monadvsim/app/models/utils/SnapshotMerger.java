@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
 import java.nio.file.*;
@@ -43,7 +44,7 @@ public class SnapshotMerger {
 
         File resultsDir = new File(resultsDirPath);
         if (!resultsDir.exists() || !resultsDir.isDirectory()) {
-            System.out.println("Results directory not found: " + resultsDirPath);
+            SimulationLogger.info("Results directory not found: " + resultsDirPath);
             return;
         }
 
@@ -54,12 +55,12 @@ public class SnapshotMerger {
             List<File> snapshotFiles = getSortedSnapshotFiles(resultsDir);
             
             if (snapshotFiles.isEmpty()) {
-                System.out.println("No snapshot files found to merge.");
+                SimulationLogger.info("No snapshot files found to merge.");
                 return;
             }
 
-            System.out.println("Found " + snapshotFiles.size() + " snapshot files to merge.");
-            System.out.println("Total size: " + formatFileSize(getTotalSize(snapshotFiles)));
+            SimulationLogger.info("Found " + snapshotFiles.size() + " snapshot files to merge.");
+            SimulationLogger.info("Total size: " + formatFileSize(getTotalSize(snapshotFiles)));
 
             // Create output file with timestamp
             File mergedFile = new File(resultsDir, outputFileName);
@@ -68,19 +69,19 @@ public class SnapshotMerger {
             long totalRows = mergeFilesStreaming(snapshotFiles, mergedFile);
             
             if (totalRows > 0) {
-                System.out.printf("Successfully merged %d files into %s (total rows: %,d)%n",
+                SimulationLogger.info("Successfully merged %d files into %s (total rows: %,d)%n",
                     snapshotFiles.size(), mergedFile.getPath(), totalRows);
-                System.out.printf("Merge completed in %.2f seconds%n", 
+                SimulationLogger.info("Merge completed in %.2f seconds%n", 
                     (System.currentTimeMillis() - startTime) / 1000.0);
                 
                 // Delete intermediate files only if merge was successful
                 deleteIntermediateFiles(snapshotFiles);
             } else {
-                System.out.println("WARNING: No data rows were merged!");
+                SimulationLogger.info("WARNING: No data rows were merged!");
             }
 
         } catch (Exception e) {
-            System.err.println("Error merging snapshots: " + e.getMessage());
+            SimulationLogger.severe("Error merging snapshots: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -127,7 +128,7 @@ public class SnapshotMerger {
             
             for (int i = 0; i < snapshotFiles.size(); i++) {
                 File file = snapshotFiles.get(i);
-                System.out.printf("Processing: %s (%,d bytes)%n", 
+                SimulationLogger.info("Processing: %s (%,d bytes)%n", 
                     file.getName(), file.length());
                 
                 long fileRows = processSingleFile(file, writer, i, headerWritten);
@@ -137,7 +138,7 @@ public class SnapshotMerger {
                     headerWritten = true; // Header written from first file
                 }
                 
-                System.out.printf("  Processed: %,d rows%n", fileRows);
+                SimulationLogger.info("  Processed: %,d rows%n", fileRows);
             }
         }
         
@@ -291,7 +292,7 @@ public class SnapshotMerger {
      */
     public static void mergeAfterSimulation() {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        System.out.println("Starting merge at: " + timestamp);
+        SimulationLogger.info("Starting merge at: " + timestamp);
         mergeSnapshotsAndCleanup("results", "merged_snapshots_" + timestamp + ".csv");
     }
     
@@ -321,18 +322,18 @@ public class SnapshotMerger {
                 if (file.delete()) {
                     deletedCount++;
                 } else {
-                    System.err.println("Warning: Could not delete " + file.getName());
+                    SimulationLogger.severe("Warning: Could not delete " + file.getName());
                     // Try alternative method
                     Files.deleteIfExists(file.toPath());
                 }
             } catch (SecurityException e) {
-                System.err.println("Security exception when deleting " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("Security exception when deleting " + file.getName() + ": " + e.getMessage());
             } catch (IOException e) {
-                System.err.println("IO exception when deleting " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("IO exception when deleting " + file.getName() + ": " + e.getMessage());
             }
         }
         
-        System.out.printf("Deleted %d intermediate files (%s freed)%n",
+        SimulationLogger.info("Deleted %d intermediate files (%s freed)%n",
             deletedCount, formatFileSize(totalSize));
     }
     
@@ -350,13 +351,13 @@ public class SnapshotMerger {
      * Merge with progress reporting for very large merges
      */
     public static void mergeWithProgress(String resultsDirPath, String outputFileName) {
-        System.out.println("Starting optimized merge with progress reporting...");
+        SimulationLogger.info("Starting optimized merge with progress reporting...");
         long startTime = System.currentTimeMillis();
         
         mergeSnapshotsAndCleanup(resultsDirPath, outputFileName);
         
         long endTime = System.currentTimeMillis();
-        System.out.printf("Merge completed in %.2f seconds%n", (endTime - startTime) / 1000.0);
+        SimulationLogger.info("Merge completed in %.2f seconds%n", (endTime - startTime) / 1000.0);
     }
     
     /**
@@ -369,7 +370,7 @@ public class SnapshotMerger {
         // Sort files by size (process smaller files first for better progress feedback)
         snapshotFiles.sort(Comparator.comparingLong(File::length));
         
-        System.out.println("Starting parallel merge of " + snapshotFiles.size() + " files");
+        SimulationLogger.info("Starting parallel merge of " + snapshotFiles.size() + " files");
         
         // Process first file (with header) sequentially
         File firstFile = snapshotFiles.get(0);
@@ -380,16 +381,16 @@ public class SnapshotMerger {
             try {
                 processFileForParallelMerge(file, mergedFile);
             } catch (IOException e) {
-                System.err.println("Error processing " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing " + file.getName() + ": " + e.getMessage());
             }
         });
         
-        System.out.println("Parallel merge completed");
+        SimulationLogger.info("Parallel merge completed");
     }
     
     private static void processFileForParallelMerge(File file, File mergedFile) throws IOException {
         // This method would need careful synchronization for parallel writing
         // Implementation depends on specific requirements
-        System.out.println("Processing (parallel): " + file.getName());
+        SimulationLogger.info("Processing (parallel): " + file.getName());
     }
 }

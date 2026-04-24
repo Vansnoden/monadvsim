@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.*;
 import org.graalvm.polyglot.Context;
@@ -44,7 +45,7 @@ public class RuleEngine {
     });
 
     public RuleEngine() {
-        System.out.println("✅ RuleEngine initialized with ThreadLocal GraalVM Contexts.");
+        SimulationLogger.info("✅ RuleEngine initialized with ThreadLocal GraalVM Contexts.");
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
@@ -68,7 +69,7 @@ public class RuleEngine {
             return result.isBoolean() && result.asBoolean();
 
         } catch (Exception e) {
-            System.err.println("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
+            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
             return false;
         }
     }
@@ -129,14 +130,14 @@ public class RuleEngine {
             la.setResting(true);
             la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
             la.resetTimeWithoutRest();
-//            System.out.println("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
+//            SimulationLogger.info("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
         }
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(false);
-//            System.out.println("Mosquito " + agent.getId() + " stopped resting");
+//            SimulationLogger.info("Mosquito " + agent.getId() + " stopped resting");
         }
     }
 
@@ -207,7 +208,7 @@ public class RuleEngine {
 //                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
 //                if (popDensity > 1.0) {
 //                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
-//                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+//                    SimulationLogger.info("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
 //                }
 //            }
 //        }
@@ -222,7 +223,7 @@ public class RuleEngine {
                 if (popDensity > 0.01) {
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
                     // Optional debug
-                    // System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+                    // SimulationLogger.info("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             } else {
                 // Fallback: always feed a little
@@ -270,7 +271,7 @@ public class RuleEngine {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
             la.setStage(LifecycleStage.PUPA);
             la.setEnergy(0.6);
-            System.out.println("Larva " + agent.getId() + " pupated");
+            SimulationLogger.info("Larva " + agent.getId() + " pupated");
         }
     }
 
@@ -282,7 +283,7 @@ public class RuleEngine {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
             la.setStage(LifecycleStage.ADULT);
             la.setEnergy(0.9);
-            System.out.println("Pupa " + agent.getId() + " emerged as adult");
+            SimulationLogger.info("Pupa " + agent.getId() + " emerged as adult");
         }
     }
 
@@ -293,7 +294,7 @@ public class RuleEngine {
     private void executeHatch(Agent agent, Project project, AgentLayer layer) {
         // This method is kept only for compatibility; it will not be called if you remove the "hatch" rule.
         // The automatic hatching in AgentLayer should be used instead.
-        System.err.println("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
+        SimulationLogger.severe("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
     }
 
     // ------------------------------------------------------------------------
@@ -316,7 +317,7 @@ public class RuleEngine {
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(0);
-            System.out.printf("Tank %s dried out! Killed %d eggs and %d larvae%n",
+            SimulationLogger.info("Tank %s dried out! Killed %d eggs and %d larvae%n",
                     agent.getId(), eggsKilled, larvaeKilled);
             layer.updateAgentPositionImmediately(agent);
         }
@@ -329,7 +330,7 @@ public class RuleEngine {
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
-            System.out.printf("Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
+            SimulationLogger.info("Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
                     agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
             layer.updateAgentPositionImmediately(agent);
         }
@@ -355,8 +356,10 @@ public class RuleEngine {
         LifecycleModel model = project.getLifecycleModel();
         if (model == null) return;
 
-        double eggsPerTick = model.effectiveFecundity(temperature, livestock);
-        int eggsToLay = (int) Math.round(eggsPerTick);
+//        double eggsPerTick = model.effectiveFecundity(temperature, livestock);    
+//        int eggsToLay = (int) Math.round(eggsPerTick);
+        int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
+        SimulationLogger.info("[DEBUG] eggsToLay = " + eggsToLay);
         if (eggsToLay <= 0) return;
 
         List<Agent> nearby = project.getSpatialRegistry()

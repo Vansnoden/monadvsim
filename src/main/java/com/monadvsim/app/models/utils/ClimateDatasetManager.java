@@ -1,5 +1,5 @@
 package com.monadvsim.app.models.utils;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
@@ -47,11 +47,11 @@ public class ClimateDatasetManager {
      */
     public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
         for (String varName : variableNames) {
-            System.out.println("Loading variable: " + varName);
+            SimulationLogger.info("Loading variable: " + varName);
             InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
             layer.loadFromNetCDF(filePath, varName);
             layers.put(varName, layer);
-            System.out.println("Successfully loaded: " + varName);
+            SimulationLogger.info("Successfully loaded: " + varName);
         }
     }
     
@@ -73,10 +73,10 @@ public class ClimateDatasetManager {
     // smater loader to laod available variables
     public void loadAvailableVariables(String filePath) throws IOException {
         try (ucar.nc2.NetcdfFile ncfile = ucar.nc2.NetcdfFiles.open(filePath)) {
-            System.out.println("Available variables in file:");
+            SimulationLogger.info("Available variables in file:");
             for (ucar.nc2.Variable var : ncfile.getVariables()) {
                 String varName = var.getShortName();
-                System.out.println("  - " + varName);
+                SimulationLogger.info("  - " + varName);
                 
                 // Load common climate variables
                 if (varName.equals("t2m") || varName.equals("tp") || 
@@ -84,7 +84,7 @@ public class ClimateDatasetManager {
                     varName.equals("v10") || varName.equals("r") || 
                     varName.equals("d2m")) {
                     
-                    System.out.println("    Loading " + varName + "...");
+                    SimulationLogger.info("    Loading " + varName + "...");
                     InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
                     layer.loadFromNetCDF(filePath, varName);
                     layers.put(varName, layer);
@@ -165,11 +165,10 @@ public class ClimateDatasetManager {
     }
     
     public void printStatistics() {
-        System.out.println("=== Climate Dataset Statistics ===");
+        SimulationLogger.info("=== Climate Dataset Statistics ===");
         for (Map.Entry<String, InterpolatedRasterLayer> entry : layers.entrySet()) {
-            System.out.println(entry.getKey() + ":");
+            SimulationLogger.info(entry.getKey() + ":");
             entry.getValue().printStatistics();
-            System.out.println();
         }
     }
 }

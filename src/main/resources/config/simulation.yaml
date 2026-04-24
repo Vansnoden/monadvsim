@@ -5,7 +5,7 @@
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 8640        # 3 months (180 days * 96 ticks)
+  totalTicks: 960        # 10 days
   tickMinutes: 15
 
 files:
@@ -82,7 +82,7 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy > 0.2"
         action: "get_gravid"
         priority: 4
-      - condition: "gravid == true && temperature > 285.15 && building_density > 0.1 && population > 0.05"
+      - condition: "gravid == true && temperature > 285.15" # && building_density > 0.1 && population > 0.05
         action: "lay_eggs"
         priority: 6
       - condition: "temperature < 283.15 || temperature > 313.15"
@@ -126,6 +126,6 @@ seeding:
   mosquitoPopulationThreshold: 0 #0.02
 
 project:
-  defaultAgentSearchRadius: 0.002 #~220m #0.0005    # ~55 m
+  defaultAgentSearchRadius: 0.005 #~550m #~220m #0.0005    # ~55 m
   defaultAgentStep: 0.00005           # ~5.5 m per tick
   defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day

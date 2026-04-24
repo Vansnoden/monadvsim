@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.entities.Agent;
@@ -75,7 +76,7 @@ public class SpatialRegistry {
         this.spatialGrid = new ConcurrentHashMap<>(gridWidth * gridHeight);
         initializeGrid();
         
-        System.out.printf("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
+        SimulationLogger.info("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
             gridWidth, gridHeight, cellSize);
     }
     

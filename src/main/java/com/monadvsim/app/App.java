@@ -1,5 +1,5 @@
 package com.monadvsim.app;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.config.SimulationConfig;
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
@@ -44,12 +44,12 @@ public class App {
     private static SimulationConfig config;
 
     public static void main(String[] args) {
-        System.out.println("Starting Multi-Agent Simulation System");
+        SimulationLogger.info("Starting Multi-Agent Simulation System");
 
         try {
             // 1. Load configuration from YAML
             config = ConfigLoader.loadFromYaml("/config/simulation.yaml");
-            System.out.println("Configuration loaded from /config/simulation.yaml");
+            SimulationLogger.info("Configuration loaded from /config/simulation.yaml");
 
             // 2. Create results directory
             File resultsDir = new File("results");
@@ -61,16 +61,16 @@ public class App {
 
             // 4. World bounds from study site file (shapefile)
             worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
-            System.out.println("World bounds from study site: " + worldBounds);
+            SimulationLogger.info("World bounds from study site: " + worldBounds);
 
             // 5. Load study area geometry for seeding constraints
             Geometry studyAreaGeometry = null;
             try {
                 studyAreaGeometry = VectorBoundsLoader.getStudyAreaGeometry(config.files.studySite);
-                System.out.println("Loaded study area polygon for seeding constraints.");
+                SimulationLogger.info("Loaded study area polygon for seeding constraints.");
             } catch (Exception e) {
-                System.err.println("Could not load study area geometry: " + e.getMessage());
-                System.err.println("Seeding will use rectangular bounds only.");
+                SimulationLogger.severe("Could not load study area geometry: " + e.getMessage());
+                SimulationLogger.severe("Seeding will use rectangular bounds only.");
             }
 
             // 6. Spatial registry with grid cell size from config
@@ -85,7 +85,7 @@ public class App {
 
             // 9. Shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\n🛑 Shutdown signal received...");
+                SimulationLogger.info("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
@@ -96,13 +96,13 @@ public class App {
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
             SnapshotMerger.mergeAfterSimulation();
 
-            System.out.println("Simulation completed successfully!");
+            SimulationLogger.info("Simulation completed successfully!");
 
         } catch (InterruptedException e) {
-            System.err.println("Error in simulation: " + e.getMessage());
+            SimulationLogger.severe("Error in simulation: " + e.getMessage());
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
         } catch (Exception e) {
-            System.err.println("Unexpected error: " + e.getMessage());
+            SimulationLogger.severe("Unexpected error: " + e.getMessage());
             e.printStackTrace();
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
         }
@@ -133,8 +133,8 @@ public class App {
                 throw new IOException("Unsupported file type for study site: " + studySitePath);
             }
         } catch (Exception e) {
-            System.err.println("Could not read study site file: " + e.getMessage());
-            System.err.println("Using fallback bounds (Dire Dawa centroid + 5 km buffer).");
+            SimulationLogger.severe("Could not read study site file: " + e.getMessage());
+            SimulationLogger.severe("Using fallback bounds (Dire Dawa centroid + 5 km buffer).");
             // Fallback to centroid + buffer (Dire Dawa approximate coordinates)
             return VectorBoundsLoader.createFallbackBounds(41.8562, 9.6041, 5.0);
         }
@@ -146,7 +146,7 @@ public class App {
                                             Rectangle2D worldBounds,
                                             SimulationConfig config,
                                             Geometry studyAreaGeometry) {  // NEW: added geometry parameter
-        System.out.println("Configuring project from YAML");
+        SimulationLogger.info("Configuring project from YAML");
         try {
             // ---- Project defaults from config ----
             project.setDefaultAgentSearchRadius(config.project.defaultAgentSearchRadius);
@@ -172,9 +172,9 @@ public class App {
                 project.addLayer(elev);
                 project.addLayer(buildings);
                 project.addLayer(population);
-                System.out.println("Static raster layers loaded successfully");
+                SimulationLogger.info("Static raster layers loaded successfully");
             } catch (Exception e) {
-                System.err.println("Failed to load raster layers: " + e.getMessage());
+                SimulationLogger.severe("Failed to load raster layers: " + e.getMessage());
                 createFallbackRasters(elev, buildings, population);
                 project.addLayer(elev);
                 project.addLayer(buildings);
@@ -182,13 +182,13 @@ public class App {
             }
 
             // ---- Climate data ----
-            System.out.println("Loading climate data...");
+            SimulationLogger.info("Loading climate data...");
             try {
                 persistenceService.loadClimateData(project, config.files.climateNetCDF, timeManager);
-                System.out.println("Climate data loaded successfully");
+                SimulationLogger.info("Climate data loaded successfully");
             } catch (Exception e) {
-                System.err.println("Failed to load climate data: " + e.getMessage());
-                System.out.println("Using fallback climate data...");
+                SimulationLogger.severe("Failed to load climate data: " + e.getMessage());
+                SimulationLogger.info("Using fallback climate data...");
                 createFallbackClimateLayers(project, timeManager);
             }
 
@@ -207,7 +207,7 @@ public class App {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }
                 project.addLayer(layer);
-                System.out.printf("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
+                SimulationLogger.info("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
             }
 
             // ---- Tokens for rule engine (loaded from YAML) ----
@@ -219,7 +219,7 @@ public class App {
             }
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
-            System.out.printf("Loaded %d tokens from YAML%n", tokens.size());
+            SimulationLogger.info("Loaded %d tokens from YAML%n", tokens.size());
 
             // ---- Standardise geographic bounds for all raster layers ----
             double minLon = worldBounds.getMinX();
@@ -233,7 +233,7 @@ public class App {
             }
 
             // ---- Seed initial population using config seeding parameters ----
-            System.out.println("Seeding initial agents population...");
+            SimulationLogger.info("Seeding initial agents population...");
             seedInitialPopulation(project, config.seeding, buildings, population, spatialRegistry, worldBounds, studyAreaGeometry);
 
             int totalTanks = project.getAgentLayers().stream()
@@ -242,10 +242,10 @@ public class App {
             int totalMosquitoes = project.getAgentLayers().stream()
                     .filter(l -> l.getName().equals("Mosquitoes"))
                     .findFirst().map(l -> l.getAgents().size()).orElse(0);
-            System.out.printf("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
+            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
 
         } catch (Exception e) {
-            System.err.println("Error: " + e.getMessage());
+            SimulationLogger.severe("Error: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -296,7 +296,7 @@ public class App {
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
         if (habitatLayer == null || mosquitoLayer == null) {
-            System.err.println("ERROR: Cannot find agent layers for seeding");
+            SimulationLogger.severe("ERROR: Cannot find agent layers for seeding");
             return;
         }
 
@@ -305,7 +305,7 @@ public class App {
                 seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
 
         // Seed water tanks
-        System.out.println("\nSeeding water tanks...");
+        SimulationLogger.info("\nSeeding water tanks...");
         int tanksPlaced = 0;
         for (int i = 0; i < seeding.tanksToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -322,14 +322,14 @@ public class App {
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
                 if (tanksPlaced % 100 == 0)
-                    System.out.printf("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n",
                             tanksPlaced, seeding.tanksToSeed, buildingDensity, popDensity);
             }
         }
-        System.out.printf("Seeded %d water tanks%n", tanksPlaced);
+        SimulationLogger.info("Seeded %d water tanks%n", tanksPlaced);
 
         // Seed mosquitoes
-        System.out.println("\nSeeding mosquitoes...");
+        SimulationLogger.info("\nSeeding mosquitoes...");
         int mosquitoesPlaced = 0;
         for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -364,14 +364,14 @@ public class App {
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
                 if (mosquitoesPlaced % 500 == 0)
-                    System.out.printf("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n",
                             mosquitoesPlaced, seeding.mosquitoesToSeed, buildingDensity, popDensity);
             }
         }
-        System.out.printf("Seeded %d mosquitoes%n", mosquitoesPlaced);
-        System.out.println("\n=== Seeding Summary ===");
-        System.out.printf("Water tanks: %d (target: %d)%n", tanksPlaced, seeding.tanksToSeed);
-        System.out.printf("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, seeding.mosquitoesToSeed);
+        SimulationLogger.info("Seeded %d mosquitoes%n", mosquitoesPlaced);
+        SimulationLogger.info("\n=== Seeding Summary ===");
+        SimulationLogger.info("Water tanks: %d (target: %d)%n", tanksPlaced, seeding.tanksToSeed);
+        SimulationLogger.info("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, seeding.mosquitoesToSeed);
     }
 
     // ------------------------------------------------------------------------
@@ -379,14 +379,14 @@ public class App {
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
-        System.out.println("Creating simulation engine...");
+        SimulationLogger.info("Creating simulation engine...");
         simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
         simulationThread = new Thread(() -> {
             try {
                 simulationEngine.run();
-                System.out.println("Simulation thread completed");
+                SimulationLogger.info("Simulation thread completed");
             } catch (Exception e) {
-                System.err.println("Error in simulation thread: " + e.getMessage());
+                SimulationLogger.severe("Error in simulation thread: " + e.getMessage());
                 e.printStackTrace();
             }
         });
@@ -394,7 +394,7 @@ public class App {
         simulationThread.setDaemon(false);
         simulationThread.start();
         startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
-        System.out.println("Simulation started! Press Ctrl+C to stop.");
+        SimulationLogger.info("Simulation started! Press Ctrl+C to stop.");
         monitorSimulation(simulationEngine, project);
     }
 
@@ -440,7 +440,7 @@ public class App {
         }
         project.addLayer(temperatureLayer);
         project.addLayer(precipitationLayer);
-        System.out.println("Created fallback climate layers");
+        SimulationLogger.info("Created fallback climate layers");
     }
 
     private static void monitorSimulation(SimulationEngine engine, Project project) {
@@ -452,39 +452,39 @@ public class App {
                 long tick = (Long) state.get("tick");
 
                 if (!running) {
-                    System.out.println("Simulation has stopped normally");
+                    SimulationLogger.info("Simulation has stopped normally");
                     break;
                 }
                 if (tick >= timeManager.getTotalTicks()) {
-                    System.out.println("Simulation reached total ticks, stopping engine...");
+                    SimulationLogger.info("Simulation reached total ticks, stopping engine...");
                     engine.stop();
                     break;
                 }
 
                 int totalAgents = (Integer) state.getOrDefault("totalAgents", 0);
                 double avgTickTime = (Double) state.getOrDefault("avgTickTime", 0.0);
-                System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
+                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
                         tick, totalAgents, avgTickTime);
 
                 if (tick % 100 == 0) {
-                    System.out.println("--- Detailed Status ---");
+                    SimulationLogger.info("--- Detailed Status ---");
                     for (AgentLayer layer : project.getAgentLayers()) {
                         Map<String, Object> layerStats = layer.getStatistics();
-                        System.out.printf("  %s: %d agents, %d rules evaluated%n",
+                        SimulationLogger.info("  %s: %d agents, %d rules evaluated%n",
                                 layer.getName(), layerStats.get("agentCount"), layerStats.get("rulesEvaluated"));
                     }
-                    System.out.println("----------------------");
+                    SimulationLogger.info("----------------------");
                 }
 
                 if (avgTickTime > 10000) {
-                    System.err.println("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
+                    SimulationLogger.severe("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.out.println("Monitor thread interrupted");
+                SimulationLogger.info("Monitor thread interrupted");
                 break;
             } catch (Exception e) {
-                System.err.println("Error in monitor: " + e.getMessage());
+                SimulationLogger.severe("Error in monitor: " + e.getMessage());
                 try { Thread.sleep(10000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
@@ -517,14 +517,14 @@ public class App {
                             System.err.println("WARNING: Simulation may be stuck at tick " + currentTick +
                                     " (stuck for " + stuckSeconds + " seconds, count: " + stuckCount + ")");
                             if (stuckCount > 3) {
-                                System.err.println("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
+                                SimulationLogger.severe("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
                                 saveFinalStatisticsToFile(project, spatialRegistry, engine);
                                 SnapshotMerger.mergeAfterSimulation();
                                 engine.stop();
                                 simulationThread.interrupt();
                                 Thread.sleep(5000);
                                 if (simulationThread.isAlive()) {
-                                    System.err.println("Simulation thread still alive, forcing termination");
+                                    SimulationLogger.severe("Simulation thread still alive, forcing termination");
                                     System.exit(1);
                                 }
                                 break;
@@ -535,26 +535,26 @@ public class App {
                             lastTickTime = currentTime;
                         }
                     } catch (Exception e) {
-                        System.err.println("Error in watchdog while checking state: " + e.getMessage());
+                        SimulationLogger.severe("Error in watchdog while checking state: " + e.getMessage());
                         if (stuckCount++ > 5) {
-                            System.err.println("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
+                            SimulationLogger.severe("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
                             saveFinalStatisticsToFile(project, spatialRegistry, engine);
                             simulationThread.interrupt();
                             break;
                         }
                     }
                 }
-                System.out.println("Watchdog thread exiting");
+                SimulationLogger.info("Watchdog thread exiting");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.out.println("Watchdog thread interrupted");
+                SimulationLogger.info("Watchdog thread interrupted");
             }
         });
         watchdog.setDaemon(true);
         watchdog.setName("Simulation-Watchdog");
         watchdog.setPriority(Thread.MIN_PRIORITY);
         watchdog.start();
-        System.out.println("Watchdog thread started");
+        SimulationLogger.info("Watchdog thread started");
     }
 
     private static void saveFinalStatisticsToFile(Project project, SpatialRegistry spatialRegistry, SimulationEngine engine) {
@@ -675,10 +675,10 @@ public class App {
                     writer.printf("Effective FPS: %.1f%n", fps);
                 }
                 writer.println("=".repeat(80));
-                System.out.println("Final statistics saved to: " + filename);
+                SimulationLogger.info("Final statistics saved to: " + filename);
             }
         } catch (Exception e) {
-            System.err.println("Error saving final statistics: " + e.getMessage());
+            SimulationLogger.severe("Error saving final statistics: " + e.getMessage());
             e.printStackTrace();
         }
     }

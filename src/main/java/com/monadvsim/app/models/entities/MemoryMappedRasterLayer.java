@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
 import java.nio.MappedByteBuffer;
@@ -79,7 +80,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
             }
             
             memoryMapped = true;
-            System.out.printf("✓ Memory-mapped raster: %s [%d MB]%n", 
+            SimulationLogger.info("✓ Memory-mapped raster: %s [%d MB]%n", 
                 getName(), fileSize / (1024 * 1024));
             
         } catch (IOException e) {
@@ -195,7 +196,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                 try {
                     fileChannel.close();
                 } catch (IOException e) {
-                    System.err.println("Error closing file channel: " + e.getMessage());
+                    SimulationLogger.severe("Error closing file channel: " + e.getMessage());
                 }
             }
             
@@ -204,7 +205,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                 try {
                     Files.deleteIfExists(dataFile.toPath());
                 } catch (IOException e) {
-                    System.err.println("Error deleting temp file: " + e.getMessage());
+                    SimulationLogger.severe("Error deleting temp file: " + e.getMessage());
                 }
             }
             

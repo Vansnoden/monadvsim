@@ -1,6 +1,5 @@
 package com.monadvsim.app.models.engine;
 
-
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
@@ -26,8 +25,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import com.monadvsim.app.models.utils.SimulationLogger;
+import java.util.logging.Logger;
 
 
 /**
@@ -107,7 +107,7 @@ public class SimulationEngine implements Runnable {
     @Override
     public void run() {
         running.set(true); 
-        System.out.println("🚀Simulation Engine with Incremental Updates Started...");
+        SimulationLogger.info("🚀Simulation Engine with Incremental Updates Started...");
 
         try {
             while (running.get()) {
@@ -116,18 +116,10 @@ public class SimulationEngine implements Runnable {
                 // TICK SEQUENCE:
                 // 1. Advance time
                 if (!timeManager.tick()) {
-                    System.out.println("Simulation time limit reached at tick "
+                    SimulationLogger.info("Simulation time limit reached at tick "
                             + timeManager.getTickCount());
                     break;
                 }
-                
-//                if (!areAnyLivingAgentsAlive()) {
-//                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
-//                            + timeManager.getTickCount());
-//                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
-//                    running.set(false);
-//                    break;
-//                }
 
                 // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());
@@ -145,7 +137,7 @@ public class SimulationEngine implements Runnable {
                 adaptiveSleep(System.nanoTime() - tickStart);
             }
         } catch (Exception e) {
-            System.err.println("Error in simulation loop: " + e.getMessage());
+            SimulationLogger.warning("Error in simulation loop: " + e.getMessage());
             e.printStackTrace();
         } finally {
             // Always run cleanup
@@ -210,8 +202,7 @@ public class SimulationEngine implements Runnable {
         
         // Check counts match
         if (layerAgents.size() != registryAgents.size()) {
-            System.err.printf("Spatial inconsistency: layers=%d, registry=%d%n",
-                layerAgents.size(), registryAgents.size());
+            SimulationLogger.warning("Spatial inconsistency: layers=%d, registry=%d%n", layerAgents.size(), registryAgents.size());
             
             // Find missing agents
             Set<String> layerIds = layerAgents.stream()
@@ -228,10 +219,10 @@ public class SimulationEngine implements Runnable {
             extraInRegistry.removeAll(layerIds);
             
             if (!missingInRegistry.isEmpty()) {
-                System.err.println("Agents missing in registry: " + missingInRegistry.size());
+                SimulationLogger.warning("Agents missing in registry: " + missingInRegistry.size());
             }
             if (!extraInRegistry.isEmpty()) {
-                System.err.println("Extra agents in registry: " + extraInRegistry.size());
+                SimulationLogger.warning("Extra agents in registry: " + extraInRegistry.size());
             }
         }
     }
@@ -262,21 +253,21 @@ public class SimulationEngine implements Runnable {
         // Check for stuck exports
         checkAndClearStuckExports();
 
-        System.out.printf("[Export] Scheduling export for tick %d at %s%n", 
+        SimulationLogger.info("[Export] Scheduling export for tick %d at %s%n", 
             currentTick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
         ExportTask task = new ExportTask(project, currentTick);
         exportQueue.offer(task);
 
-        System.out.printf("[Export] Queue size: %d%n", exportQueue.size());
+        SimulationLogger.info("[Export] Queue size: %d%n", exportQueue.size());
 
         if (exportInProgress.compareAndSet(false, true)) {
-            System.out.println("[Export] Starting export processing...");
+            SimulationLogger.info("[Export] Starting export processing...");
             exportExecutor.submit(() -> {
                 try {
                     processExportQueue();
                 } catch (Exception e) {
-                    System.err.println("[Export] Error in export processing: " + e.getMessage());
+                    SimulationLogger.warning("[Export] Error in export processing: " + e.getMessage());
                     e.printStackTrace();
                     exportInProgress.set(false);
                 }
@@ -320,11 +311,11 @@ public class SimulationEngine implements Runnable {
     
     private void processSingleExport(ExportTask task) {
         if (task == null || task.project == null) {
-            System.err.println("[Export] ERROR: Invalid export task");
+            SimulationLogger.warning("[Export] ERROR: Invalid export task");
             return;
         }
 
-        System.out.printf("[Export] START processing tick %d at %s%n", 
+        SimulationLogger.info("[Export] START processing tick %d at %s%n", 
             task.tick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
         String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
@@ -335,9 +326,9 @@ public class SimulationEngine implements Runnable {
         try {
             success = persistenceService.exportToCSV(task.project, filename, task.tick);
             if (success) {
-                System.out.printf("[Export] DONE processing tick %d%n", task.tick);
+                SimulationLogger.info("[Export] DONE processing tick %d%n", task.tick);
             } else {
-                System.err.printf("[Export] FAILED processing tick %d%n", task.tick);
+                SimulationLogger.info("[Export] FAILED processing tick %d%n", task.tick);
             }
         } catch (IOException ex) {
             Logger.getLogger(SimulationEngine.class.getName()).log(Level.SEVERE, null, ex);
@@ -347,7 +338,7 @@ public class SimulationEngine implements Runnable {
     
     private void checkAndClearStuckExports() {
         if (exportQueue.size() > 10) { // Too many queued exports
-            System.err.println("[Export] WARNING: Too many queued exports (" + 
+            SimulationLogger.warning("[Export] WARNING: Too many queued exports (" + 
                               exportQueue.size() + "), clearing queue");
             exportQueue.clear();
             exportInProgress.set(false);
@@ -452,14 +443,14 @@ public class SimulationEngine implements Runnable {
             (SpatialRegistry) project.getSpatialRegistry();
         
         Map<String, Object> stats = registry.getStatistics();
-        System.out.printf("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
+        SimulationLogger.info("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
             stats.get("totalAgents"), stats.get("queryCount"),
             stats.get("cacheSize"), stats.get("gridCells"));
     }
     
     
     private void cleanup() {
-        System.out.println("Cleaning up simulation resources...");
+        SimulationLogger.info("Cleaning up simulation resources...");
 
         // 1. Ensure all pending exports are processed
         exportFinalSnapshotNow();
@@ -470,7 +461,7 @@ public class SimulationEngine implements Runnable {
         // 3. Now merge the snapshots
         mergeSnapshots();
 
-        System.out.println("Cleanup completed successfully");
+        SimulationLogger.info("Cleanup completed successfully");
     }
 
     private void exportFinalSnapshotNow() {
@@ -496,10 +487,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("✅ FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("❌ Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -508,9 +499,9 @@ public class SimulationEngine implements Runnable {
         if (exportExecutor != null) {
             exportExecutor.shutdown();
             try {
-                System.out.println("Waiting for exports to complete...");
+                SimulationLogger.info("Waiting for exports to complete...");
                 if (!exportExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
-                    System.err.println("Export timeout reached, forcing shutdown");
+                    SimulationLogger.warning("Export timeout reached, forcing shutdown");
                     exportExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -523,12 +514,12 @@ public class SimulationEngine implements Runnable {
     
     
     private void mergeSnapshots() {
-        System.out.println("Merging snapshot files...");
+        SimulationLogger.info("Merging snapshot files...");
         try {
             // Use your SnapshotMerger utility
             SnapshotMerger.mergeAfterSimulation();
         } catch (Exception e) {
-            System.err.println("Failed to merge snapshots: " + e.getMessage());
+            SimulationLogger.warning("Failed to merge snapshots: " + e.getMessage());
         }
     }
     
@@ -556,23 +547,23 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("✅ FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("❌ Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
     private void mergeAllSnapshots() {
         try {
-            System.out.println("🔄 Merging all snapshots...");
+            SimulationLogger.info("🔄 Merging all snapshots...");
 
             // Create results directory if it doesn't exist
             File resultsDir = new File("results");
             if (!resultsDir.exists()) {
                 resultsDir.mkdirs();
-                System.out.println("⚠️ No results directory found, nothing to merge");
+                SimulationLogger.info("⚠️ No results directory found, nothing to merge");
                 return;
             }
 
@@ -581,11 +572,11 @@ public class SimulationEngine implements Runnable {
                 name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
 
             if (snapshotFiles == null || snapshotFiles.length == 0) {
-                System.out.println("⚠️ No snapshot files found to merge");
+                SimulationLogger.info("⚠️ No snapshot files found to merge");
                 return;
             }
 
-            System.out.println("Found " + snapshotFiles.length + " snapshot files to merge");
+            SimulationLogger.info("Found " + snapshotFiles.length + " snapshot files to merge");
 
             // Sort files by tick number
             Arrays.sort(snapshotFiles, (f1, f2) -> {
@@ -636,22 +627,22 @@ public class SimulationEngine implements Runnable {
                             lineNumber++;
                         }
 
-                        System.out.printf("Processed: %s (%d rows)%n", file.getName(), lineNumber);
+                        SimulationLogger.info("Processed: %s (%d rows)%n", file.getName(), lineNumber);
 
                     } catch (IOException e) {
-                        System.err.println("Error reading file: " + file.getName() + " - " + e.getMessage());
+                        SimulationLogger.warning("Error reading file: " + file.getName() + " - " + e.getMessage());
                     }
                 }
 
-                System.out.printf("Successfully merged %d files into %s (total rows: %d)%n",
+                SimulationLogger.info("Successfully merged %d files into %s (total rows: %d)%n",
                     snapshotFiles.length, mergedFilename, totalRows);
 
             } catch (IOException e) {
-                System.err.println("Error writing merged file: " + e.getMessage());
+                SimulationLogger.warning("Error writing merged file: " + e.getMessage());
             }
 
         } catch (Exception e) {
-            System.err.println("Error merging snapshots: " + e.getMessage());
+            SimulationLogger.warning("Error merging snapshots: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -689,10 +680,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -717,14 +708,14 @@ public class SimulationEngine implements Runnable {
                     // Wait with timeout, but allow more time for large layers
                     layerFuture.get(adaptiveTimeout, TimeUnit.MILLISECONDS);
                 } catch (TimeoutException e) {
-                    System.err.println("WARNING: Layer " + layer.getName() + 
+                    SimulationLogger.warning("WARNING: Layer " + layer.getName() + 
                                      " processing timed out after " + adaptiveTimeout + "ms");
                     layerFuture.cancel(true);
                     // Continue with next layer instead of breaking
                 }
 
             } catch (Exception e) {
-                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+                SimulationLogger.warning("Error in layer " + layer.getName() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -788,16 +779,16 @@ public class SimulationEngine implements Runnable {
                 dualWriter.printf("Average tick time: %.2f ms%n", averageTickTime);
                 dualWriter.printf("Total ticks: %d%n", timeManager.getTickCount());
 
-                System.out.println("✅ Statistics saved to: " + filename);
+                SimulationLogger.info("✅ Statistics saved to: " + filename);
 
             } catch (IOException e) {
-                System.err.println("Error writing statistics file: " + e.getMessage());
+                SimulationLogger.warning("Error writing statistics file: " + e.getMessage());
                 // Fallback to console only
                 printToConsoleOnly();
             }
 
         } catch (Exception e) {
-            System.err.println("Error in statistics generation: " + e.getMessage());
+            SimulationLogger.warning("Error in statistics generation: " + e.getMessage());
             printToConsoleOnly();
         }
         
@@ -805,25 +796,25 @@ public class SimulationEngine implements Runnable {
     
     
     private void printToConsoleOnly() {
-        System.out.println("\n=== Final Simulation Statistics ===");
+        SimulationLogger.info("\n=== Final Simulation Statistics ===");
         
         // Agent statistics
         int totalAgents = project.getAgentLayers().stream()
             .mapToInt(l -> l.getAgents().size())
             .sum();
-        System.out.printf("Total agents: %,d%n", totalAgents);
+        SimulationLogger.info("Total agents: %,d%n", totalAgents);
         
         // Spatial registry statistics
         SpatialRegistry registry = project.getSpatialRegistry();
         Map<String, Object> stats = registry.getStatistics();
 
-        System.out.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+        SimulationLogger.info("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
             stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
         
         // Layer statistics
         for (AgentLayer layer : project.getAgentLayers()) {
             Map<String, Object> layerStats = layer.getStatistics();
-            System.out.printf("%s: %,d agents%n", 
+            SimulationLogger.info("%s: %,d agents%n", 
                 layer.getName(), layerStats.get("agentCount"));
         }
     }
@@ -838,7 +829,7 @@ public class SimulationEngine implements Runnable {
         }
 
         void println(String text) {
-            System.out.println(text);
+            SimulationLogger.info(text);
             fileWriter.println(text);
         }
 
@@ -854,20 +845,20 @@ public class SimulationEngine implements Runnable {
     // Clean up all resources
     private void cleanupResources() {
         if (resourcesCleaned.compareAndSet(false, true)) {
-            System.out.println("\n=== Cleaning up simulation resources ===");
+            SimulationLogger.info("\n=== Cleaning up simulation resources ===");
             
             // Shutdown executor service
             if (simulationExecutor != null && !simulationExecutor.isTerminated()) {
                 try {
-                    System.out.println("Shutting down executor service...");
+                    SimulationLogger.info("Shutting down executor service...");
                     boolean terminated = simulationExecutor.gracefulShutdown(30, TimeUnit.SECONDS);
-                    System.out.println("Executor shutdown: " + (terminated ? "successful" : "timed out"));
+                    SimulationLogger.info("Executor shutdown: " + (terminated ? "successful" : "timed out"));
                     
                     // Print executor statistics
-                    System.out.println("Executor statistics: " + simulationExecutor.getStatistics());
+                    SimulationLogger.info("Executor statistics: " + simulationExecutor.getStatistics());
                     
                 } catch (InterruptedException e) {
-                    System.err.println("Interrupted during executor shutdown");
+                    SimulationLogger.warning("Interrupted during executor shutdown");
                     Thread.currentThread().interrupt();
                     simulationExecutor.shutdownNow();
                 }
@@ -875,7 +866,7 @@ public class SimulationEngine implements Runnable {
             
             // Clean up agent layers
             if (project != null) {
-                System.out.println("Cleaning up agent layers...");
+                SimulationLogger.info("Cleaning up agent layers...");
                 project.getAgentLayers().forEach(layer -> {
                     AgentLayer al = (AgentLayer) layer; 
                     al.shutdown();
@@ -884,13 +875,13 @@ public class SimulationEngine implements Runnable {
             
             // Clean up spatial registry
             if (spatialRegistry != null) {
-                System.out.println("Cleaning up spatial registry...");
+                SimulationLogger.info("Cleaning up spatial registry...");
                 // Add any spatial registry cleanup if needed
             }
             
             // 4. Clean up raster layers
             if (project != null) {
-                System.out.println("Cleaning up raster layers...");
+                SimulationLogger.info("Cleaning up raster layers...");
                 project.getLayers().forEach(layer -> {
                     if (layer instanceof MemoryMappedRasterLayer mmrl) {
                         mmrl.dispose();
@@ -899,16 +890,16 @@ public class SimulationEngine implements Runnable {
             }
             
             // 5. Force garbage collection
-            System.out.println("Requesting garbage collection...");
+            SimulationLogger.info("Requesting garbage collection...");
             System.gc();
             System.runFinalization();
             
             // 6. Print final resource statistics
-            System.out.println("\n=== Final Resource Statistics ===");
+            SimulationLogger.info("\n=== Final Resource Statistics ===");
             Map<String, Object> stats = resourceManager.getStatistics();
-            stats.forEach((key, value) -> System.out.printf("%s: %s%n", key, value));
+            stats.forEach((key, value) -> SimulationLogger.info("%s: %s%n", key, value));
             
-            System.out.println("=== Resource cleanup complete ===");
+            SimulationLogger.info("=== Resource cleanup complete ===");
         }
     }
     
@@ -947,7 +938,7 @@ public class SimulationEngine implements Runnable {
     
     public void stop() {
         running.set(false);
-        System.out.println("Stopping simulation with resource cleanup...");
+        SimulationLogger.info("Stopping simulation with resource cleanup...");
         cleanupResources();
     }
     
@@ -991,7 +982,7 @@ public class SimulationEngine implements Runnable {
 //            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
 //            .sum();
 //
-//        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
+//        SimulationLogger.info(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
 //            timeManager.getTickCount(), adults, totalLarvae,
 //            Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
 //    }
@@ -1029,7 +1020,7 @@ public class SimulationEngine implements Runnable {
             }
         }
 
-        System.out.println(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
+        SimulationLogger.info(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
             timeManager.getTickCount(), adults, pupae, totalLarvae, totalEggs,
             Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
     }
@@ -1052,12 +1043,12 @@ public class SimulationEngine implements Runnable {
     private void logPerformance() {
         double fps = 1000.0 / averageTickTime;
         
-        System.out.printf("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
+        SimulationLogger.info("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
             timeManager.getTickCount(), averageTickTime, fps, getTotalAgentCount());
         
         // Log layer statistics
         layerStats.forEach((name, count) -> {
-            System.out.printf("  %s: %,d agents%n", name, count.get());
+            SimulationLogger.info("  %s: %,d agents%n", name, count.get());
         });
     }
     
@@ -1077,20 +1068,20 @@ public class SimulationEngine implements Runnable {
     
     
     private void printExportStatus() {
-        System.out.printf("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
+        SimulationLogger.info("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
             exportQueue.size(), exportInProgress.get(), 
             exportExecutor != null && !exportExecutor.isShutdown(),
             exportExecutor != null && exportExecutor.isShutdown());
 
         // Check if results directory exists and is writable
         File resultsDir = new File("results");
-        System.out.printf("[Export Status] Results dir exists: %b, writable: %b%n",
+        SimulationLogger.info("[Export Status] Results dir exists: %b, writable: %b%n",
             resultsDir.exists(), resultsDir.canWrite());
 
         if (resultsDir.exists()) {
             File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
                 name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
-            System.out.printf("[Export Status] Existing snapshots: %d%n", 
+            SimulationLogger.info("[Export Status] Existing snapshots: %d%n", 
                 snapshotFiles != null ? snapshotFiles.length : 0);
         }
     }

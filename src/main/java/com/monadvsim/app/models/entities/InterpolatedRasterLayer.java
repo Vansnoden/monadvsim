@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import ucar.ma2.Array;
@@ -425,19 +426,19 @@ public class InterpolatedRasterLayer extends Layer {
     }
     
     private void printFileStructure(NetcdfFile ncfile) {
-        System.out.println("\n=== NetCDF File Structure ===");
-        System.out.println("Dimensions:");
+        SimulationLogger.info("\n=== NetCDF File Structure ===");
+        SimulationLogger.info("Dimensions:");
         for (Dimension dim : ncfile.getDimensions())
-            System.out.printf("  %s: %d%n", dim.getShortName(), dim.getLength());
-        System.out.println("\nVariables:");
+            SimulationLogger.info("  %s: %d%n", dim.getShortName(), dim.getLength());
+        SimulationLogger.info("\nVariables:");
         for (Variable var : ncfile.getVariables()) {
-            System.out.printf("  %s: ", var.getShortName());
+            SimulationLogger.info("  %s: ", var.getShortName());
             System.out.print("Dimensions [");
             for (Dimension dim : var.getDimensions())
                 System.out.print(dim.getShortName() + " ");
-            System.out.println("]");
+            SimulationLogger.info("]");
             Attribute units = var.findAttribute("units");
-            if (units != null) System.out.printf("    units: %s%n", units.getStringValue());
+            if (units != null) SimulationLogger.info("    units: %s%n", units.getStringValue());
         }
     }
     
@@ -490,7 +491,7 @@ public class InterpolatedRasterLayer extends Layer {
     }
     
     public void printStatistics() {
-        System.out.println(getStatistics().toString());
+        SimulationLogger.info(getStatistics().toString());
     }
     
     private double getCacheHitRatio() {

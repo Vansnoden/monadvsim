@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.io.Closeable;
@@ -53,7 +54,7 @@ public final class ResourceManager implements Closeable {
         
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("ResourceManager shutdown initiated...");
+            SimulationLogger.info("ResourceManager shutdown initiated...");
             close();
         }));
     }
@@ -79,7 +80,7 @@ public final class ResourceManager implements Closeable {
         PhantomReference<T> phantomRef = new PhantomReference<>(resource, referenceQueue);
         phantomReferences.put(phantomRef, new CleanupAction(id, resource));
         
-        System.out.printf("[Resource] Tracked: %s - %s (%s)%n", 
+        SimulationLogger.info("[Resource] Tracked: %s - %s (%s)%n", 
             resourceType, description, id.substring(0, 8));
         
         return resource;
@@ -93,7 +94,7 @@ public final class ResourceManager implements Closeable {
             resource.close();
             disposedResources.incrementAndGet();
         } catch (Exception e) {
-            System.err.println("Error releasing resource: " + e.getMessage());
+            SimulationLogger.severe("Error releasing resource: " + e.getMessage());
         }
     }
     
@@ -142,7 +143,7 @@ public final class ResourceManager implements Closeable {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                System.err.println("Error in cleanup loop: " + e.getMessage());
+                SimulationLogger.severe("Error in cleanup loop: " + e.getMessage());
             }
         }
     }
@@ -165,15 +166,15 @@ public final class ResourceManager implements Closeable {
         cleanupThread.interrupt();
         
         // Force cleanup of all tracked resources
-        System.out.println("\n=== Resource Manager Final Cleanup ===");
-        System.out.printf("Total resources tracked: %,d%n", totalResources.get());
-        System.out.printf("Disposed resources: %,d%n", disposedResources.get());
-        System.out.printf("Leaked resources: %,d%n", leakedResources.get());
+        SimulationLogger.info("\n=== Resource Manager Final Cleanup ===");
+        SimulationLogger.info("Total resources tracked: %,d%n", totalResources.get());
+        SimulationLogger.info("Disposed resources: %,d%n", disposedResources.get());
+        SimulationLogger.info("Leaked resources: %,d%n", leakedResources.get());
         
         // Attempt to close any remaining resources
         int remaining = trackedResources.size();
         if (remaining > 0) {
-            System.out.printf("Warning: %,d resources still tracked%n", remaining);
+            SimulationLogger.info("Warning: %,d resources still tracked%n", remaining);
             
             for (ResourceTracker tracker : trackedResources.values()) {
                 System.err.printf("Leaked: %s - %s (created %d ms ago)%n",
@@ -273,7 +274,7 @@ public final class ResourceManager implements Closeable {
                 disposed = true;
                 try {
                     coverage.dispose(true);
-                    System.out.printf("[Resource] Disposed GridCoverage2D: %s%n", source);
+                    SimulationLogger.info("[Resource] Disposed GridCoverage2D: %s%n", source);
                 } catch (Exception e) {
                     System.err.printf("Error disposing GridCoverage2D (%s): %s%n", 
                         source, e.getMessage());
@@ -284,7 +285,7 @@ public final class ResourceManager implements Closeable {
         @Override
         protected void finalize() throws Throwable {
             if (!disposed) {
-                System.err.printf("[Finalizer] GridCoverage2D not properly disposed: %s%n", source);
+                SimulationLogger.warning("[Finalizer] GridCoverage2D not properly disposed: %s%n", source);
                 close();
             }
             super.finalize();

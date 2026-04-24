@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.AgentLifeCycleManager;
 import com.monadvsim.app.models.engine.LifecycleModel;
@@ -142,7 +143,7 @@ public class AgentLayer extends Layer {
             }
 
         } catch (Exception e) {
-            System.err.println("Critical error in AgentLayer.update() for layer " + getName() + ": " + e.getMessage());
+            SimulationLogger.severe("Critical error in AgentLayer.update() for layer " + getName() + ": " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Failed to update layer " + getName(), e);
         }
@@ -163,7 +164,7 @@ public class AgentLayer extends Layer {
     }
 
     private void processAgentRules(Agent agent, Project project) {
-//        System.out.println("Processing agent " + agent.getId() + " with " + rules.size() + " rules");
+//        SimulationLogger.info("Processing agent " + agent.getId() + " with " + rules.size() + " rules");
         if (agent == null) return;
 
         if (agent instanceof LivingAgent la && !la.isAlive()) {
@@ -171,7 +172,7 @@ public class AgentLayer extends Layer {
         }
 
         if (rulesEvaluated.get() > 1_000_000_000L) {
-            System.err.println("WARNING: Rule evaluation limit reached, skipping further evaluations");
+            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
             return;
         }
 
@@ -217,6 +218,7 @@ public class AgentLayer extends Layer {
                         int hatched = ia.hatchEggs(temperature, lifecycleModel);
                         if (hatched > 0) {
                             // Create larvae for each hatched egg
+                            // SimulationLogger.info("[HATCH] Tank %s hatched %d larvae%n", ia.getId(), hatched);
                             AgentLayer mosquitoLayer = findMosquitoLayer(project);
                             if (mosquitoLayer != null) {
                                 for (int i = 0; i < hatched; i++) {
@@ -248,7 +250,7 @@ public class AgentLayer extends Layer {
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -364,7 +366,7 @@ public class AgentLayer extends Layer {
     private void logUpdatePerformance(long startTime) {
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
-        System.out.printf("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
+        SimulationLogger.info("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
             getName(), durationMs, agentContainer.size(),
             birthsThisTick.get(), deathsThisTick.get(), rulesEvaluated.get());
     }

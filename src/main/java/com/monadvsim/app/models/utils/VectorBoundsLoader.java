@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import org.geotools.api.data.FileDataStore;
 import org.geotools.api.data.FileDataStoreFinder;
@@ -52,15 +53,15 @@ public class VectorBoundsLoader {
             CoordinateReferenceSystem sourceCRS = envelope.getCoordinateReferenceSystem();
             CoordinateReferenceSystem targetCRS = CRS.decode(TARGET_CRS, true);
 
-            System.out.println("Source CRS: " + sourceCRS.getName());
-            System.out.println("Target CRS: " + targetCRS.getName());
+            SimulationLogger.info("Source CRS: " + sourceCRS.getName());
+            SimulationLogger.info("Target CRS: " + targetCRS.getName());
 
             // Transform envelope to WGS84 if needed
             if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
                 envelope = envelope.transform(targetCRS, true);
-                System.out.println("Transformed envelope: " + envelope);
+                SimulationLogger.info("Transformed envelope: " + envelope);
             } else {
-                System.out.println("No transformation needed (already WGS84).");
+                SimulationLogger.info("No transformation needed (already WGS84).");
             }
 
             // Optional: add a small buffer (approx 100 m)
@@ -110,7 +111,7 @@ public class VectorBoundsLoader {
             MathTransform transform = null;
             if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
                 transform = CRS.findMathTransform(sourceCRS, targetCRS, true);
-                System.out.println("Geometry will be transformed from " + sourceCRS.getName() + " to " + targetCRS.getName());
+                SimulationLogger.info("Geometry will be transformed from " + sourceCRS.getName() + " to " + targetCRS.getName());
             }
 
             List<Geometry> geoms = new ArrayList<>();

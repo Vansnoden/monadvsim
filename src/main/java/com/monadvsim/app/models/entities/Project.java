@@ -1,4 +1,5 @@
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.SpatialRegistry;
