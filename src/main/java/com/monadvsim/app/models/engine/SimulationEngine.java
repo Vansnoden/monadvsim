@@ -338,7 +338,7 @@ public class SimulationEngine implements Runnable {
     
     private void checkAndClearStuckExports() {
         if (exportQueue.size() > 10) { // Too many queued exports
-            SimulationLogger.warning("[Export] WARNING: Too many queued exports (" + 
+            SimulationLogger.warning("[Export] Too many queued exports (" + 
                               exportQueue.size() + "), clearing queue");
             exportQueue.clear();
             exportInProgress.set(false);
@@ -487,10 +487,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            SimulationLogger.info("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("[EXPORT] FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            SimulationLogger.warning("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("[EXPORT] Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -547,10 +547,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            SimulationLogger.info("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            SimulationLogger.warning("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -563,7 +563,7 @@ public class SimulationEngine implements Runnable {
             File resultsDir = new File("results");
             if (!resultsDir.exists()) {
                 resultsDir.mkdirs();
-                SimulationLogger.info("⚠️ No results directory found, nothing to merge");
+                SimulationLogger.info("No results directory found, nothing to merge");
                 return;
             }
 
@@ -572,7 +572,7 @@ public class SimulationEngine implements Runnable {
                 name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
 
             if (snapshotFiles == null || snapshotFiles.length == 0) {
-                SimulationLogger.info("⚠️ No snapshot files found to merge");
+                SimulationLogger.info("No snapshot files found to merge");
                 return;
             }
 

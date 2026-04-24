@@ -1,7 +1,9 @@
 package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.LifecycleStage;
 import com.monadvsim.app.models.entities.LivingAgent;
+import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
@@ -129,6 +131,24 @@ public class LifecycleModel {
             }
         }
     }
+    
+    
+    public int eggsToLay(double tempKelvin, double hostDensity, ThreadLocalRandom rng) {
+        double t = tempKelvin - 273.15;
+        double dailyFecundity = fecundityRate(tempKelvin);
+        double K = hostCarryingCapacity(hostDensity);
+        double expectedEggsPerTick = dailyFecundity * K * dtDays;
+
+        // Stochastic: eggs laid = floor(expected) with probability fractional part
+        int eggs = (int) expectedEggsPerTick;
+        double remainder = expectedEggsPerTick - eggs;
+        if (rng.nextDouble() < remainder) eggs++;
+
+        // SimulationLogger.info("[MODEL] t=%.2f°C, dailyFec=%.2f, K=%.2f → expected=%.3f, laid=%d",
+        //    t, dailyFecundity, K, expectedEggsPerTick, eggs);
+        return eggs;
+    }
+    
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double dP = pupaDevelopmentRate(tempKelvin);
@@ -151,6 +171,7 @@ public class LifecycleModel {
         }
     }
 }package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.entities.Agent;
@@ -227,7 +248,7 @@ public class SpatialRegistry {
         this.spatialGrid = new ConcurrentHashMap<>(gridWidth * gridHeight);
         initializeGrid();
         
-        System.out.printf("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
+        SimulationLogger.info("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
             gridWidth, gridHeight, cellSize);
     }
     
@@ -776,7 +797,6 @@ public class SpatialRegistry {
     
 }package com.monadvsim.app.models.engine;
 
-
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
@@ -802,8 +822,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
-import java.util.logging.Logger;
 import java.util.stream.Collectors;
+import com.monadvsim.app.models.utils.SimulationLogger;
+import java.util.logging.Logger;
 
 
 /**
@@ -883,7 +904,7 @@ public class SimulationEngine implements Runnable {
     @Override
     public void run() {
         running.set(true); 
-        System.out.println("🚀Simulation Engine with Incremental Updates Started...");
+        SimulationLogger.info("🚀Simulation Engine with Incremental Updates Started...");
 
         try {
             while (running.get()) {
@@ -892,18 +913,10 @@ public class SimulationEngine implements Runnable {
                 // TICK SEQUENCE:
                 // 1. Advance time
                 if (!timeManager.tick()) {
-                    System.out.println("Simulation time limit reached at tick "
+                    SimulationLogger.info("Simulation time limit reached at tick "
                             + timeManager.getTickCount());
                     break;
                 }
-                
-//                if (!areAnyLivingAgentsAlive()) {
-//                    System.out.println("🛑 All living agents have died! Stopping simulation at tick " 
-//                            + timeManager.getTickCount());
-//                    System.out.println("Total ticks completed: " + timeManager.getTickCount());
-//                    running.set(false);
-//                    break;
-//                }
 
                 // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());
@@ -921,7 +934,7 @@ public class SimulationEngine implements Runnable {
                 adaptiveSleep(System.nanoTime() - tickStart);
             }
         } catch (Exception e) {
-            System.err.println("Error in simulation loop: " + e.getMessage());
+            SimulationLogger.warning("Error in simulation loop: " + e.getMessage());
             e.printStackTrace();
         } finally {
             // Always run cleanup
@@ -986,8 +999,7 @@ public class SimulationEngine implements Runnable {
         
         // Check counts match
         if (layerAgents.size() != registryAgents.size()) {
-            System.err.printf("Spatial inconsistency: layers=%d, registry=%d%n",
-                layerAgents.size(), registryAgents.size());
+            SimulationLogger.warning("Spatial inconsistency: layers=%d, registry=%d%n", layerAgents.size(), registryAgents.size());
             
             // Find missing agents
             Set<String> layerIds = layerAgents.stream()
@@ -1004,10 +1016,10 @@ public class SimulationEngine implements Runnable {
             extraInRegistry.removeAll(layerIds);
             
             if (!missingInRegistry.isEmpty()) {
-                System.err.println("Agents missing in registry: " + missingInRegistry.size());
+                SimulationLogger.warning("Agents missing in registry: " + missingInRegistry.size());
             }
             if (!extraInRegistry.isEmpty()) {
-                System.err.println("Extra agents in registry: " + extraInRegistry.size());
+                SimulationLogger.warning("Extra agents in registry: " + extraInRegistry.size());
             }
         }
     }
@@ -1038,21 +1050,21 @@ public class SimulationEngine implements Runnable {
         // Check for stuck exports
         checkAndClearStuckExports();
 
-        System.out.printf("[Export] Scheduling export for tick %d at %s%n", 
+        SimulationLogger.info("[Export] Scheduling export for tick %d at %s%n", 
             currentTick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
         ExportTask task = new ExportTask(project, currentTick);
         exportQueue.offer(task);
 
-        System.out.printf("[Export] Queue size: %d%n", exportQueue.size());
+        SimulationLogger.info("[Export] Queue size: %d%n", exportQueue.size());
 
         if (exportInProgress.compareAndSet(false, true)) {
-            System.out.println("[Export] Starting export processing...");
+            SimulationLogger.info("[Export] Starting export processing...");
             exportExecutor.submit(() -> {
                 try {
                     processExportQueue();
                 } catch (Exception e) {
-                    System.err.println("[Export] Error in export processing: " + e.getMessage());
+                    SimulationLogger.warning("[Export] Error in export processing: " + e.getMessage());
                     e.printStackTrace();
                     exportInProgress.set(false);
                 }
@@ -1096,11 +1108,11 @@ public class SimulationEngine implements Runnable {
     
     private void processSingleExport(ExportTask task) {
         if (task == null || task.project == null) {
-            System.err.println("[Export] ERROR: Invalid export task");
+            SimulationLogger.warning("[Export] ERROR: Invalid export task");
             return;
         }
 
-        System.out.printf("[Export] START processing tick %d at %s%n", 
+        SimulationLogger.info("[Export] START processing tick %d at %s%n", 
             task.tick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
         String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
@@ -1111,9 +1123,9 @@ public class SimulationEngine implements Runnable {
         try {
             success = persistenceService.exportToCSV(task.project, filename, task.tick);
             if (success) {
-                System.out.printf("[Export] DONE processing tick %d%n", task.tick);
+                SimulationLogger.info("[Export] DONE processing tick %d%n", task.tick);
             } else {
-                System.err.printf("[Export] FAILED processing tick %d%n", task.tick);
+                SimulationLogger.info("[Export] FAILED processing tick %d%n", task.tick);
             }
         } catch (IOException ex) {
             Logger.getLogger(SimulationEngine.class.getName()).log(Level.SEVERE, null, ex);
@@ -1123,7 +1135,7 @@ public class SimulationEngine implements Runnable {
     
     private void checkAndClearStuckExports() {
         if (exportQueue.size() > 10) { // Too many queued exports
-            System.err.println("[Export] WARNING: Too many queued exports (" + 
+            SimulationLogger.warning("[Export] Too many queued exports (" + 
                               exportQueue.size() + "), clearing queue");
             exportQueue.clear();
             exportInProgress.set(false);
@@ -1228,14 +1240,14 @@ public class SimulationEngine implements Runnable {
             (SpatialRegistry) project.getSpatialRegistry();
         
         Map<String, Object> stats = registry.getStatistics();
-        System.out.printf("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
+        SimulationLogger.info("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
             stats.get("totalAgents"), stats.get("queryCount"),
             stats.get("cacheSize"), stats.get("gridCells"));
     }
     
     
     private void cleanup() {
-        System.out.println("Cleaning up simulation resources...");
+        SimulationLogger.info("Cleaning up simulation resources...");
 
         // 1. Ensure all pending exports are processed
         exportFinalSnapshotNow();
@@ -1246,7 +1258,7 @@ public class SimulationEngine implements Runnable {
         // 3. Now merge the snapshots
         mergeSnapshots();
 
-        System.out.println("Cleanup completed successfully");
+        SimulationLogger.info("Cleanup completed successfully");
     }
 
     private void exportFinalSnapshotNow() {
@@ -1272,10 +1284,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("[EXPORT] FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("[EXPORT] Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -1284,9 +1296,9 @@ public class SimulationEngine implements Runnable {
         if (exportExecutor != null) {
             exportExecutor.shutdown();
             try {
-                System.out.println("Waiting for exports to complete...");
+                SimulationLogger.info("Waiting for exports to complete...");
                 if (!exportExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
-                    System.err.println("Export timeout reached, forcing shutdown");
+                    SimulationLogger.warning("Export timeout reached, forcing shutdown");
                     exportExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -1299,12 +1311,12 @@ public class SimulationEngine implements Runnable {
     
     
     private void mergeSnapshots() {
-        System.out.println("Merging snapshot files...");
+        SimulationLogger.info("Merging snapshot files...");
         try {
             // Use your SnapshotMerger utility
             SnapshotMerger.mergeAfterSimulation();
         } catch (Exception e) {
-            System.err.println("Failed to merge snapshots: " + e.getMessage());
+            SimulationLogger.warning("Failed to merge snapshots: " + e.getMessage());
         }
     }
     
@@ -1332,23 +1344,23 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("✅ FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("❌ Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
     private void mergeAllSnapshots() {
         try {
-            System.out.println("🔄 Merging all snapshots...");
+            SimulationLogger.info("🔄 Merging all snapshots...");
 
             // Create results directory if it doesn't exist
             File resultsDir = new File("results");
             if (!resultsDir.exists()) {
                 resultsDir.mkdirs();
-                System.out.println("⚠️ No results directory found, nothing to merge");
+                SimulationLogger.info("No results directory found, nothing to merge");
                 return;
             }
 
@@ -1357,11 +1369,11 @@ public class SimulationEngine implements Runnable {
                 name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
 
             if (snapshotFiles == null || snapshotFiles.length == 0) {
-                System.out.println("⚠️ No snapshot files found to merge");
+                SimulationLogger.info("No snapshot files found to merge");
                 return;
             }
 
-            System.out.println("Found " + snapshotFiles.length + " snapshot files to merge");
+            SimulationLogger.info("Found " + snapshotFiles.length + " snapshot files to merge");
 
             // Sort files by tick number
             Arrays.sort(snapshotFiles, (f1, f2) -> {
@@ -1412,22 +1424,22 @@ public class SimulationEngine implements Runnable {
                             lineNumber++;
                         }
 
-                        System.out.printf("Processed: %s (%d rows)%n", file.getName(), lineNumber);
+                        SimulationLogger.info("Processed: %s (%d rows)%n", file.getName(), lineNumber);
 
                     } catch (IOException e) {
-                        System.err.println("Error reading file: " + file.getName() + " - " + e.getMessage());
+                        SimulationLogger.warning("Error reading file: " + file.getName() + " - " + e.getMessage());
                     }
                 }
 
-                System.out.printf("Successfully merged %d files into %s (total rows: %d)%n",
+                SimulationLogger.info("Successfully merged %d files into %s (total rows: %d)%n",
                     snapshotFiles.length, mergedFilename, totalRows);
 
             } catch (IOException e) {
-                System.err.println("Error writing merged file: " + e.getMessage());
+                SimulationLogger.warning("Error writing merged file: " + e.getMessage());
             }
 
         } catch (Exception e) {
-            System.err.println("Error merging snapshots: " + e.getMessage());
+            SimulationLogger.warning("Error merging snapshots: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -1465,10 +1477,10 @@ public class SimulationEngine implements Runnable {
             // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
-            System.out.println("FINAL Snapshot exported to: " + filename);
+            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
 
         } catch (Exception e) {
-            System.err.println("Error exporting final snapshot: " + e.getMessage());
+            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -1493,14 +1505,14 @@ public class SimulationEngine implements Runnable {
                     // Wait with timeout, but allow more time for large layers
                     layerFuture.get(adaptiveTimeout, TimeUnit.MILLISECONDS);
                 } catch (TimeoutException e) {
-                    System.err.println("WARNING: Layer " + layer.getName() + 
+                    SimulationLogger.warning("WARNING: Layer " + layer.getName() + 
                                      " processing timed out after " + adaptiveTimeout + "ms");
                     layerFuture.cancel(true);
                     // Continue with next layer instead of breaking
                 }
 
             } catch (Exception e) {
-                System.err.println("Error in layer " + layer.getName() + ": " + e.getMessage());
+                SimulationLogger.warning("Error in layer " + layer.getName() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -1564,16 +1576,16 @@ public class SimulationEngine implements Runnable {
                 dualWriter.printf("Average tick time: %.2f ms%n", averageTickTime);
                 dualWriter.printf("Total ticks: %d%n", timeManager.getTickCount());
 
-                System.out.println("✅ Statistics saved to: " + filename);
+                SimulationLogger.info("✅ Statistics saved to: " + filename);
 
             } catch (IOException e) {
-                System.err.println("Error writing statistics file: " + e.getMessage());
+                SimulationLogger.warning("Error writing statistics file: " + e.getMessage());
                 // Fallback to console only
                 printToConsoleOnly();
             }
 
         } catch (Exception e) {
-            System.err.println("Error in statistics generation: " + e.getMessage());
+            SimulationLogger.warning("Error in statistics generation: " + e.getMessage());
             printToConsoleOnly();
         }
         
@@ -1581,25 +1593,25 @@ public class SimulationEngine implements Runnable {
     
     
     private void printToConsoleOnly() {
-        System.out.println("\n=== Final Simulation Statistics ===");
+        SimulationLogger.info("\n=== Final Simulation Statistics ===");
         
         // Agent statistics
         int totalAgents = project.getAgentLayers().stream()
             .mapToInt(l -> l.getAgents().size())
             .sum();
-        System.out.printf("Total agents: %,d%n", totalAgents);
+        SimulationLogger.info("Total agents: %,d%n", totalAgents);
         
         // Spatial registry statistics
         SpatialRegistry registry = project.getSpatialRegistry();
         Map<String, Object> stats = registry.getStatistics();
 
-        System.out.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
+        SimulationLogger.info("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
             stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
         
         // Layer statistics
         for (AgentLayer layer : project.getAgentLayers()) {
             Map<String, Object> layerStats = layer.getStatistics();
-            System.out.printf("%s: %,d agents%n", 
+            SimulationLogger.info("%s: %,d agents%n", 
                 layer.getName(), layerStats.get("agentCount"));
         }
     }
@@ -1614,7 +1626,7 @@ public class SimulationEngine implements Runnable {
         }
 
         void println(String text) {
-            System.out.println(text);
+            SimulationLogger.info(text);
             fileWriter.println(text);
         }
 
@@ -1630,20 +1642,20 @@ public class SimulationEngine implements Runnable {
     // Clean up all resources
     private void cleanupResources() {
         if (resourcesCleaned.compareAndSet(false, true)) {
-            System.out.println("\n=== Cleaning up simulation resources ===");
+            SimulationLogger.info("\n=== Cleaning up simulation resources ===");
             
             // Shutdown executor service
             if (simulationExecutor != null && !simulationExecutor.isTerminated()) {
                 try {
-                    System.out.println("Shutting down executor service...");
+                    SimulationLogger.info("Shutting down executor service...");
                     boolean terminated = simulationExecutor.gracefulShutdown(30, TimeUnit.SECONDS);
-                    System.out.println("Executor shutdown: " + (terminated ? "successful" : "timed out"));
+                    SimulationLogger.info("Executor shutdown: " + (terminated ? "successful" : "timed out"));
                     
                     // Print executor statistics
-                    System.out.println("Executor statistics: " + simulationExecutor.getStatistics());
+                    SimulationLogger.info("Executor statistics: " + simulationExecutor.getStatistics());
                     
                 } catch (InterruptedException e) {
-                    System.err.println("Interrupted during executor shutdown");
+                    SimulationLogger.warning("Interrupted during executor shutdown");
                     Thread.currentThread().interrupt();
                     simulationExecutor.shutdownNow();
                 }
@@ -1651,7 +1663,7 @@ public class SimulationEngine implements Runnable {
             
             // Clean up agent layers
             if (project != null) {
-                System.out.println("Cleaning up agent layers...");
+                SimulationLogger.info("Cleaning up agent layers...");
                 project.getAgentLayers().forEach(layer -> {
                     AgentLayer al = (AgentLayer) layer; 
                     al.shutdown();
@@ -1660,13 +1672,13 @@ public class SimulationEngine implements Runnable {
             
             // Clean up spatial registry
             if (spatialRegistry != null) {
-                System.out.println("Cleaning up spatial registry...");
+                SimulationLogger.info("Cleaning up spatial registry...");
                 // Add any spatial registry cleanup if needed
             }
             
             // 4. Clean up raster layers
             if (project != null) {
-                System.out.println("Cleaning up raster layers...");
+                SimulationLogger.info("Cleaning up raster layers...");
                 project.getLayers().forEach(layer -> {
                     if (layer instanceof MemoryMappedRasterLayer mmrl) {
                         mmrl.dispose();
@@ -1675,16 +1687,16 @@ public class SimulationEngine implements Runnable {
             }
             
             // 5. Force garbage collection
-            System.out.println("Requesting garbage collection...");
+            SimulationLogger.info("Requesting garbage collection...");
             System.gc();
             System.runFinalization();
             
             // 6. Print final resource statistics
-            System.out.println("\n=== Final Resource Statistics ===");
+            SimulationLogger.info("\n=== Final Resource Statistics ===");
             Map<String, Object> stats = resourceManager.getStatistics();
-            stats.forEach((key, value) -> System.out.printf("%s: %s%n", key, value));
+            stats.forEach((key, value) -> SimulationLogger.info("%s: %s%n", key, value));
             
-            System.out.println("=== Resource cleanup complete ===");
+            SimulationLogger.info("=== Resource cleanup complete ===");
         }
     }
     
@@ -1723,7 +1735,7 @@ public class SimulationEngine implements Runnable {
     
     public void stop() {
         running.set(false);
-        System.out.println("Stopping simulation with resource cleanup...");
+        SimulationLogger.info("Stopping simulation with resource cleanup...");
         cleanupResources();
     }
     
@@ -1767,7 +1779,7 @@ public class SimulationEngine implements Runnable {
 //            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
 //            .sum();
 //
-//        System.out.println(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
+//        SimulationLogger.info(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
 //            timeManager.getTickCount(), adults, totalLarvae,
 //            Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
 //    }
@@ -1805,7 +1817,7 @@ public class SimulationEngine implements Runnable {
             }
         }
 
-        System.out.println(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
+        SimulationLogger.info(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
             timeManager.getTickCount(), adults, pupae, totalLarvae, totalEggs,
             Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
     }
@@ -1828,12 +1840,12 @@ public class SimulationEngine implements Runnable {
     private void logPerformance() {
         double fps = 1000.0 / averageTickTime;
         
-        System.out.printf("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
+        SimulationLogger.info("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
             timeManager.getTickCount(), averageTickTime, fps, getTotalAgentCount());
         
         // Log layer statistics
         layerStats.forEach((name, count) -> {
-            System.out.printf("  %s: %,d agents%n", name, count.get());
+            SimulationLogger.info("  %s: %,d agents%n", name, count.get());
         });
     }
     
@@ -1853,25 +1865,26 @@ public class SimulationEngine implements Runnable {
     
     
     private void printExportStatus() {
-        System.out.printf("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
+        SimulationLogger.info("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
             exportQueue.size(), exportInProgress.get(), 
             exportExecutor != null && !exportExecutor.isShutdown(),
             exportExecutor != null && exportExecutor.isShutdown());
 
         // Check if results directory exists and is writable
         File resultsDir = new File("results");
-        System.out.printf("[Export Status] Results dir exists: %b, writable: %b%n",
+        SimulationLogger.info("[Export Status] Results dir exists: %b, writable: %b%n",
             resultsDir.exists(), resultsDir.canWrite());
 
         if (resultsDir.exists()) {
             File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
                 name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
-            System.out.printf("[Export Status] Existing snapshots: %d%n", 
+            SimulationLogger.info("[Export Status] Existing snapshots: %d%n", 
                 snapshotFiles != null ? snapshotFiles.length : 0);
         }
     }
     
 }package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.time.LocalDateTime;
 import java.time.Duration;
@@ -1945,6 +1958,7 @@ public class TimeManager {
     }
     
 }package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.*;
 import org.graalvm.polyglot.Context;
@@ -1990,7 +2004,7 @@ public class RuleEngine {
     });
 
     public RuleEngine() {
-        System.out.println("✅ RuleEngine initialized with ThreadLocal GraalVM Contexts.");
+        SimulationLogger.info("✅ RuleEngine initialized with ThreadLocal GraalVM Contexts.");
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
@@ -2014,7 +2028,7 @@ public class RuleEngine {
             return result.isBoolean() && result.asBoolean();
 
         } catch (Exception e) {
-            System.err.println("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
+            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
             return false;
         }
     }
@@ -2030,6 +2044,9 @@ public class RuleEngine {
             bindings.putMember("energy", la.getEnergy());
             bindings.putMember("gravid", la.isGravid());
             bindings.putMember("alive", la.isAlive());
+            bindings.putMember("resting", la.isResting());
+            bindings.putMember("x", la.getX());
+            bindings.putMember("y", la.getY());
         } else if (agent instanceof InertAgent ia) {
             bindings.putMember("waterVolume", ia.getWaterVolume());
             bindings.putMember("eggCount", ia.getEggCount());
@@ -2050,11 +2067,11 @@ public class RuleEngine {
             case "die" -> executeDie(agent, layer);
             case "get_gravid" -> executeGetGravid(agent);
             case "lay_eggs" -> executeLayEggs(agent, project, layer);
-            case "hatch" -> executeHatch(agent, project, layer);          // Deprecated – automatic in AgentLayer
+            //case "hatch" -> executeHatch(agent, project, layer);          // Deprecated – automatic in AgentLayer
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
-            case "pupate" -> executePupate(agent, layer);                // Deprecated – automatic in AgentLayer
-            case "emerge" -> executeEmerge(agent, layer);                // Deprecated – automatic in AgentLayer
+            //case "pupate" -> executePupate(agent, layer);                // Deprecated – automatic in AgentLayer
+            //case "emerge" -> executeEmerge(agent, layer);                // Deprecated – automatic in AgentLayer
             case "feed" -> executeFeed(agent, project, layer);
             case "dry_out" -> executeDryOut(agent, layer);
             case "freeze" -> executeFreeze(agent, layer);
@@ -2075,20 +2092,20 @@ public class RuleEngine {
             la.setResting(true);
             la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
             la.resetTimeWithoutRest();
-//            System.out.println("Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
+//            SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
         }
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(false);
-//            System.out.println("Mosquito " + agent.getId() + " stopped resting");
+//            SimulationLogger.info("[STOP RESTING] Mosquito " + agent.getId() + " stopped resting");
         }
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
-//            System.out.println("Mosquito " + agent.getId() + " died from exhaustion after " +
+//            SimulationLogger.info("[DIE] Mosquito " + agent.getId() + " died from exhaustion after " +
 //                    la.getTimeWithoutRest() + " ticks without rest");
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
@@ -2104,8 +2121,8 @@ public class RuleEngine {
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.02));
                     la.resetTimeWithoutRest();
-                    System.out.println("Mosquito " + agent.getId() + " resting in building. " +
-                            "Building density: " + buildingDensity + ", Energy: " + la.getEnergy());
+//                     SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " resting in building. " +
+//                            "Building density: " + buildingDensity + ", Energy: " + la.getEnergy());
                 } else {
                     executeFindBuildingToRest(agent, project, layer);
                 }
@@ -2138,28 +2155,17 @@ public class RuleEngine {
                     la.setY(bestY);
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.015));
-                    System.out.println("Mosquito " + agent.getId() + " moved to better resting spot. " +
-                            "Building density: " + bestDensity);
+//                     SimulationLogger.info("[FIND BUILDING] Mosquito " + agent.getId() + " moved to better resting spot. " +
+//                            "Building density: " + bestDensity);
                     layer.updateAgentPositionImmediately(la);
                 }
             }
         }
     }
 
-//    private void executeFeed(Agent agent, Project project, AgentLayer layer) {
-//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
-//            Layer populationLayer = project.getLayerByName("Population");
-//            if (populationLayer != null) {
-//                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-//                if (popDensity > 1.0) {
-//                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.3));
-//                    System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
-//                }
-//            }
-//        }
-//    }
     
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
+        // SimulationLogger.info("[FEEDING] Evaluating");
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
             if (populationLayer != null) {
@@ -2168,7 +2174,7 @@ public class RuleEngine {
                 if (popDensity > 0.01) {
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
                     // Optional debug
-                    // System.out.println("Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+                     SimulationLogger.info("[FEEDING] Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             } else {
                 // Fallback: always feed a little
@@ -2178,15 +2184,18 @@ public class RuleEngine {
     }
 
     private void executeMoveRandom(Agent agent, Project project, AgentLayer layer) {
+        //SimulationLogger.info("[EVALUATING] Evaluating");
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
             la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
                     (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
+            SimulationLogger.info("[MOVING] Adult " + agent.getId() + " moving, energy: " + la.getEnergy());
         }
     }
 
     private void executeReproduce(Agent agent, Project project, AgentLayer layer) {
+        //SimulationLogger.info("[REPRODUCING] Evaluating");
         if (agent instanceof LivingAgent la && la.isGravid()) {
             List<Agent> nearby = project.getSpatialRegistry()
                     .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
@@ -2201,6 +2210,7 @@ public class RuleEngine {
                     break;
                 }
             }
+//            SimulationLogger.info("[REPRODUCING] Adult " + agent.getId() + " reproducing, energy: " + la.getEnergy());
         }
     }
 
@@ -2208,45 +2218,47 @@ public class RuleEngine {
     // Lifecycle actions – DEPRECATED (now handled automatically by AgentLayer)
     // ------------------------------------------------------------------------
 
-    /**
-     * @deprecated Pupation is now automatically driven by the LifecycleModel.
-     */
-    @Deprecated
-    private void executePupate(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
-            la.setStage(LifecycleStage.PUPA);
-            la.setEnergy(0.6);
-            System.out.println("Larva " + agent.getId() + " pupated");
-        }
-    }
+//    /**
+//     * @deprecated Pupation is now automatically driven by the LifecycleModel.
+//     */
+//    @Deprecated
+//    private void executePupate(Agent agent, AgentLayer layer) {
+//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
+//            la.setStage(LifecycleStage.PUPA);
+//            la.setEnergy(0.6);
+//            SimulationLogger.info("Larva " + agent.getId() + " pupated");
+//        }
+//    }
 
-    /**
-     * @deprecated Emergence is now automatically driven by the LifecycleModel.
-     */
-    @Deprecated
-    private void executeEmerge(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
-            la.setStage(LifecycleStage.ADULT);
-            la.setEnergy(0.9);
-            System.out.println("Pupa " + agent.getId() + " emerged as adult");
-        }
-    }
+//    /**
+//     * @deprecated Emergence is now automatically driven by the LifecycleModel.
+//     */
+//    @Deprecated
+//    private void executeEmerge(Agent agent, AgentLayer layer) {
+//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+//            la.setStage(LifecycleStage.ADULT);
+//            la.setEnergy(0.9);
+//            SimulationLogger.info("Pupa " + agent.getId() + " emerged as adult");
+//        }
+//    }
 
-    /**
-     * @deprecated Hatching is now automatically handled in AgentLayer for InertAgent.
-     */
-    @Deprecated
-    private void executeHatch(Agent agent, Project project, AgentLayer layer) {
-        // This method is kept only for compatibility; it will not be called if you remove the "hatch" rule.
-        // The automatic hatching in AgentLayer should be used instead.
-        System.err.println("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
-    }
+//    /**
+//     * @deprecated Hatching is now automatically handled in AgentLayer for InertAgent.
+//     */
+//    @Deprecated
+//    private void executeHatch(Agent agent, Project project, AgentLayer layer) {
+//        // This method is kept only for compatibility; it will not be called if you remove the "hatch" rule.
+//        // The automatic hatching in AgentLayer should be used instead.
+//        SimulationLogger.severe("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
+//    }
 
     // ------------------------------------------------------------------------
     // Other lifecycle / environmental actions
     // ------------------------------------------------------------------------
 
+    
     private void executeDie(Agent agent, AgentLayer layer) {
+//        SimulationLogger.info("[DIE] Evaluating");
         if (agent instanceof LivingAgent la) {
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
@@ -2262,8 +2274,8 @@ public class RuleEngine {
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(0);
-            System.out.printf("Tank %s dried out! Killed %d eggs and %d larvae%n",
-                    agent.getId(), eggsKilled, larvaeKilled);
+//            SimulationLogger.info("[DRY-OUT] Tank %s dried out! Killed %d eggs and %d larvae%n",
+//                    agent.getId(), eggsKilled, larvaeKilled);
             layer.updateAgentPositionImmediately(agent);
         }
     }
@@ -2275,22 +2287,38 @@ public class RuleEngine {
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
-            System.out.printf("Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
-                    agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
+//            SimulationLogger.info("[FROZEN] Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
+//                    agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
             layer.updateAgentPositionImmediately(agent);
         }
     }
 
     private void executeGetGravid(Agent agent) {
-        if (agent instanceof LivingAgent la) la.setGravid(true);
+        //SimulationLogger.info("[GRAVID] Evaluating");
+        if (agent instanceof LivingAgent la) {
+            la.setGravid(true);
+//            SimulationLogger.info("[GRAVID] Adult %s became gravid", la.getId());
+        }
     }
 
     /**
      * Temperature‑ and host‑dependent egg laying using the LifecycleModel.
      */
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
-        if (!(agent instanceof LivingAgent la)) return;
-        if (la.getStage() != LifecycleStage.ADULT) return;
+        //SimulationLogger.info("[LAY_EGGS] Evaluating");
+
+        if (!(agent instanceof LivingAgent la)) {
+            //SimulationLogger.info("[LAY_EGGS] Not a LivingAgent");
+            return;
+        }
+
+        // Log the actual stage
+        // SimulationLogger.info("[LAY_EGGS] Agent stage = " + la.getStage());
+
+        if (la.getStage() != LifecycleStage.ADULT) {
+            // SimulationLogger.info("[LAY_EGGS] Not adult, returning");
+            return;
+        }
 
         double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
         double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
@@ -2298,26 +2326,52 @@ public class RuleEngine {
             livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
         }
 
-        LifecycleModel model = project.getLifecycleModel();
-        if (model == null) return;
+        //SimulationLogger.info("[LAY_EGGS] Temperature = %.2f K, livestock = %.4f", temperature, livestock);
 
-        double eggsPerTick = model.effectiveFecundity(temperature, livestock);
-        int eggsToLay = (int) Math.round(eggsPerTick);
-        if (eggsToLay <= 0) return;
+        LifecycleModel model = project.getLifecycleModel();
+        if (model == null) {
+            //SimulationLogger.info("[LAY_EGGS] LifecycleModel is NULL");
+            return;
+        }
+
+        int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
+        //SimulationLogger.info("[DEBUG] eggsToLay = " + eggsToLay);
+
+        if (eggsToLay <= 0) {
+            //SimulationLogger.info("[LAY_EGGS] eggsToLay <= 0, returning");
+            return;
+        }
 
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+
+        int tankCount = 0;
+        for (Agent n : nearby) {
+            if (n instanceof InertAgent) tankCount++;
+        }
+//        SimulationLogger.info("[LAY_EGGS] Adult %s at (%.4f,%.4f) – eggsToLay=%d, nearby tanks=%d",
+//                la.getId(), la.getX(), la.getY(), eggsToLay, tankCount);
+
+        boolean laid = false;
         for (Agent n : nearby) {
             if (n instanceof InertAgent tank) {
                 tank.addEggs(eggsToLay);
                 la.setGravid(false);
                 la.setEnergy(la.getEnergy() - 0.2);
+                //SimulationLogger.info("[LAY_EGGS] SUCCESS: Adult %s laid %d eggs into tank %s",
+                //        la.getId(), eggsToLay, tank.getId());
+                laid = true;
                 break;
             }
         }
+//        if (!laid) {
+//            SimulationLogger.info("[LAY_EGGS] FAILED: No suitable water tank found near adult %s", la.getId());
+//        }
     }
 
+    
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
+        //SimulationLogger.info("[EVAPORATE] Evaluating");
         if (agent instanceof InertAgent ia) {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
@@ -2347,6 +2401,7 @@ public class RuleEngine {
         evaluationCache.clear();
     }
 }package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.util.concurrent.atomic.AtomicLong;
@@ -2402,15 +2457,15 @@ public class SimulationMetrics {
         long currentTime = System.currentTimeMillis();
         double elapsedSeconds = (currentTime - startTime) / 1000.0;
         
-        System.out.println("\n=== SIMULATION METRICS ===");
-        System.out.printf("Elapsed Time: %.2f seconds%n", elapsedSeconds);
-        System.out.printf("Agents Processed: %,d (%.0f/sec)%n", 
+        SimulationLogger.info("\n=== SIMULATION METRICS ===");
+        SimulationLogger.info("Elapsed Time: %.2f seconds%n", elapsedSeconds);
+        SimulationLogger.info("Agents Processed: %,d (%.0f/sec)%n", 
             agentsProcessed.get(), agentsProcessed.get() / elapsedSeconds);
-        System.out.printf("Rules Evaluated: %,d (%.0f/sec)%n", 
+        SimulationLogger.info("Rules Evaluated: %,d (%.0f/sec)%n", 
             rulesEvaluated.get(), rulesEvaluated.get() / elapsedSeconds);
-        System.out.printf("Spatial Queries: %,d%n", spatialQueries.get());
-        System.out.printf("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
-        System.out.println("=========================\n");
+        SimulationLogger.info("Spatial Queries: %,d%n", spatialQueries.get());
+        SimulationLogger.info("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
+        SimulationLogger.info("=========================\n");
     }
     
     public void reset() {
@@ -2422,7 +2477,7 @@ public class SimulationMetrics {
     }
 }
 package com.monadvsim.app.models.engine;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.LivingAgent;
@@ -2568,9 +2623,9 @@ public class AgentLifeCycleManager {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("Lifecycle processing interrupted");
+            SimulationLogger.severe("Lifecycle processing interrupted");
         } catch (ExecutionException e) {
-            System.err.println("Error in lifecycle processing: " + e.getCause().getMessage());
+            SimulationLogger.severe("Error in lifecycle processing: " + e.getCause().getMessage());
         }
         
         // Apply pending changes to spatial registry
@@ -2772,6 +2827,7 @@ public class AgentLifeCycleManager {
         }
     }
 }package com.monadvsim.app.models.engine;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 
@@ -2858,6 +2914,7 @@ public class SpeciesParameters {
         // defaults are already set via field initialisers
     }
 }package com.monadvsim.app.models.services;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.SpatialRegistry;
 import com.monadvsim.app.models.engine.TimeManager;
@@ -2900,7 +2957,7 @@ public class ProjectPersistenceService {
 
     // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
-        System.out.println("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
+        SimulationLogger.info("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
         
         File file = new File(filePath);
         if (!file.exists()) {
@@ -2930,7 +2987,7 @@ public class ProjectPersistenceService {
             int width = image.getWidth();
             int height = image.getHeight();
             
-            System.out.printf("  Raster dimensions: %d x %d%n", width, height);
+            SimulationLogger.info("  Raster dimensions: %d x %d%n", width, height);
             
             // Get the geographic bounds
             ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
@@ -2939,7 +2996,7 @@ public class ProjectPersistenceService {
             double minY = envelope.getMinY();
             double maxY = envelope.getMaxY();
             
-            System.out.printf("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
+            SimulationLogger.info("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
                 minX, minY, maxX, maxY);
             
             // Initialize the layer with correct dimensions
@@ -2953,14 +3010,14 @@ public class ProjectPersistenceService {
             // Track resource for cleanup
             resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
             
-            System.out.println("✅ Successfully loaded raster: " + layer.getName());
+            SimulationLogger.info("✅ Successfully loaded raster: " + layer.getName());
             
         } catch (Exception e) {
-            System.err.println("❌ Error loading raster: " + filePath + " - " + e.getMessage());
+            SimulationLogger.severe("❌ Error loading raster: " + filePath + " - " + e.getMessage());
             e.printStackTrace();
             
             // Fallback: create a 100x100 grid with default values
-            System.out.println("⚠️ Using fallback 100x100 grid for: " + layer.getName());
+            SimulationLogger.info("⚠️ Using fallback 100x100 grid for: " + layer.getName());
             fallbackRaster(layer);
         }
     }
@@ -3000,7 +3057,7 @@ public class ProjectPersistenceService {
         }
         
         // Print sample values for verification
-        System.out.printf("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
+        SimulationLogger.info("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
             layer.getDataGrid()[0][0][0],
             layer.getDataGrid()[0][width-1][0],
             layer.getDataGrid()[0][0][height-1],
@@ -3013,7 +3070,7 @@ public class ProjectPersistenceService {
     public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
         // This method should map '2m_temperature' -> tempLayer
         // and 'total_precipitation' -> rainLayer
-        System.out.println("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
+        SimulationLogger.info("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
         
         // Fallback to 22C and 0.0mm rain if file read fails
         for (int f = 0; f < 3000; f++) {
@@ -3031,14 +3088,14 @@ public class ProjectPersistenceService {
             File dir = new File("results");
             if (!dir.exists()) {
                 if (!dir.mkdirs()) {
-                    System.err.println("[Export] ERROR: Could not create results directory");
+                    SimulationLogger.severe("[Export] ERROR: Could not create results directory");
                     return false;
                 }
             }
 
             File file = new File(outputPath);
             if (file.exists()) {
-                System.out.println("[Export] WARNING: File already exists, overwriting: " + outputPath);
+                SimulationLogger.info("[Export] WARNING: File already exists, overwriting: " + outputPath);
             }
 
             try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
@@ -3089,12 +3146,12 @@ public class ProjectPersistenceService {
                 return true;
 
             } catch (IOException e) {
-                System.err.println("[Export] ERROR writing CSV: " + e.getMessage());
+                SimulationLogger.severe("[Export] ERROR writing CSV: " + e.getMessage());
                 return false;
             }
 
         } catch (Exception e) {
-            System.err.println("[Export] CRITICAL ERROR: " + e.getMessage());
+            SimulationLogger.severe("[Export] CRITICAL ERROR: " + e.getMessage());
             e.printStackTrace();
             return false;
         }
@@ -3102,13 +3159,13 @@ public class ProjectPersistenceService {
     
     
     public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
-        System.out.printf("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
-        System.out.printf("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
+        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
+        SimulationLogger.info("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
     
         long startTime = System.currentTimeMillis();
     
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-            System.out.println("[Export-CSV] File writer created successfully");
+            SimulationLogger.info("[Export-CSV] File writer created successfully");
         
             // Collect all layers
             List<Layer> allLayers = project.getLayers();
@@ -3239,19 +3296,19 @@ public class ProjectPersistenceService {
                 }
             }
 
-            System.out.println("Results exported with Environmental Context to: " + outputPath);
+            SimulationLogger.info("Results exported with Environmental Context to: " + outputPath);
             System.out.println("Included " + allLayers.size() + " layers and " + 
                                   agentLayers.size() + " agent layers");
             return true;
         } catch (IOException e) {
-            System.err.println("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
             return false;
         } catch (Exception e) {
-            System.err.println("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
             return false;
         } finally {
             long endTime = System.currentTimeMillis();
-            System.out.printf("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
+            SimulationLogger.info("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
         }
     }
     
@@ -3261,7 +3318,7 @@ public class ProjectPersistenceService {
      */
     public ClimateDatasetManager loadClimateData(Project project, String netcdfFilePath, 
                                                 TimeManager timeManager) throws Exception {
-        System.out.println("Loading climate data from: " + netcdfFilePath);
+        SimulationLogger.info("Loading climate data from: " + netcdfFilePath);
         
         ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
         
@@ -3298,22 +3355,22 @@ public class ProjectPersistenceService {
                 double sampleTemp = t2mLayer.getValueAt(testLon, testLat);
                 if (!Double.isNaN(sampleTemp)) {
                     if (sampleTemp < 250 || sampleTemp > 330) {
-                        System.err.printf("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
+                        SimulationLogger.warning("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
                     } else {
-                        System.out.printf("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
+                        SimulationLogger.info("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
                     }
                 } else {
-                    System.err.println("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
+                    SimulationLogger.severe("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
                 }
             } else {
-                System.err.println("WARNING: No 't2m' layer found in climate data.");
+                SimulationLogger.severe("WARNING: No 't2m' layer found in climate data.");
             }
             
-            System.out.println("Climate data loaded successfully");
+            SimulationLogger.info("Climate data loaded successfully");
             return climateManager;
             
         } catch (IOException e) {
-            System.err.println("Error loading NetCDF file: " + e.getMessage());
+            SimulationLogger.severe("Error loading NetCDF file: " + e.getMessage());
             throw new Exception("Failed to load climate data", e);
         }
     }
@@ -3350,7 +3407,7 @@ public class ProjectPersistenceService {
         List<ClimateDatasetManager> managers = new ArrayList<>();
         
         for (String filePath : netcdfFiles) {
-            System.out.println("Loading: " + filePath);
+            SimulationLogger.info("Loading: " + filePath);
             ClimateDatasetManager manager = loadClimateData(project, filePath, timeManager);
             managers.add(manager);
         }
@@ -3358,6 +3415,94 @@ public class ProjectPersistenceService {
         return managers;
     }
 }package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
+
+import java.io.IOException;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.logging.*;
+
+
+public class SimulationLogger {
+    private static final Logger LOGGER = Logger.getLogger("Simulation");
+    private static FileHandler fileHandler;
+    private static ConsoleHandler consoleHandler;
+    private static String currentLogFile;
+
+    static {
+        try {
+            String logDir = "logs";
+            new java.io.File(logDir).mkdirs();
+
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            currentLogFile = logDir + "/simulation_" + timestamp + ".log";
+
+            fileHandler = new FileHandler(currentLogFile, true);
+            fileHandler.setFormatter(new SimpleFormatter() {
+                @Override
+                public String format(LogRecord record) {
+                    return String.format("[%1$tY-%1$tm-%1$td %1$tH:%1$tM:%1$tS] [%2$s] %3$s %4$s%n",
+                        record.getMillis(),
+                        record.getLevel(),
+                        record.getSourceClassName() != null ? record.getSourceClassName() : "",
+                        record.getMessage());
+                }
+            });
+            fileHandler.setLevel(Level.ALL);
+
+            consoleHandler = new ConsoleHandler();
+            consoleHandler.setFormatter(new SimpleFormatter());
+            consoleHandler.setLevel(Level.INFO);
+
+            LOGGER.addHandler(fileHandler);
+            LOGGER.addHandler(consoleHandler);
+            LOGGER.setLevel(Level.ALL);
+            LOGGER.setUseParentHandlers(false);
+
+            LOGGER.info("=== Simulation Log Started ===");
+            LOGGER.info("Log file: " + currentLogFile);
+
+        } catch (IOException e) {
+            SimulationLogger.severe("Failed to initialize file logger: " + e.getMessage());
+        }
+    }
+
+    // ------------------------------------------------------------------------
+    // printf‑style convenience methods
+    // ------------------------------------------------------------------------
+    public static void info(String format, Object... args) {
+        LOGGER.info(String.format(format, args));
+    }
+
+    public static void warning(String format, Object... args) {
+        LOGGER.warning(String.format(format, args));
+    }
+
+    public static void fine(String format, Object... args) {
+        LOGGER.fine(String.format(format, args));
+    }
+
+    public static void severe(String format, Object... args) {
+        LOGGER.severe(String.format(format, args));
+    }
+
+    // For when you already have a formatted string
+    public static void info(String msg) { LOGGER.info(msg); }
+    public static void warning(String msg) { LOGGER.warning(msg); }
+    public static void fine(String msg) { LOGGER.fine(msg); }
+    public static void severe(String msg) { LOGGER.severe(msg); }
+
+    public static Logger getLogger() { return LOGGER; }
+    public static String getCurrentLogFile() { return currentLogFile; }
+
+    public static void close() {
+        if (fileHandler != null) {
+            fileHandler.flush();
+            fileHandler.close();
+        }
+    }
+}package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.util.*;
@@ -3442,7 +3587,7 @@ public class ManagedExecutorService implements ExecutorService {
             }
         };
         
-        System.out.printf("Created ManagedExecutorService: %s [core=%d, max=%d, queue=%d]%n",
+        SimulationLogger.info("Created ManagedExecutorService: %s [core=%d, max=%d, queue=%d]%n",
             name, corePoolSize, maxPoolSize, queueCapacity);
     }
     
@@ -3502,14 +3647,14 @@ public class ManagedExecutorService implements ExecutorService {
             }
             shuttingDown = true;
             
-            System.out.printf("Shutting down executor: %s%n", name);
+            SimulationLogger.info("Shutting down executor: %s%n", name);
             
             // Run shutdown hooks
             for (Runnable hook : shutdownHooks) {
                 try {
                     hook.run();
                 } catch (Exception e) {
-                    System.err.printf("Error in shutdown hook for %s: %s%n", name, e.getMessage());
+                    SimulationLogger.warning("Error in shutdown hook for %s: %s%n", name, e.getMessage());
                 }
             }
             
@@ -3525,7 +3670,7 @@ public class ManagedExecutorService implements ExecutorService {
         shutdownLock.lock();
         try {
             shuttingDown = true;
-            System.out.printf("Forcing shutdown of executor: %s%n", name);
+            SimulationLogger.info("Forcing shutdown of executor: %s%n", name);
             return delegate.shutdownNow();
         } finally {
             shutdownLock.unlock();
@@ -3562,7 +3707,7 @@ public class ManagedExecutorService implements ExecutorService {
             }
             
             // Report progress
-            System.out.printf("[%s] Waiting for termination: %d active, %d queue%n",
+            SimulationLogger.info("[%s] Waiting for termination: %d active, %d queue%n",
                 name, activeTasks.get(), getQueueSize());
             
             Thread.sleep(Math.min(checkInterval, deadline - System.currentTimeMillis()));
@@ -3570,7 +3715,7 @@ public class ManagedExecutorService implements ExecutorService {
         
         // Force shutdown if timeout reached
         if (!isTerminated()) {
-            System.out.printf("[%s] Timeout reached, forcing shutdown%n", name);
+            SimulationLogger.info("[%s] Timeout reached, forcing shutdown%n", name);
             shutdownNow();
         }
         
@@ -3758,13 +3903,14 @@ public class ManagedExecutorService implements ExecutorService {
             
             // Try to add to stats
             Map<String, Object> stats = getStatistics();
-            System.err.println("Executor state: " + stats);
+            SimulationLogger.severe("Executor state: " + stats);
             
             throw new RejectedExecutionException("Task rejected from " + name);
         }
     }
 }
 package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.io.Closeable;
@@ -3819,7 +3965,7 @@ public final class ResourceManager implements Closeable {
         
         // Register shutdown hook
         Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-            System.out.println("ResourceManager shutdown initiated...");
+            SimulationLogger.info("ResourceManager shutdown initiated...");
             close();
         }));
     }
@@ -3845,7 +3991,7 @@ public final class ResourceManager implements Closeable {
         PhantomReference<T> phantomRef = new PhantomReference<>(resource, referenceQueue);
         phantomReferences.put(phantomRef, new CleanupAction(id, resource));
         
-        System.out.printf("[Resource] Tracked: %s - %s (%s)%n", 
+        SimulationLogger.info("[Resource] Tracked: %s - %s (%s)%n", 
             resourceType, description, id.substring(0, 8));
         
         return resource;
@@ -3859,7 +4005,7 @@ public final class ResourceManager implements Closeable {
             resource.close();
             disposedResources.incrementAndGet();
         } catch (Exception e) {
-            System.err.println("Error releasing resource: " + e.getMessage());
+            SimulationLogger.severe("Error releasing resource: " + e.getMessage());
         }
     }
     
@@ -3908,7 +4054,7 @@ public final class ResourceManager implements Closeable {
                 Thread.currentThread().interrupt();
                 break;
             } catch (Exception e) {
-                System.err.println("Error in cleanup loop: " + e.getMessage());
+                SimulationLogger.severe("Error in cleanup loop: " + e.getMessage());
             }
         }
     }
@@ -3931,15 +4077,15 @@ public final class ResourceManager implements Closeable {
         cleanupThread.interrupt();
         
         // Force cleanup of all tracked resources
-        System.out.println("\n=== Resource Manager Final Cleanup ===");
-        System.out.printf("Total resources tracked: %,d%n", totalResources.get());
-        System.out.printf("Disposed resources: %,d%n", disposedResources.get());
-        System.out.printf("Leaked resources: %,d%n", leakedResources.get());
+        SimulationLogger.info("\n=== Resource Manager Final Cleanup ===");
+        SimulationLogger.info("Total resources tracked: %,d%n", totalResources.get());
+        SimulationLogger.info("Disposed resources: %,d%n", disposedResources.get());
+        SimulationLogger.info("Leaked resources: %,d%n", leakedResources.get());
         
         // Attempt to close any remaining resources
         int remaining = trackedResources.size();
         if (remaining > 0) {
-            System.out.printf("Warning: %,d resources still tracked%n", remaining);
+            SimulationLogger.info("Warning: %,d resources still tracked%n", remaining);
             
             for (ResourceTracker tracker : trackedResources.values()) {
                 System.err.printf("Leaked: %s - %s (created %d ms ago)%n",
@@ -4039,7 +4185,7 @@ public final class ResourceManager implements Closeable {
                 disposed = true;
                 try {
                     coverage.dispose(true);
-                    System.out.printf("[Resource] Disposed GridCoverage2D: %s%n", source);
+                    SimulationLogger.info("[Resource] Disposed GridCoverage2D: %s%n", source);
                 } catch (Exception e) {
                     System.err.printf("Error disposing GridCoverage2D (%s): %s%n", 
                         source, e.getMessage());
@@ -4050,13 +4196,14 @@ public final class ResourceManager implements Closeable {
         @Override
         protected void finalize() throws Throwable {
             if (!disposed) {
-                System.err.printf("[Finalizer] GridCoverage2D not properly disposed: %s%n", source);
+                SimulationLogger.warning("[Finalizer] GridCoverage2D not properly disposed: %s%n", source);
                 close();
             }
             super.finalize();
         }
     }
 }package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import org.geotools.api.data.FileDataStore;
 import org.geotools.api.data.FileDataStoreFinder;
@@ -4110,15 +4257,15 @@ public class VectorBoundsLoader {
             CoordinateReferenceSystem sourceCRS = envelope.getCoordinateReferenceSystem();
             CoordinateReferenceSystem targetCRS = CRS.decode(TARGET_CRS, true);
 
-            System.out.println("Source CRS: " + sourceCRS.getName());
-            System.out.println("Target CRS: " + targetCRS.getName());
+            SimulationLogger.info("Source CRS: " + sourceCRS.getName());
+            SimulationLogger.info("Target CRS: " + targetCRS.getName());
 
             // Transform envelope to WGS84 if needed
             if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
                 envelope = envelope.transform(targetCRS, true);
-                System.out.println("Transformed envelope: " + envelope);
+                SimulationLogger.info("Transformed envelope: " + envelope);
             } else {
-                System.out.println("No transformation needed (already WGS84).");
+                SimulationLogger.info("No transformation needed (already WGS84).");
             }
 
             // Optional: add a small buffer (approx 100 m)
@@ -4168,7 +4315,7 @@ public class VectorBoundsLoader {
             MathTransform transform = null;
             if (sourceCRS != null && !CRS.equalsIgnoreMetadata(sourceCRS, targetCRS)) {
                 transform = CRS.findMathTransform(sourceCRS, targetCRS, true);
-                System.out.println("Geometry will be transformed from " + sourceCRS.getName() + " to " + targetCRS.getName());
+                SimulationLogger.info("Geometry will be transformed from " + sourceCRS.getName() + " to " + targetCRS.getName());
             }
 
             List<Geometry> geoms = new ArrayList<>();
@@ -4200,6 +4347,7 @@ public class VectorBoundsLoader {
         }
     }
 }package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
 import java.nio.file.*;
@@ -4244,7 +4392,7 @@ public class SnapshotMerger {
 
         File resultsDir = new File(resultsDirPath);
         if (!resultsDir.exists() || !resultsDir.isDirectory()) {
-            System.out.println("Results directory not found: " + resultsDirPath);
+            SimulationLogger.info("Results directory not found: " + resultsDirPath);
             return;
         }
 
@@ -4255,12 +4403,12 @@ public class SnapshotMerger {
             List<File> snapshotFiles = getSortedSnapshotFiles(resultsDir);
             
             if (snapshotFiles.isEmpty()) {
-                System.out.println("No snapshot files found to merge.");
+                SimulationLogger.info("No snapshot files found to merge.");
                 return;
             }
 
-            System.out.println("Found " + snapshotFiles.size() + " snapshot files to merge.");
-            System.out.println("Total size: " + formatFileSize(getTotalSize(snapshotFiles)));
+            SimulationLogger.info("Found " + snapshotFiles.size() + " snapshot files to merge.");
+            SimulationLogger.info("Total size: " + formatFileSize(getTotalSize(snapshotFiles)));
 
             // Create output file with timestamp
             File mergedFile = new File(resultsDir, outputFileName);
@@ -4269,19 +4417,19 @@ public class SnapshotMerger {
             long totalRows = mergeFilesStreaming(snapshotFiles, mergedFile);
             
             if (totalRows > 0) {
-                System.out.printf("Successfully merged %d files into %s (total rows: %,d)%n",
+                SimulationLogger.info("Successfully merged %d files into %s (total rows: %,d)%n",
                     snapshotFiles.size(), mergedFile.getPath(), totalRows);
-                System.out.printf("Merge completed in %.2f seconds%n", 
+                SimulationLogger.info("Merge completed in %.2f seconds%n", 
                     (System.currentTimeMillis() - startTime) / 1000.0);
                 
                 // Delete intermediate files only if merge was successful
                 deleteIntermediateFiles(snapshotFiles);
             } else {
-                System.out.println("WARNING: No data rows were merged!");
+                SimulationLogger.info("WARNING: No data rows were merged!");
             }
 
         } catch (Exception e) {
-            System.err.println("Error merging snapshots: " + e.getMessage());
+            SimulationLogger.severe("Error merging snapshots: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -4328,7 +4476,7 @@ public class SnapshotMerger {
             
             for (int i = 0; i < snapshotFiles.size(); i++) {
                 File file = snapshotFiles.get(i);
-                System.out.printf("Processing: %s (%,d bytes)%n", 
+                SimulationLogger.info("Processing: %s (%,d bytes)%n", 
                     file.getName(), file.length());
                 
                 long fileRows = processSingleFile(file, writer, i, headerWritten);
@@ -4338,7 +4486,7 @@ public class SnapshotMerger {
                     headerWritten = true; // Header written from first file
                 }
                 
-                System.out.printf("  Processed: %,d rows%n", fileRows);
+                SimulationLogger.info("  Processed: %,d rows%n", fileRows);
             }
         }
         
@@ -4492,7 +4640,7 @@ public class SnapshotMerger {
      */
     public static void mergeAfterSimulation() {
         String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-        System.out.println("Starting merge at: " + timestamp);
+        SimulationLogger.info("Starting merge at: " + timestamp);
         mergeSnapshotsAndCleanup("results", "merged_snapshots_" + timestamp + ".csv");
     }
     
@@ -4522,18 +4670,18 @@ public class SnapshotMerger {
                 if (file.delete()) {
                     deletedCount++;
                 } else {
-                    System.err.println("Warning: Could not delete " + file.getName());
+                    SimulationLogger.severe("Warning: Could not delete " + file.getName());
                     // Try alternative method
                     Files.deleteIfExists(file.toPath());
                 }
             } catch (SecurityException e) {
-                System.err.println("Security exception when deleting " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("Security exception when deleting " + file.getName() + ": " + e.getMessage());
             } catch (IOException e) {
-                System.err.println("IO exception when deleting " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("IO exception when deleting " + file.getName() + ": " + e.getMessage());
             }
         }
         
-        System.out.printf("Deleted %d intermediate files (%s freed)%n",
+        SimulationLogger.info("Deleted %d intermediate files (%s freed)%n",
             deletedCount, formatFileSize(totalSize));
     }
     
@@ -4551,13 +4699,13 @@ public class SnapshotMerger {
      * Merge with progress reporting for very large merges
      */
     public static void mergeWithProgress(String resultsDirPath, String outputFileName) {
-        System.out.println("Starting optimized merge with progress reporting...");
+        SimulationLogger.info("Starting optimized merge with progress reporting...");
         long startTime = System.currentTimeMillis();
         
         mergeSnapshotsAndCleanup(resultsDirPath, outputFileName);
         
         long endTime = System.currentTimeMillis();
-        System.out.printf("Merge completed in %.2f seconds%n", (endTime - startTime) / 1000.0);
+        SimulationLogger.info("Merge completed in %.2f seconds%n", (endTime - startTime) / 1000.0);
     }
     
     /**
@@ -4570,7 +4718,7 @@ public class SnapshotMerger {
         // Sort files by size (process smaller files first for better progress feedback)
         snapshotFiles.sort(Comparator.comparingLong(File::length));
         
-        System.out.println("Starting parallel merge of " + snapshotFiles.size() + " files");
+        SimulationLogger.info("Starting parallel merge of " + snapshotFiles.size() + " files");
         
         // Process first file (with header) sequentially
         File firstFile = snapshotFiles.get(0);
@@ -4581,19 +4729,20 @@ public class SnapshotMerger {
             try {
                 processFileForParallelMerge(file, mergedFile);
             } catch (IOException e) {
-                System.err.println("Error processing " + file.getName() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing " + file.getName() + ": " + e.getMessage());
             }
         });
         
-        System.out.println("Parallel merge completed");
+        SimulationLogger.info("Parallel merge completed");
     }
     
     private static void processFileForParallelMerge(File file, File mergedFile) throws IOException {
         // This method would need careful synchronization for parallel writing
         // Implementation depends on specific requirements
-        System.out.println("Processing (parallel): " + file.getName());
+        SimulationLogger.info("Processing (parallel): " + file.getName());
     }
 }package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.monadvsim.app.models.engine.SpeciesParameters;
@@ -4643,6 +4792,7 @@ public class SpeciesParameterLoader {
         return new SpeciesParameters();
     }
 }package com.monadvsim.app.models.utils;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
@@ -4663,7 +4813,7 @@ public class ConfigLoader {
         }
     }
 }package com.monadvsim.app.models.utils;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
@@ -4711,11 +4861,11 @@ public class ClimateDatasetManager {
      */
     public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
         for (String varName : variableNames) {
-            System.out.println("Loading variable: " + varName);
+            SimulationLogger.info("Loading variable: " + varName);
             InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
             layer.loadFromNetCDF(filePath, varName);
             layers.put(varName, layer);
-            System.out.println("Successfully loaded: " + varName);
+            SimulationLogger.info("Successfully loaded: " + varName);
         }
     }
     
@@ -4737,10 +4887,10 @@ public class ClimateDatasetManager {
     // smater loader to laod available variables
     public void loadAvailableVariables(String filePath) throws IOException {
         try (ucar.nc2.NetcdfFile ncfile = ucar.nc2.NetcdfFiles.open(filePath)) {
-            System.out.println("Available variables in file:");
+            SimulationLogger.info("Available variables in file:");
             for (ucar.nc2.Variable var : ncfile.getVariables()) {
                 String varName = var.getShortName();
-                System.out.println("  - " + varName);
+                SimulationLogger.info("  - " + varName);
                 
                 // Load common climate variables
                 if (varName.equals("t2m") || varName.equals("tp") || 
@@ -4748,7 +4898,7 @@ public class ClimateDatasetManager {
                     varName.equals("v10") || varName.equals("r") || 
                     varName.equals("d2m")) {
                     
-                    System.out.println("    Loading " + varName + "...");
+                    SimulationLogger.info("    Loading " + varName + "...");
                     InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
                     layer.loadFromNetCDF(filePath, varName);
                     layers.put(varName, layer);
@@ -4829,16 +4979,15 @@ public class ClimateDatasetManager {
     }
     
     public void printStatistics() {
-        System.out.println("=== Climate Dataset Statistics ===");
+        SimulationLogger.info("=== Climate Dataset Statistics ===");
         for (Map.Entry<String, InterpolatedRasterLayer> entry : layers.entrySet()) {
-            System.out.println(entry.getKey() + ":");
+            SimulationLogger.info(entry.getKey() + ":");
             entry.getValue().printStatistics();
-            System.out.println();
         }
     }
 }
 package com.monadvsim.app.models.config;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
 
@@ -4925,6 +5074,7 @@ public class SimulationConfig {
         public String layer;
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.AgentLifeCycleManager;
 import com.monadvsim.app.models.engine.LifecycleModel;
@@ -5066,9 +5216,11 @@ public class AgentLayer extends Layer {
             if (lifecycleManager != null) {
                 lifecycleManager.processLifecycleEvents();
             }
+            
+            ruleEngine.clearCache();
 
         } catch (Exception e) {
-            System.err.println("Critical error in AgentLayer.update() for layer " + getName() + ": " + e.getMessage());
+            SimulationLogger.severe("Critical error in AgentLayer.update() for layer " + getName() + ": " + e.getMessage());
             e.printStackTrace();
             throw new RuntimeException("Failed to update layer " + getName(), e);
         }
@@ -5089,7 +5241,7 @@ public class AgentLayer extends Layer {
     }
 
     private void processAgentRules(Agent agent, Project project) {
-//        System.out.println("Processing agent " + agent.getId() + " with " + rules.size() + " rules");
+        
         if (agent == null) return;
 
         if (agent instanceof LivingAgent la && !la.isAlive()) {
@@ -5097,22 +5249,69 @@ public class AgentLayer extends Layer {
         }
 
         if (rulesEvaluated.get() > 1_000_000_000L) {
-            System.err.println("WARNING: Rule evaluation limit reached, skipping further evaluations");
+            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
             return;
         }
 
         synchronized (agent) {
             try {
-                // Apply lifecycle transitions (temperature‑dependent) before rules
+                // --------------------------------------------------------------------
+                // 1. INERT AGENT: Passive hatching (eggs → larvae)
+                //    This is independent of behaviour and can stay first.
+                // --------------------------------------------------------------------
+                if (agent instanceof InertAgent ia && lifecycleModel != null) {
+                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
+                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
+                    if (hatched > 0) {
+                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
+                        if (mosquitoLayer != null) {
+                            for (int i = 0; i < hatched; i++) {
+                                double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                                double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+                                larva.setStage(LifecycleStage.LARVA);
+                                larva.setAge(0);
+                                larva.setEnergy(0.8);
+                            }
+                        }
+                    }
+                }
+
+                // --------------------------------------------------------------------
+                // 2. LIVING AGENT: Behavioural rules (FEED, GET_GRAVID, LAY_EGGS, etc.)
+                //    These must happen BEFORE mortality / ageing / development.
+                // --------------------------------------------------------------------
                 if (agent instanceof LivingAgent la) {
-                    applyLifecycleTransitions(la, project);
-                    if (!la.isAlive()) {
-                        lifecycleManager.scheduleDeath(agent.getId());
-                        deathsThisTick.incrementAndGet();
-                        return;
+                    // Evaluate behavioural rules
+                    for (RuleDefinition rule : rules) {
+                        rulesEvaluated.incrementAndGet();
+                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+                        // SimulationLogger.info("[RULE_CHECK] Agent %s, condition: %s => %s", 
+                        //    agent.getId(), rule.condition(), evalResult);
+                        if (evalResult) {
+                            ruleEngine.execute(rule.action(), agent, project, this);
+                            actionsExecuted.incrementAndGet();
+
+                            // If the agent died during rule execution, stop processing further rules
+                            if (!la.isAlive()) {
+                                lifecycleManager.scheduleDeath(agent.getId());
+                                deathsThisTick.incrementAndGet();
+                                break;
+                            }
+                            if (isTerminalAction(rule.action())) break;
+                        }
                     }
 
-                    // Update resting state (unchanged)
+                    // If the agent is already dead, skip all lifecycle updates
+                    if (!la.isAlive()) return;
+
+                    // --------------------------------------------------------------------
+                    // 3. LIFE‑CYCLE TRANSITIONS, AGEING, MORTALITY (after behaviour)
+                    //    Including: development (larva→pupa→adult), resting updates, ageing,
+                    //    temperature‑dependent mortality, and age‑based death.
+                    // --------------------------------------------------------------------
+
+                    // Update resting state (depends only on elapsed time)
                     if (la.isResting()) {
                         la.incrementRestingDuration();
                         if (la.getRestingDuration() > la.getMaxRestingDuration()) {
@@ -5120,61 +5319,32 @@ public class AgentLayer extends Layer {
                         }
                     } else {
                         la.incrementTimeWithoutRest();
-                        if (la.getTimeWithoutRest() > 96) {
+                        if (la.getTimeWithoutRest() > 96) { // ~24 hours without rest
                             la.setAlive(false);
                             lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
                             return;
                         }
                     }
 
-                    // Age increment
+                    // Age increment (after behaviour, so an adult can lay eggs on its final tick)
                     la.incrementAge();
-                    // Age‑based death (if you still want a max age limit)
                     if (la.getAge() > project.getDefaultMaxAgentAge()) {
                         la.setAlive(false);
                         lifecycleManager.scheduleDeath(agent.getId());
                         deathsThisTick.incrementAndGet();
                         return;
                     }
-                } else if (agent instanceof InertAgent ia) {
-                    // Automatic hatching using the model (instead of rule)
-                    if (lifecycleModel != null) {
-                        double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
-                        int hatched = ia.hatchEggs(temperature, lifecycleModel);
-                        if (hatched > 0) {
-                            // Create larvae for each hatched egg
-                            AgentLayer mosquitoLayer = findMosquitoLayer(project);
-                            if (mosquitoLayer != null) {
-                                for (int i = 0; i < hatched; i++) {
-                                    double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                                    double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                                    LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-                                    larva.setStage(LifecycleStage.LARVA);
-                                    larva.setAge(0);
-                                    larva.setEnergy(0.8);
-                                }
-                            }
-                        }
-                    }
-                }
 
-                // Evaluate behavioral rules
-                for (RuleDefinition rule : rules) {
-                    rulesEvaluated.incrementAndGet();
-                    if (ruleEngine.evaluate(rule.condition(), agent, project)) {
-                        ruleEngine.execute(rule.action(), agent, project, this);
-                        actionsExecuted.incrementAndGet();
-
-                        if (agent instanceof LivingAgent la2 && !la2.isAlive()) {
-                            lifecycleManager.scheduleDeath(agent.getId());
-                            deathsThisTick.incrementAndGet();
-                            break;
-                        }
-                        if (isTerminalAction(rule.action())) break;
+                    // Temperature‑dependent development (larva→pupa, pupa→adult) and adult mortality
+                    applyLifecycleTransitions(la, project);
+                    if (!la.isAlive()) {
+                        lifecycleManager.scheduleDeath(agent.getId());
+                        deathsThisTick.incrementAndGet();
                     }
                 }
             } catch (Exception e) {
-                System.err.println("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
@@ -5290,7 +5460,7 @@ public class AgentLayer extends Layer {
     private void logUpdatePerformance(long startTime) {
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
-        System.out.printf("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
+        SimulationLogger.info("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
             getName(), durationMs, agentContainer.size(),
             birthsThisTick.get(), deathsThisTick.get(), rulesEvaluated.get());
     }
@@ -5353,6 +5523,7 @@ public class AgentLayer extends Layer {
         return 0.0;
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.util.ArrayList;
 import java.util.Collection;
@@ -5608,9 +5779,9 @@ public class AgentContainer {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            System.err.println("Batch processing interrupted");
+            SimulationLogger.severe("Batch processing interrupted");
         } catch (ExecutionException e) {
-            System.err.println("Error in batch processing: " + e.getCause().getMessage());
+            SimulationLogger.severe("Error in batch processing: " + e.getCause().getMessage());
         }
     }
 
@@ -5731,6 +5902,7 @@ public class AgentContainer {
     
 }
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.io.Serializable;
@@ -5796,6 +5968,7 @@ public abstract class Layer implements Serializable {
     }
 }
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.io.Serializable;
@@ -5972,6 +6145,7 @@ public class RasterLayer extends Layer implements Serializable {
     }
     
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import ucar.ma2.Array;
@@ -6398,19 +6572,19 @@ public class InterpolatedRasterLayer extends Layer {
     }
     
     private void printFileStructure(NetcdfFile ncfile) {
-        System.out.println("\n=== NetCDF File Structure ===");
-        System.out.println("Dimensions:");
+        SimulationLogger.info("\n=== NetCDF File Structure ===");
+        SimulationLogger.info("Dimensions:");
         for (Dimension dim : ncfile.getDimensions())
-            System.out.printf("  %s: %d%n", dim.getShortName(), dim.getLength());
-        System.out.println("\nVariables:");
+            SimulationLogger.info("  %s: %d%n", dim.getShortName(), dim.getLength());
+        SimulationLogger.info("\nVariables:");
         for (Variable var : ncfile.getVariables()) {
-            System.out.printf("  %s: ", var.getShortName());
+            SimulationLogger.info("  %s: ", var.getShortName());
             System.out.print("Dimensions [");
             for (Dimension dim : var.getDimensions())
                 System.out.print(dim.getShortName() + " ");
-            System.out.println("]");
+            SimulationLogger.info("]");
             Attribute units = var.findAttribute("units");
-            if (units != null) System.out.printf("    units: %s%n", units.getStringValue());
+            if (units != null) SimulationLogger.info("    units: %s%n", units.getStringValue());
         }
     }
     
@@ -6463,7 +6637,7 @@ public class InterpolatedRasterLayer extends Layer {
     }
     
     public void printStatistics() {
-        System.out.println(getStatistics().toString());
+        SimulationLogger.info(getStatistics().toString());
     }
     
     private double getCacheHitRatio() {
@@ -6506,6 +6680,7 @@ public class InterpolatedRasterLayer extends Layer {
         }
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
 import java.nio.MappedByteBuffer;
@@ -6586,7 +6761,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
             }
             
             memoryMapped = true;
-            System.out.printf("✓ Memory-mapped raster: %s [%d MB]%n", 
+            SimulationLogger.info("✓ Memory-mapped raster: %s [%d MB]%n", 
                 getName(), fileSize / (1024 * 1024));
             
         } catch (IOException e) {
@@ -6702,7 +6877,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                 try {
                     fileChannel.close();
                 } catch (IOException e) {
-                    System.err.println("Error closing file channel: " + e.getMessage());
+                    SimulationLogger.severe("Error closing file channel: " + e.getMessage());
                 }
             }
             
@@ -6711,7 +6886,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                 try {
                     Files.deleteIfExists(dataFile.toPath());
                 } catch (IOException e) {
-                    System.err.println("Error deleting temp file: " + e.getMessage());
+                    SimulationLogger.severe("Error deleting temp file: " + e.getMessage());
                 }
             }
             
@@ -6756,6 +6931,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         return stats;
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.SpatialRegistry;
@@ -6924,6 +7100,7 @@ public class Project implements Serializable {
 
     
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.engine.TimeManager;
@@ -7005,6 +7182,7 @@ public abstract class Agent implements Serializable {
     
 }
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 /**
  *
@@ -7021,6 +7199,7 @@ public enum LifecycleStage {
     UNDEFINED
 }
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.engine.LifecycleModel;
@@ -7119,6 +7298,9 @@ public class InertAgent extends Agent {
     
     // Atomic operations for eggs
     public int addEggs(int eggsToAdd) {
+        int newCount = eggCount.addAndGet(eggsToAdd);
+        SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
+            getId(), eggsToAdd, newCount);
         return eggCount.addAndGet(eggsToAdd);
     }
     
@@ -7214,6 +7396,7 @@ public class InertAgent extends Agent {
         
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.util.concurrent.ConcurrentLinkedQueue;
@@ -7287,6 +7470,7 @@ public class GridCell {
     
 }
 package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import java.awt.Shape;
@@ -7348,6 +7532,7 @@ public class VectorLayer extends Layer {
         return 0.0;
     }
 }package com.monadvsim.app.models.entities;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 
 import com.monadvsim.app.models.engine.TimeManager;
@@ -7464,7 +7649,7 @@ public class LivingAgent extends Agent {
     public void setMaxRestingDuration(int duration) { maxRestingDuration.set(duration); }
     public void resetTimeWithoutRest() { timeWithoutRest.set(0); }
 }package com.monadvsim.app;
-
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.config.SimulationConfig;
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
@@ -7509,12 +7694,12 @@ public class App {
     private static SimulationConfig config;
 
     public static void main(String[] args) {
-        System.out.println("Starting Multi-Agent Simulation System");
+        SimulationLogger.info("Starting Multi-Agent Simulation System");
 
         try {
             // 1. Load configuration from YAML
             config = ConfigLoader.loadFromYaml("/config/simulation.yaml");
-            System.out.println("Configuration loaded from /config/simulation.yaml");
+            SimulationLogger.info("Configuration loaded from /config/simulation.yaml");
 
             // 2. Create results directory
             File resultsDir = new File("results");
@@ -7526,16 +7711,16 @@ public class App {
 
             // 4. World bounds from study site file (shapefile)
             worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
-            System.out.println("World bounds from study site: " + worldBounds);
+            SimulationLogger.info("World bounds from study site: " + worldBounds);
 
             // 5. Load study area geometry for seeding constraints
             Geometry studyAreaGeometry = null;
             try {
                 studyAreaGeometry = VectorBoundsLoader.getStudyAreaGeometry(config.files.studySite);
-                System.out.println("Loaded study area polygon for seeding constraints.");
+                SimulationLogger.info("Loaded study area polygon for seeding constraints.");
             } catch (Exception e) {
-                System.err.println("Could not load study area geometry: " + e.getMessage());
-                System.err.println("Seeding will use rectangular bounds only.");
+                SimulationLogger.severe("Could not load study area geometry: " + e.getMessage());
+                SimulationLogger.severe("Seeding will use rectangular bounds only.");
             }
 
             // 6. Spatial registry with grid cell size from config
@@ -7550,7 +7735,7 @@ public class App {
 
             // 9. Shutdown hook
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-                System.out.println("\n🛑 Shutdown signal received...");
+                SimulationLogger.info("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
@@ -7561,13 +7746,13 @@ public class App {
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
             SnapshotMerger.mergeAfterSimulation();
 
-            System.out.println("Simulation completed successfully!");
+            SimulationLogger.info("Simulation completed successfully!");
 
         } catch (InterruptedException e) {
-            System.err.println("Error in simulation: " + e.getMessage());
+            SimulationLogger.severe("Error in simulation: " + e.getMessage());
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
         } catch (Exception e) {
-            System.err.println("Unexpected error: " + e.getMessage());
+            SimulationLogger.severe("Unexpected error: " + e.getMessage());
             e.printStackTrace();
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
         }
@@ -7598,8 +7783,8 @@ public class App {
                 throw new IOException("Unsupported file type for study site: " + studySitePath);
             }
         } catch (Exception e) {
-            System.err.println("Could not read study site file: " + e.getMessage());
-            System.err.println("Using fallback bounds (Dire Dawa centroid + 5 km buffer).");
+            SimulationLogger.severe("Could not read study site file: " + e.getMessage());
+            SimulationLogger.severe("Using fallback bounds (Dire Dawa centroid + 5 km buffer).");
             // Fallback to centroid + buffer (Dire Dawa approximate coordinates)
             return VectorBoundsLoader.createFallbackBounds(41.8562, 9.6041, 5.0);
         }
@@ -7611,7 +7796,7 @@ public class App {
                                             Rectangle2D worldBounds,
                                             SimulationConfig config,
                                             Geometry studyAreaGeometry) {  // NEW: added geometry parameter
-        System.out.println("Configuring project from YAML");
+        SimulationLogger.info("Configuring project from YAML");
         try {
             // ---- Project defaults from config ----
             project.setDefaultAgentSearchRadius(config.project.defaultAgentSearchRadius);
@@ -7637,9 +7822,9 @@ public class App {
                 project.addLayer(elev);
                 project.addLayer(buildings);
                 project.addLayer(population);
-                System.out.println("Static raster layers loaded successfully");
+                SimulationLogger.info("Static raster layers loaded successfully");
             } catch (Exception e) {
-                System.err.println("Failed to load raster layers: " + e.getMessage());
+                SimulationLogger.severe("Failed to load raster layers: " + e.getMessage());
                 createFallbackRasters(elev, buildings, population);
                 project.addLayer(elev);
                 project.addLayer(buildings);
@@ -7647,13 +7832,13 @@ public class App {
             }
 
             // ---- Climate data ----
-            System.out.println("Loading climate data...");
+            SimulationLogger.info("Loading climate data...");
             try {
                 persistenceService.loadClimateData(project, config.files.climateNetCDF, timeManager);
-                System.out.println("Climate data loaded successfully");
+                SimulationLogger.info("Climate data loaded successfully");
             } catch (Exception e) {
-                System.err.println("Failed to load climate data: " + e.getMessage());
-                System.out.println("Using fallback climate data...");
+                SimulationLogger.severe("Failed to load climate data: " + e.getMessage());
+                SimulationLogger.info("Using fallback climate data...");
                 createFallbackClimateLayers(project, timeManager);
             }
 
@@ -7672,7 +7857,7 @@ public class App {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }
                 project.addLayer(layer);
-                System.out.printf("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
+                SimulationLogger.info("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
             }
 
             // ---- Tokens for rule engine (loaded from YAML) ----
@@ -7684,7 +7869,7 @@ public class App {
             }
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
-            System.out.printf("Loaded %d tokens from YAML%n", tokens.size());
+            SimulationLogger.info("Loaded %d tokens from YAML%n", tokens.size());
 
             // ---- Standardise geographic bounds for all raster layers ----
             double minLon = worldBounds.getMinX();
@@ -7698,7 +7883,7 @@ public class App {
             }
 
             // ---- Seed initial population using config seeding parameters ----
-            System.out.println("Seeding initial agents population...");
+            SimulationLogger.info("Seeding initial agents population...");
             seedInitialPopulation(project, config.seeding, buildings, population, spatialRegistry, worldBounds, studyAreaGeometry);
 
             int totalTanks = project.getAgentLayers().stream()
@@ -7707,10 +7892,10 @@ public class App {
             int totalMosquitoes = project.getAgentLayers().stream()
                     .filter(l -> l.getName().equals("Mosquitoes"))
                     .findFirst().map(l -> l.getAgents().size()).orElse(0);
-            System.out.printf("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
+            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
 
         } catch (Exception e) {
-            System.err.println("Error: " + e.getMessage());
+            SimulationLogger.severe("Error: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -7761,7 +7946,7 @@ public class App {
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("Mosquitoes")).findFirst().orElse(null);
         if (habitatLayer == null || mosquitoLayer == null) {
-            System.err.println("ERROR: Cannot find agent layers for seeding");
+            SimulationLogger.severe("ERROR: Cannot find agent layers for seeding");
             return;
         }
 
@@ -7770,7 +7955,7 @@ public class App {
                 seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
 
         // Seed water tanks
-        System.out.println("\nSeeding water tanks...");
+        SimulationLogger.info("\nSeeding water tanks...");
         int tanksPlaced = 0;
         for (int i = 0; i < seeding.tanksToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -7787,14 +7972,14 @@ public class App {
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
                 if (tanksPlaced % 100 == 0)
-                    System.out.printf("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n",
                             tanksPlaced, seeding.tanksToSeed, buildingDensity, popDensity);
             }
         }
-        System.out.printf("Seeded %d water tanks%n", tanksPlaced);
+        SimulationLogger.info("Seeded %d water tanks%n", tanksPlaced);
 
         // Seed mosquitoes
-        System.out.println("\nSeeding mosquitoes...");
+        SimulationLogger.info("\nSeeding mosquitoes...");
         int mosquitoesPlaced = 0;
         for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -7829,14 +8014,14 @@ public class App {
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
                 if (mosquitoesPlaced % 500 == 0)
-                    System.out.printf("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n",
                             mosquitoesPlaced, seeding.mosquitoesToSeed, buildingDensity, popDensity);
             }
         }
-        System.out.printf("Seeded %d mosquitoes%n", mosquitoesPlaced);
-        System.out.println("\n=== Seeding Summary ===");
-        System.out.printf("Water tanks: %d (target: %d)%n", tanksPlaced, seeding.tanksToSeed);
-        System.out.printf("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, seeding.mosquitoesToSeed);
+        SimulationLogger.info("Seeded %d mosquitoes%n", mosquitoesPlaced);
+        SimulationLogger.info("\n=== Seeding Summary ===");
+        SimulationLogger.info("Water tanks: %d (target: %d)%n", tanksPlaced, seeding.tanksToSeed);
+        SimulationLogger.info("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, seeding.mosquitoesToSeed);
     }
 
     // ------------------------------------------------------------------------
@@ -7844,14 +8029,14 @@ public class App {
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
-        System.out.println("Creating simulation engine...");
+        SimulationLogger.info("Creating simulation engine...");
         simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
         simulationThread = new Thread(() -> {
             try {
                 simulationEngine.run();
-                System.out.println("Simulation thread completed");
+                SimulationLogger.info("Simulation thread completed");
             } catch (Exception e) {
-                System.err.println("Error in simulation thread: " + e.getMessage());
+                SimulationLogger.severe("Error in simulation thread: " + e.getMessage());
                 e.printStackTrace();
             }
         });
@@ -7859,7 +8044,7 @@ public class App {
         simulationThread.setDaemon(false);
         simulationThread.start();
         startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
-        System.out.println("Simulation started! Press Ctrl+C to stop.");
+        SimulationLogger.info("Simulation started! Press Ctrl+C to stop.");
         monitorSimulation(simulationEngine, project);
     }
 
@@ -7905,7 +8090,7 @@ public class App {
         }
         project.addLayer(temperatureLayer);
         project.addLayer(precipitationLayer);
-        System.out.println("Created fallback climate layers");
+        SimulationLogger.info("Created fallback climate layers");
     }
 
     private static void monitorSimulation(SimulationEngine engine, Project project) {
@@ -7917,39 +8102,39 @@ public class App {
                 long tick = (Long) state.get("tick");
 
                 if (!running) {
-                    System.out.println("Simulation has stopped normally");
+                    SimulationLogger.info("Simulation has stopped normally");
                     break;
                 }
                 if (tick >= timeManager.getTotalTicks()) {
-                    System.out.println("Simulation reached total ticks, stopping engine...");
+                    SimulationLogger.info("Simulation reached total ticks, stopping engine...");
                     engine.stop();
                     break;
                 }
 
                 int totalAgents = (Integer) state.getOrDefault("totalAgents", 0);
                 double avgTickTime = (Double) state.getOrDefault("avgTickTime", 0.0);
-                System.out.printf("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
+                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
                         tick, totalAgents, avgTickTime);
 
                 if (tick % 100 == 0) {
-                    System.out.println("--- Detailed Status ---");
+                    SimulationLogger.info("--- Detailed Status ---");
                     for (AgentLayer layer : project.getAgentLayers()) {
                         Map<String, Object> layerStats = layer.getStatistics();
-                        System.out.printf("  %s: %d agents, %d rules evaluated%n",
+                        SimulationLogger.info("  %s: %d agents, %d rules evaluated%n",
                                 layer.getName(), layerStats.get("agentCount"), layerStats.get("rulesEvaluated"));
                     }
-                    System.out.println("----------------------");
+                    SimulationLogger.info("----------------------");
                 }
 
                 if (avgTickTime > 10000) {
-                    System.err.println("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
+                    SimulationLogger.severe("CRITICAL: Tick time too slow (" + avgTickTime + "ms), simulation may be hanging");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.out.println("Monitor thread interrupted");
+                SimulationLogger.info("Monitor thread interrupted");
                 break;
             } catch (Exception e) {
-                System.err.println("Error in monitor: " + e.getMessage());
+                SimulationLogger.severe("Error in monitor: " + e.getMessage());
                 try { Thread.sleep(10000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
             }
         }
@@ -7982,14 +8167,14 @@ public class App {
                             System.err.println("WARNING: Simulation may be stuck at tick " + currentTick +
                                     " (stuck for " + stuckSeconds + " seconds, count: " + stuckCount + ")");
                             if (stuckCount > 3) {
-                                System.err.println("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
+                                SimulationLogger.severe("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
                                 saveFinalStatisticsToFile(project, spatialRegistry, engine);
                                 SnapshotMerger.mergeAfterSimulation();
                                 engine.stop();
                                 simulationThread.interrupt();
                                 Thread.sleep(5000);
                                 if (simulationThread.isAlive()) {
-                                    System.err.println("Simulation thread still alive, forcing termination");
+                                    SimulationLogger.severe("Simulation thread still alive, forcing termination");
                                     System.exit(1);
                                 }
                                 break;
@@ -8000,26 +8185,26 @@ public class App {
                             lastTickTime = currentTime;
                         }
                     } catch (Exception e) {
-                        System.err.println("Error in watchdog while checking state: " + e.getMessage());
+                        SimulationLogger.severe("Error in watchdog while checking state: " + e.getMessage());
                         if (stuckCount++ > 5) {
-                            System.err.println("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
+                            SimulationLogger.severe("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
                             saveFinalStatisticsToFile(project, spatialRegistry, engine);
                             simulationThread.interrupt();
                             break;
                         }
                     }
                 }
-                System.out.println("Watchdog thread exiting");
+                SimulationLogger.info("Watchdog thread exiting");
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                System.out.println("Watchdog thread interrupted");
+                SimulationLogger.info("Watchdog thread interrupted");
             }
         });
         watchdog.setDaemon(true);
         watchdog.setName("Simulation-Watchdog");
         watchdog.setPriority(Thread.MIN_PRIORITY);
         watchdog.start();
-        System.out.println("Watchdog thread started");
+        SimulationLogger.info("Watchdog thread started");
     }
 
     private static void saveFinalStatisticsToFile(Project project, SpatialRegistry spatialRegistry, SimulationEngine engine) {
@@ -8140,10 +8325,10 @@ public class App {
                     writer.printf("Effective FPS: %.1f%n", fps);
                 }
                 writer.println("=".repeat(80));
-                System.out.println("Final statistics saved to: " + filename);
+                SimulationLogger.info("Final statistics saved to: " + filename);
             }
         } catch (Exception e) {
-            System.err.println("Error saving final statistics: " + e.getMessage());
+            SimulationLogger.severe("Error saving final statistics: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -8248,6 +8433,7 @@ public class App {
         }
     }
 }package com.monadvsim.app;
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

@@ -137,29 +137,18 @@ public class LifecycleModel {
         double t = tempKelvin - 273.15;
         double dailyFecundity = fecundityRate(tempKelvin);
         double K = hostCarryingCapacity(hostDensity);
-        int batchSize = (int) Math.max(1, Math.round(dailyFecundity * K));
-        double pLayBatch = 1.0 - Math.exp(-dtDays);
-        SimulationLogger.info("[MODEL] dailyFec=%.2f, K=%.2f, batchSize=%d, pLay=%.4f%n", 
-            dailyFecundity, K, batchSize, pLayBatch);
-        if (rng.nextDouble() < pLayBatch) {
-            return batchSize;
-        }
-        return 0;
+        double expectedEggsPerTick = dailyFecundity * K * dtDays;
+
+        // Stochastic: eggs laid = floor(expected) with probability fractional part
+        int eggs = (int) expectedEggsPerTick;
+        double remainder = expectedEggsPerTick - eggs;
+        if (rng.nextDouble() < remainder) eggs++;
+
+        // SimulationLogger.info("[MODEL] t=%.2f°C, dailyFec=%.2f, K=%.2f → expected=%.3f, laid=%d",
+        //    t, dailyFecundity, K, expectedEggsPerTick, eggs);
+        return eggs;
     }
     
-    
-//    public int eggsToLay(double tempKelvin, double livestockDensity, Random rng) {
-//        double t = tempKelvin - 273.15;
-//        double dailyFecundity = fecundityRate(tempKelvin);
-//        double K = hostCarryingCapacity(livestockDensity);
-//        // Probability of laying a batch today (once per day max)
-//        double pLayBatch = 1.0 - Math.exp(-1.0 * dtDays);  // ~0.0104 per tick
-//        if (rng.nextDouble() < pLayBatch) {
-//            int eggs = (int) Math.max(1, Math.round(dailyFecundity * K));
-//            return eggs;
-//        }
-//        return 0;
-//    }
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double dP = pupaDevelopmentRate(tempKelvin);

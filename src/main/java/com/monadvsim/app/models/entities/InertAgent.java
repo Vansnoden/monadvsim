@@ -99,8 +99,8 @@ public class InertAgent extends Agent {
     // Atomic operations for eggs
     public int addEggs(int eggsToAdd) {
         int newCount = eggCount.addAndGet(eggsToAdd);
-        SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
-            getId(), eggsToAdd, newCount);
+        // SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
+        //    getId(), eggsToAdd, newCount);
         return eggCount.addAndGet(eggsToAdd);
     }
     

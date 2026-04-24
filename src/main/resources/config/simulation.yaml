@@ -5,7 +5,7 @@
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 960        # 10 days
+  totalTicks: 960        # ~5 days
   tickMinutes: 15
 
 files:
@@ -45,7 +45,9 @@ species:
   adult_mort_b: 0.0364
   adult_mort_c: -0.4882
 
-# Tokens for rule engine: each maps a token (used in rules) to a layer name
+# Tokens for rule engine: each maps a token (used in rules) to a layer name.
+# NOTE: agent properties (stage, age, gravid, energy, etc.) are available automatically.
+# Do NOT list them here – they would overwrite the agent's actual values.
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -57,12 +59,6 @@ tokens:
     layer: "Buildings"
   - token: "elevation"
     layer: "Elevation"
-  - token: "age"
-    layer: "Mosquitoes"
-  - token: "stage"
-    layer: "Mosquitoes"
-  - token: "gravid"
-    layer: "Mosquitoes"
 
 agentLayers:
   - name: "Mosquitoes"
@@ -81,7 +77,7 @@ agentLayers:
         priority: 5
       - condition: "stage == 'ADULT' && energy > 0.2"
         action: "get_gravid"
-        priority: 4
+        priority: 7
       - condition: "gravid == true && temperature > 285.15" # && building_density > 0.1 && population > 0.05
         action: "lay_eggs"
         priority: 6
@@ -94,6 +90,11 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy < 0.8"
         action: "feed"
         priority: 3
+        
+      # ----- MOVEMENT (low priority, after essential behaviours) -----
+      - condition: "stage == 'ADULT' && !resting"
+        action: "move_random"
+        priority: 2
 
       # ----- LOW PRIORITY / FALLBACK -----
       - condition: "true"
@@ -120,12 +121,12 @@ seeding:
   mosquitoesToSeed: 250000
   habitatGridSizeX: 50
   habitatGridSizeY: 50
-  tankBuildingThreshold: 0 #0.15
-  tankPopulationThreshold: 0 #0.05
-  mosquitoBuildingThreshold: 0 #0.05
-  mosquitoPopulationThreshold: 0 #0.02
+  tankBuildingThreshold: 0
+  tankPopulationThreshold: 0
+  mosquitoBuildingThreshold: 0
+  mosquitoPopulationThreshold: 0
 
 project:
-  defaultAgentSearchRadius: 0.005 #~550m #~220m #0.0005    # ~55 m
-  defaultAgentStep: 0.00005           # ~5.5 m per tick
-  defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day
+  defaultAgentSearchRadius: 0.005    # ~550 m
+  defaultAgentStep: 0.00005          # ~5.5 m per tick
+  defaultMaxAgentAge: 1920           # 20 days * 96 ticks/day
