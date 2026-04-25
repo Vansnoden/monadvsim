@@ -1,11 +1,11 @@
 # ======================================================================
 # Simulation configuration for Anopheles stephensi in Dire Dawa
-# 6‑MONTH SIMULATION (April – September 2020)
+# 3‑MONTH SIMULATION (April – June 2020) – realistic population dynamics
 # ======================================================================
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 8640        # ~3 months days
+  totalTicks: 8640        # 3 months (90 days * 96 ticks/day)
   tickMinutes: 15
 
 files:
@@ -15,39 +15,56 @@ files:
   population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
   climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
 
-# Spatial registry grid cell size (degrees)
 gridCellSizeDegrees: 0.001
 
+# ======================================================================
+# Species parameters – tuned for Anopheles stephensi
+# ======================================================================
 species:
+  # Fecundity (eggs/female/day) – unchanged, realistic
   fecundity_a: 0.378
   fecundity_b: 0.173
   fecundity_Tmax: 40.0
   fecundity_c: 2.97
+
+  # Egg development rate (1/day) – unchanged (~2‑3 days at 25°C)
   egg_dev_a: -0.0009
   egg_dev_b: 0.048
   egg_dev_c: -0.345
-  larva_dev_a: -0.0007
-  larva_dev_b: 0.039
-  larva_dev_c: -0.32
-  pupa_dev_a: -0.0005
-  pupa_dev_b: 0.026
-  pupa_dev_c: -0.2
-  egg_survival_amp: 1.01
-  egg_survival_mean: 24.5
-  egg_survival_sigma: 4.8
-  larva_survival_amp: 0.95
-  larva_survival_mean: 27.0
-  larva_survival_sigma: 3.5
-  pupa_survival_amp: 0.93
-  pupa_survival_mean: 26.8
-  pupa_survival_sigma: 3.8
-  adult_mort_a: -0.00065
-  adult_mort_b: 0.0364
-  adult_mort_c: -0.4882
 
-# Tokens for rule engine: each maps a token (used in rules) to a layer name.
-# NOTE: agent properties (stage, age, gravid, energy, etc.) are available automatically.
-# Do NOT list them here – they would overwrite the agent's actual values.
+  # Larva development rate – slightly slowed for ~7‑9 days
+  larva_dev_a: -0.0006
+  larva_dev_b: 0.034
+  larva_dev_c: -0.28
+
+  # Pupa development rate – increased to ~2‑3 days
+  pupa_dev_a: -0.0008
+  pupa_dev_b: 0.045
+  pupa_dev_c: -0.38
+
+  # Egg survival – peak near 25°C, maximum 0.92
+  egg_survival_amp: 0.92
+  egg_survival_mean: 25.0
+  egg_survival_sigma: 5.0
+
+  # Larva survival – peak 0.85 at 25°C (realistic for An. stephensi)
+  larva_survival_amp: 0.85
+  larva_survival_mean: 25.0
+  larva_survival_sigma: 5.0
+
+  # Pupa survival – peak 0.90 at 25°C
+  pupa_survival_amp: 0.90
+  pupa_survival_mean: 25.0
+  pupa_survival_sigma: 5.0
+
+  # Adult mortality (1/day) – quadratic giving ~0.04 at 25°C, increasing with temperature
+  adult_mort_a: 0.00015
+  adult_mort_b: -0.0025
+  adult_mort_c: 0.10
+
+# ======================================================================
+# Tokens – only environmental layers (agent properties are auto‑bound)
+# ======================================================================
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -60,25 +77,29 @@ tokens:
   - token: "elevation"
     layer: "Elevation"
 
+# ======================================================================
+# Agent rules – life‑cycle transitions now handled by LifecycleModel,
+# so the legacy rules are kept as fallback with very high age thresholds.
+# ======================================================================
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      # ----- FORCED LIFE‑CYCLE TRANSITIONS (high priority) -----
-      - condition: "stage == 'LARVA' && age > 480"          # >5 days
+      # ----- FALLBACK LIFE‑CYCLE (should rarely trigger) -----
+      - condition: "stage == 'LARVA' && age > 960"          # >10 days (emergency)
         action: "pupate"
         priority: 10
-      - condition: "stage == 'PUPA' && age > 192"           # >2 days
+      - condition: "stage == 'PUPA' && age > 384"           # >4 days (emergency)
         action: "emerge"
         priority: 10
 
-      # ----- BEHAVIOURAL RULES (medium priority) -----
+      # ----- BEHAVIOURAL RULES -----
       - condition: "stage == 'ADULT' && energy < 0.7"
         action: "feed"
         priority: 5
       - condition: "stage == 'ADULT' && energy > 0.2"
         action: "get_gravid"
         priority: 7
-      - condition: "gravid == true && temperature > 285.15" # && building_density > 0.1 && population > 0.05
+      - condition: "gravid == true && temperature > 285.15"
         action: "lay_eggs"
         priority: 6
       - condition: "temperature < 283.15 || temperature > 313.15"
@@ -90,13 +111,13 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy < 0.8"
         action: "feed"
         priority: 3
-        
-      # ----- MOVEMENT (low priority, after essential behaviours) -----
+
+      # ----- MOVEMENT -----
       - condition: "stage == 'ADULT' && !resting"
         action: "move_random"
         priority: 2
 
-      # ----- LOW PRIORITY / FALLBACK -----
+      # ----- FALLBACK -----
       - condition: "true"
         action: "rest"
         priority: 1
@@ -116,17 +137,23 @@ agentLayers:
         action: "die"
         priority: 4
 
+# ======================================================================
+# Seeding – with realistic thresholds to place agents in suitable areas
+# ======================================================================
 seeding:
   tanksToSeed: 10000
   mosquitoesToSeed: 250000
   habitatGridSizeX: 50
   habitatGridSizeY: 50
-  tankBuildingThreshold: 0
-  tankPopulationThreshold: 0
-  mosquitoBuildingThreshold: 0
-  mosquitoPopulationThreshold: 0
+  tankBuildingThreshold: 0.15
+  tankPopulationThreshold: 0.05
+  mosquitoBuildingThreshold: 0.05
+  mosquitoPopulationThreshold: 0.02
 
+# ======================================================================
+# Project defaults
+# ======================================================================
 project:
-  defaultAgentSearchRadius: 0.005    # ~550 m
-  defaultAgentStep: 0.00005          # ~5.5 m per tick
-  defaultMaxAgentAge: 1920           # 20 days * 96 ticks/day
+  defaultAgentSearchRadius: 0.0005    # ~55 m
+  defaultAgentStep: 0.00005           # ~5.5 m per tick
+  defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day
