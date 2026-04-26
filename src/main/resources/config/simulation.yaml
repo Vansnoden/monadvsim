@@ -5,7 +5,7 @@
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 8640        # 3 months (90 days * 96 ticks/day)
+  totalTicks: 5760        # 2 months (60 days * 96 ticks/day)
   tickMinutes: 15
 
 files:
@@ -142,7 +142,7 @@ agentLayers:
 # ======================================================================
 seeding:
   tanksToSeed: 10000
-  mosquitoesToSeed: 250000
+  mosquitoesToSeed: 50000
   habitatGridSizeX: 50
   habitatGridSizeY: 50
   tankBuildingThreshold: 0.15

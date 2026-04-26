@@ -72,4 +72,8 @@ public class TimeManager {
         this.totalTicks = totalTicks;
     }
     
+    public long getTickMinutes() {
+        return tickDuration.toMinutes();
+    }
+    
 }

@@ -108,11 +108,8 @@ public class RuleEngine {
             case "die" -> executeDie(agent, layer);
             case "get_gravid" -> executeGetGravid(agent);
             case "lay_eggs" -> executeLayEggs(agent, project, layer);
-            //case "hatch" -> executeHatch(agent, project, layer);          // Deprecated – automatic in AgentLayer
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
-            //case "pupate" -> executePupate(agent, layer);                // Deprecated – automatic in AgentLayer
-            //case "emerge" -> executeEmerge(agent, layer);                // Deprecated – automatic in AgentLayer
             case "feed" -> executeFeed(agent, project, layer);
             case "dry_out" -> executeDryOut(agent, layer);
             case "freeze" -> executeFreeze(agent, layer);
@@ -255,44 +252,7 @@ public class RuleEngine {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Lifecycle actions – DEPRECATED (now handled automatically by AgentLayer)
-    // ------------------------------------------------------------------------
-
-//    /**
-//     * @deprecated Pupation is now automatically driven by the LifecycleModel.
-//     */
-//    @Deprecated
-//    private void executePupate(Agent agent, AgentLayer layer) {
-//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
-//            la.setStage(LifecycleStage.PUPA);
-//            la.setEnergy(0.6);
-//            SimulationLogger.info("Larva " + agent.getId() + " pupated");
-//        }
-//    }
-
-//    /**
-//     * @deprecated Emergence is now automatically driven by the LifecycleModel.
-//     */
-//    @Deprecated
-//    private void executeEmerge(Agent agent, AgentLayer layer) {
-//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
-//            la.setStage(LifecycleStage.ADULT);
-//            la.setEnergy(0.9);
-//            SimulationLogger.info("Pupa " + agent.getId() + " emerged as adult");
-//        }
-//    }
-
-//    /**
-//     * @deprecated Hatching is now automatically handled in AgentLayer for InertAgent.
-//     */
-//    @Deprecated
-//    private void executeHatch(Agent agent, Project project, AgentLayer layer) {
-//        // This method is kept only for compatibility; it will not be called if you remove the "hatch" rule.
-//        // The automatic hatching in AgentLayer should be used instead.
-//        SimulationLogger.severe("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
-//    }
-
+    
     // ------------------------------------------------------------------------
     // Other lifecycle / environmental actions
     // ------------------------------------------------------------------------
@@ -323,8 +283,8 @@ public class RuleEngine {
 
     private void executeFreeze(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
-            int eggsKilled = ia.getEggCount();
-            int larvaeKilled = ia.getLarvalCount();
+//            int eggsKilled = ia.getEggCount();
+//            int larvaeKilled = ia.getLarvalCount();
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
@@ -393,7 +353,7 @@ public class RuleEngine {
 //        SimulationLogger.info("[LAY_EGGS] Adult %s at (%.4f,%.4f) – eggsToLay=%d, nearby tanks=%d",
 //                la.getId(), la.getX(), la.getY(), eggsToLay, tankCount);
 
-        boolean laid = false;
+//        boolean laid = false;
         for (Agent n : nearby) {
             if (n instanceof InertAgent tank) {
                 tank.addEggs(eggsToLay);
@@ -401,7 +361,7 @@ public class RuleEngine {
                 la.setEnergy(la.getEnergy() - 0.2);
                 //SimulationLogger.info("[LAY_EGGS] SUCCESS: Adult %s laid %d eggs into tank %s",
                 //        la.getId(), eggsToLay, tank.getId());
-                laid = true;
+//                laid = true;
                 break;
             }
         }

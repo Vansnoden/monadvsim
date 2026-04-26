@@ -10,6 +10,7 @@ import ucar.nc2.Variable;
 import ucar.nc2.Dimension;
 import ucar.nc2.Attribute;
 import java.io.IOException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -63,6 +64,8 @@ public class InterpolatedRasterLayer extends Layer {
     private String lonDimName = "longitude";
     private String stepDimName = "step";
     
+    private final Duration tickDuration; // duration of one simulation tick
+    
     /**
      * Constructor for creating an empty layer to be loaded from NetCDF
      */
@@ -71,6 +74,7 @@ public class InterpolatedRasterLayer extends Layer {
         this.timeManager = timeManager;
         this.cachedGrid = null;
         this.lastCacheTime = null;
+        this.tickDuration = Duration.ofMinutes(timeManager.getTickMinutes());
     }
     
     /**
@@ -369,39 +373,62 @@ public class InterpolatedRasterLayer extends Layer {
         return getCachedValue(lon, lat);
     }
     
+    
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
-            long seconds = currentTime.toEpochSecond(ZoneOffset.UTC) - timeReference.toEpochSecond(ZoneOffset.UTC);
-            int lower = -1, upper = -1;
+            long secondsElapsed = Duration.between(timeReference, currentTime).getSeconds();
+
+            // Find surrounding time indices with proper interpolation
+            int lowerIdx = -1, upperIdx = -1;
             double alpha = 0.0;
+
             for (int i = 0; i < timeValues.length - 1; i++) {
-                if (seconds >= timeValues[i] && seconds <= timeValues[i+1]) {
-                    lower = i; upper = i+1;
-                    alpha = (seconds - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
+                if (secondsElapsed >= timeValues[i] && secondsElapsed <= timeValues[i+1]) {
+                    lowerIdx = i;
+                    upperIdx = i + 1;
+                    alpha = (secondsElapsed - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
                     break;
                 }
             }
-            if (lower == -1) {
-                if (seconds <= timeValues[0]) { lower = upper = 0; alpha = 0.0; }
-                else { lower = upper = timeValues.length - 1; alpha = 0.0; }
+
+            if (lowerIdx == -1) {
+                if (secondsElapsed <= timeValues[0]) {
+                    lowerIdx = upperIdx = 0;
+                    alpha = 0.0;
+                } else {
+                    lowerIdx = upperIdx = timeValues.length - 1;
+                    alpha = 0.0;
+                }
             }
-            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize)
-                cachedGrid = new double[latSize][lonSize];
-            if (lower == upper || alpha == 0.0) {
-                for (int lat = 0; lat < latSize; lat++)
-                    System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
-            } else {
-                for (int lat = 0; lat < latSize; lat++)
-                    for (int lon = 0; lon < lonSize; lon++)
-                        cachedGrid[lat][lon] = dataGrid[lower][lat][lon] + alpha * (dataGrid[upper][lat][lon] - dataGrid[lower][lat][lon]);
+
+            // Perform bilinear interpolation in time
+            for (int lat = 0; lat < latSize; lat++) {
+                for (int lon = 0; lon < lonSize; lon++) {
+                    if (lowerIdx == upperIdx || alpha == 0.0) {
+                        cachedGrid[lat][lon] = dataGrid[lowerIdx][lat][lon];
+                    } else {
+                        double valLower = dataGrid[lowerIdx][lat][lon];
+                        double valUpper = dataGrid[upperIdx][lat][lon];
+                        cachedGrid[lat][lon] = valLower + alpha * (valUpper - valLower);
+                    }
+                }
             }
-            lastCacheTime = currentTime;
             cacheValid = true;
+            lastCacheTime = currentTime;
         } finally {
             dataLock.readLock().unlock();
         }
     }
+    
+    
+    public double getTemperatureWithDiurnalCycle(double baseTempKelvin, LocalDateTime time) {
+        int hourOfDay = time.getHour();
+        // Simple sine-based diurnal variation (±5°C peak at 14:00)
+        double diurnalOffset = 5.0 * Math.sin(Math.PI * (hourOfDay - 6) / 12.0);
+        return baseTempKelvin + diurnalOffset;
+    }
+    
     
     private int findNearestIndex(double[] array, double value) {
         if (array == null || array.length == 0) return -1;

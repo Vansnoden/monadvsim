@@ -1957,6 +1957,10 @@ public class TimeManager {
         this.totalTicks = totalTicks;
     }
     
+    public long getTickMinutes() {
+        return tickDuration.toMinutes();
+    }
+    
 }package com.monadvsim.app.models.engine;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -2174,7 +2178,7 @@ public class RuleEngine {
                 if (popDensity > 0.01) {
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
                     // Optional debug
-                     SimulationLogger.info("[FEEDING] Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
+//                     SimulationLogger.info("[FEEDING] Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             } else {
                 // Fallback: always feed a little
@@ -2190,7 +2194,7 @@ public class RuleEngine {
             la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
                     (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
-            SimulationLogger.info("[MOVING] Adult " + agent.getId() + " moving, energy: " + la.getEnergy());
+//            SimulationLogger.info("[MOVING] Adult " + agent.getId() + " moving, energy: " + la.getEnergy());
         }
     }
 
@@ -6156,6 +6160,7 @@ import ucar.nc2.Variable;
 import ucar.nc2.Dimension;
 import ucar.nc2.Attribute;
 import java.io.IOException;
+import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -6209,6 +6214,8 @@ public class InterpolatedRasterLayer extends Layer {
     private String lonDimName = "longitude";
     private String stepDimName = "step";
     
+    private final Duration tickDuration; // duration of one simulation tick
+    
     /**
      * Constructor for creating an empty layer to be loaded from NetCDF
      */
@@ -6217,6 +6224,7 @@ public class InterpolatedRasterLayer extends Layer {
         this.timeManager = timeManager;
         this.cachedGrid = null;
         this.lastCacheTime = null;
+        this.tickDuration = Duration.ofMinutes(timeManager.getTickMinutes());
     }
     
     /**
@@ -6515,33 +6523,85 @@ public class InterpolatedRasterLayer extends Layer {
         return getCachedValue(lon, lat);
     }
     
+//    private void updateCache(LocalDateTime currentTime) {
+//        dataLock.readLock().lock();
+//        try {
+//            long seconds = currentTime.toEpochSecond(ZoneOffset.UTC) - timeReference.toEpochSecond(ZoneOffset.UTC);
+//            int lower = -1, upper = -1;
+//            double alpha = 0.0;
+//            for (int i = 0; i < timeValues.length - 1; i++) {
+//                if (seconds >= timeValues[i] && seconds <= timeValues[i+1]) {
+//                    lower = i; upper = i+1;
+//                    alpha = (seconds - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
+//                    break;
+//                }
+//            }
+//            if (lower == -1) {
+//                if (seconds <= timeValues[0]) { lower = upper = 0; alpha = 0.0; }
+//                else { lower = upper = timeValues.length - 1; alpha = 0.0; }
+//            }
+//            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize)
+//                cachedGrid = new double[latSize][lonSize];
+//            if (lower == upper || alpha == 0.0) {
+//                for (int lat = 0; lat < latSize; lat++)
+//                    System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
+//            } else {
+//                for (int lat = 0; lat < latSize; lat++)
+//                    for (int lon = 0; lon < lonSize; lon++)
+//                        cachedGrid[lat][lon] = dataGrid[lower][lat][lon] + alpha * (dataGrid[upper][lat][lon] - dataGrid[lower][lat][lon]);
+//            }
+//            lastCacheTime = currentTime;
+//            cacheValid = true;
+//        } finally {
+//            dataLock.readLock().unlock();
+//        }
+//    }
+    
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
-            long seconds = currentTime.toEpochSecond(ZoneOffset.UTC) - timeReference.toEpochSecond(ZoneOffset.UTC);
-            int lower = -1, upper = -1;
-            double alpha = 0.0;
-            for (int i = 0; i < timeValues.length - 1; i++) {
-                if (seconds >= timeValues[i] && seconds <= timeValues[i+1]) {
-                    lower = i; upper = i+1;
-                    alpha = (seconds - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
-                    break;
+            // Use simulation tick count to compute time index (assumes uniform daily time steps)
+            long tick = timeManager.getTickCount();
+            // Each day has TICKS_PER_DAY ticks (96 for 15-min steps)
+            // timeValues array should contain the time in seconds since reference for each frame
+            // If timeValues is not set (e.g., parsing failed), use index = tick / ticksPerDay
+            int index;
+            if (timeValues != null && timeValues.length > 1 && timeValues[1] > timeValues[0]) {
+                // Use the existing time values to map tick to index
+                double secondsPerTick = tickDuration.getSeconds(); // tickDuration is a Duration field you must add
+                double secondsElapsed = tick * secondsPerTick;
+                // Find index such that timeValues[index] <= secondsElapsed < timeValues[index+1]
+                index = findLowerIndex(timeValues, secondsElapsed);
+                if (index < 0) {
+                    if (secondsElapsed <= timeValues[0]) index = 0;
+                    else index = timeValues.length - 1;
                 }
-            }
-            if (lower == -1) {
-                if (seconds <= timeValues[0]) { lower = upper = 0; alpha = 0.0; }
-                else { lower = upper = timeValues.length - 1; alpha = 0.0; }
-            }
-            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize)
-                cachedGrid = new double[latSize][lonSize];
-            if (lower == upper || alpha == 0.0) {
-                for (int lat = 0; lat < latSize; lat++)
-                    System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
             } else {
-                for (int lat = 0; lat < latSize; lat++)
-                    for (int lon = 0; lon < lonSize; lon++)
-                        cachedGrid[lat][lon] = dataGrid[lower][lat][lon] + alpha * (dataGrid[upper][lat][lon] - dataGrid[lower][lat][lon]);
+                // Fallback: assume one time frame per day, and each tick is a fraction of a day
+                int ticksPerDay = 96; // adjust if needed
+                index = (int) (tick / ticksPerDay);
+                if (index >= timeSize) index = timeSize - 1;
             }
+            // Clamp index to valid range
+            if (index < 0) index = 0;
+            if (index >= timeSize) index = timeSize - 1;
+
+            // Use the same index for both lower and upper (no interpolation between days)
+            // or implement interpolation if you have sub‑daily climate data
+            int lower = index;
+            int upper = index;
+            double alpha = 0.0;
+
+            // Ensure cached grid is allocated
+            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize) {
+                cachedGrid = new double[latSize][lonSize];
+            }
+
+            // Copy data from the selected time slice
+            for (int lat = 0; lat < latSize; lat++) {
+                System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
+            }
+
             lastCacheTime = currentTime;
             cacheValid = true;
         } finally {
@@ -7299,8 +7359,8 @@ public class InertAgent extends Agent {
     // Atomic operations for eggs
     public int addEggs(int eggsToAdd) {
         int newCount = eggCount.addAndGet(eggsToAdd);
-        SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
-            getId(), eggsToAdd, newCount);
+        // SimulationLogger.info("[TANK] %s received %d eggs, total now %d%n", 
+        //    getId(), eggsToAdd, newCount);
         return eggCount.addAndGet(eggsToAdd);
     }
     

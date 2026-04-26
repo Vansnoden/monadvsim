@@ -2,6 +2,7 @@ package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
+import java.lang.reflect.Method;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -185,7 +186,8 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                     if (buffer != null) {
                         // Java doesn't have direct unmap, but we can clear the reference
                         // The cleaner will handle it
-                        buffer.clear();
+//                        buffer.clear();
+                        clean(buffer);
                     }
                 }
                 frameBuffers = null;
@@ -248,5 +250,19 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         stats.put("activeFrame", getActiveFrame());
         
         return stats;
+    }
+    
+    
+    private void clean(MappedByteBuffer buffer) {
+        try {
+            Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+            cleanerMethod.setAccessible(true);
+            Object cleaner = cleanerMethod.invoke(buffer);
+            Method cleanMethod = cleaner.getClass().getMethod("clean");
+            cleanMethod.invoke(cleaner);
+        } catch (Exception e) {
+            // Log but don't crash
+            SimulationLogger.warning("Could not unmap buffer: " + e.getMessage());
+        }
     }
 }
