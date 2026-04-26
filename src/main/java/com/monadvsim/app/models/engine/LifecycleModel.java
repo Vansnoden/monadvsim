@@ -22,7 +22,8 @@ public class LifecycleModel {
      */
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
         this.params = params;
-        this.dtDays = tickMinutes / (24.0 * 60.0);   // convert minutes to days
+        this.dtDays = tickMinutes / (24.0 * 60.0);
+        SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)", dtDays, tickMinutes);
     }
 
     // ------------------------------------------------------------------------
@@ -33,11 +34,15 @@ public class LifecycleModel {
         double val = params.eggDevA * t * t + params.eggDevB * t + params.eggDevC;
         return Math.max(0, val);
     }
-
+    
     public double larvaDevelopmentRate(double tempKelvin) {
         double t = tempKelvin - 273.15;
         double val = params.larvaDevA * t * t + params.larvaDevB * t + params.larvaDevC;
-        return Math.max(0, val);
+        val = Math.max(0, val);
+        if (val > 5.0) {
+            SimulationLogger.warning("[Lifecycle] High larval development rate %.2f at t=%.2f°C", val, t);
+        }
+        return val;
     }
 
     public double pupaDevelopmentRate(double tempKelvin) {
@@ -119,15 +124,62 @@ public class LifecycleModel {
     // Stage transition logic for LivingAgent (stochastic)
     // ------------------------------------------------------------------------
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-        double dL = larvaDevelopmentRate(tempKelvin);
+        double temp = tempKelvin;
+        if (temp < 200) {
+            SimulationLogger.warning("[Lifecycle] Temperature %.2f K suspicious – converting from Celsius.", temp);
+            temp = temp + 273.15;
+        }
+        double dL = larvaDevelopmentRate(temp);
         double pAdvance = transitionProb(dL);
+        SimulationLogger.info("[DEBUG] Larva transition: rawTemp=%.2fK, corrected=%.2fK, dL=%.6f, pAdv=%.6f",
+                              tempKelvin, temp, dL, pAdvance);
+
+        if (pAdvance > 0.1) {
+            SimulationLogger.info("[Lifecycle] High larva advance: dL=%.4f, p=%.4f, dtDays=%.6f, temp=%.2fK",
+                                  dL, pAdvance, dtDays, temp);
+        }
+
         if (rng.nextDouble() < pAdvance) {
-            double survival = larvaSurvival(tempKelvin);
+            double survival = larvaSurvival(temp);
+            SimulationLogger.info("[SUCCESS] %s → PUPA at age %d, temp=%.2fK, pAdv=%.6f, survival=%.3f",
+                                  agent.getId(), agent.getAge(), temp, pAdvance, survival);
             if (rng.nextDouble() < survival) {
                 agent.setStage(LifecycleStage.PUPA);
                 agent.setEnergy(0.6);
             } else {
                 agent.setAlive(false);
+                SimulationLogger.info("[DEATH] %s died during pupation at age %d", agent.getId(), agent.getAge());
+            }
+        }
+    }
+
+    
+    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
+        double temp = tempKelvin;
+        if (temp < 200) {
+            SimulationLogger.warning("[Lifecycle] Temperature %.2f K suspicious – converting from Celsius.", temp);
+            temp = temp + 273.15;
+        }
+        double dP = pupaDevelopmentRate(temp);
+        double pAdvance = transitionProb(dP);
+        SimulationLogger.info("[DEBUG] Pupa transition: rawTemp=%.2fK, corrected=%.2fK, dP=%.6f, pAdv=%.6f",
+                              tempKelvin, temp, dP, pAdvance);
+
+        if (pAdvance > 0.1) {
+            SimulationLogger.info("[Lifecycle] High pupa advance: dP=%.4f, p=%.4f, dtDays=%.6f, temp=%.2fK",
+                                  dP, pAdvance, dtDays, temp);
+        }
+
+        if (rng.nextDouble() < pAdvance) {
+            double survival = pupaSurvival(temp);
+            SimulationLogger.info("[SUCCESS] %s → ADULT at age %d, temp=%.2fK, pAdv=%.6f, survival=%.3f",
+                                  agent.getId(), agent.getAge(), temp, pAdvance, survival);
+            if (rng.nextDouble() < survival) {
+                agent.setStage(LifecycleStage.ADULT);
+                agent.setEnergy(0.9);
+            } else {
+                agent.setAlive(false);
+                SimulationLogger.info("[DEATH] %s died during emergence at age %d", agent.getId(), agent.getAge());
             }
         }
     }
@@ -149,20 +201,6 @@ public class LifecycleModel {
         return eggs;
     }
     
-
-    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
-        double dP = pupaDevelopmentRate(tempKelvin);
-        double pAdvance = transitionProb(dP);
-        if (rng.nextDouble() < pAdvance) {
-            double survival = pupaSurvival(tempKelvin);
-            if (rng.nextDouble() < survival) {
-                agent.setStage(LifecycleStage.ADULT);
-                agent.setEnergy(0.9);
-            } else {
-                agent.setAlive(false);
-            }
-        }
-    }
 
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double pDie = adultMortalityProb(tempKelvin);

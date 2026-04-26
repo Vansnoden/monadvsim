@@ -5,7 +5,7 @@
 
 time:
   startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 5760        
+  totalTicks: 17280        
   tickMinutes: 15
 
 files:
