@@ -9,11 +9,11 @@ time:
   tickMinutes: 15
 
 files:
-  studySite: "prepared_data/somali/somali.shp"
-  elevation: "/mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/small_somali_elevation.tif"
-  buildings: "/mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/small_somali_building.tif"
-  population: "/mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/small_somali_population.tif"
-  climateNetCDF: "prepared_data/somali/climate_t2m_tp_2020.nc"
+  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
+  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
+  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
+  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
+  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
 
 gridCellSizeDegrees: 0.001
 

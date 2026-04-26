@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
-
     <groupId>com.monadvsim.app</groupId>
     <artifactId>monadvsim</artifactId>
     <version>1.0-SNAPSHOT</version>
@@ -104,7 +104,7 @@
             <version>3.0.2</version>
         </dependency>
 
-        <!-- Jackson (JSON/XML/YAML) -->
+        <!-- Jackson -->
         <dependency>
             <groupId>com.fasterxml.jackson.dataformat</groupId>
             <artifactId>jackson-dataformat-xml</artifactId>
@@ -144,7 +144,7 @@
             <version>${graalvm.version}</version>
         </dependency>
 
-        <!-- Java Advanced Imaging (JAI) -->
+        <!-- JAI -->
         <dependency>
             <groupId>javax.media</groupId>
             <artifactId>jai_core</artifactId>
@@ -205,7 +205,6 @@
                 <version>3.5.0</version>
                 <configuration>
                     <mainClass>${exec.mainClass}</mainClass>
-                    <!-- JVM options go here, not as program arguments -->
                     <jvmArgs>
                         <jvmArg>-Xmx8g</jvmArg>
                         <jvmArg>-Xms4g</jvmArg>
@@ -218,13 +217,14 @@
                         <jvmArg>-XX:G1HeapRegionSize=32M</jvmArg>
                         <jvmArg>-XX:G1ReservePercent=20</jvmArg>
                         <jvmArg>-XX:InitiatingHeapOccupancyPercent=35</jvmArg>
+                        <jvmArg>-XX:+UseStringDeduplication</jvmArg>
+                        <jvmArg>-Djava.awt.headless=true</jvmArg>
                         <!-- Required for GraalVM and GeoTools -->
                         <jvmArg>--add-opens=java.base/java.lang=ALL-UNNAMED</jvmArg>
                         <jvmArg>--add-opens=java.base/java.math=ALL-UNNAMED</jvmArg>
                         <jvmArg>--add-opens=java.base/java.util=ALL-UNNAMED</jvmArg>
                         <jvmArg>--add-opens=java.base/java.io=ALL-UNNAMED</jvmArg>
                     </jvmArgs>
-                    <!-- No program arguments by default -->
                 </configuration>
             </plugin>
         </plugins>

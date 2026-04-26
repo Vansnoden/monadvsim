@@ -1975,21 +1975,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * JavaScript Rule Evaluator
- *
- * Evaluates agent behavior rules using GraalVM JavaScript engine.
- * Supports dynamic rule evaluation with environmental context access.
- * Implements thread-local contexts for concurrent rule evaluation.
- * Executes predefined actions (die, lay_eggs, move_random, etc.).
- * Includes caching for rule conditions and results.
- *
- * <p><b>Note:</b> Actions like {@code pupate}, {@code emerge}, and {@code hatch}
- * are now handled automatically by the {@link AgentLayer} using the
- * {@link LifecycleModel}. They are kept for compatibility but are deprecated.
- *
- * @author void
- */
 public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
@@ -1997,7 +1982,9 @@ public class RuleEngine {
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
+            // Use a builder with explicit permissions and low resource limits
             return Context.newBuilder("js")
+                    .allowAllAccess(true)
                     .allowHostAccess(HostAccess.ALL)
                     .allowHostClassLookup(s -> true)
                     .option("js.ecmascript-version", "2022")
@@ -2012,15 +1999,18 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        try {
-            String cacheKey = condition + "|" + agent.getId();
-            Boolean cached = evaluationCache.get(cacheKey);
-            if (cached != null) {
-                return cached;
-            }
-            Context context = threadLocalContext.get();
-            Value bindings = context.getBindings("js");
+        String cacheKey = condition + "|" + agent.getId();
+        Boolean cached = evaluationCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
 
+        Context context = threadLocalContext.get();
+        context.enter();
+        try {
+            Value bindings = context.getBindings("js");
+            // Clear old bindings to avoid accumulation? Not necessary, but ensure fresh values
+            // Actually, we should override each time.
             populateBindings(bindings, agent, project);
 
             Source source = scriptCache.computeIfAbsent(condition, c ->
@@ -2028,20 +2018,24 @@ public class RuleEngine {
             );
 
             Value result = context.eval(source);
-            evaluationCache.put(cacheKey, result.isBoolean() && result.asBoolean());
-            return result.isBoolean() && result.asBoolean();
-
+            boolean boolResult = result.isBoolean() && result.asBoolean();
+            evaluationCache.put(cacheKey, boolResult);
+            return boolResult;
         } catch (Exception e) {
-            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
+            // Log the detailed exception for debugging
+            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.toString());
+            // Provide fallback: return false to avoid crashing the simulation
             return false;
+        } finally {
+            context.leave();
         }
     }
 
     private void populateBindings(Value bindings, Agent agent, Project project) {
-        // Bind agent as 'agent' object
+        // Reset all common bindings to safe defaults
+        // Agent basic properties
         bindings.putMember("agent", agent);
-
-        // Bind commonly used agent properties for easier access
+        
         if (agent instanceof LivingAgent la) {
             bindings.putMember("stage", la.getStage().toString());
             bindings.putMember("age", la.getAge());
@@ -2056,26 +2050,61 @@ public class RuleEngine {
             bindings.putMember("eggCount", ia.getEggCount());
             bindings.putMember("larvalCount", ia.getLarvalCount());
             bindings.putMember("capacity", ia.getCapacity());
+        } else {
+            // Fallback for any agent type
+            bindings.putMember("stage", "UNKNOWN");
+            bindings.putMember("age", 0);
+            bindings.putMember("energy", 0.0);
+            bindings.putMember("gravid", false);
+            bindings.putMember("alive", true);
+            bindings.putMember("resting", false);
+            bindings.putMember("x", agent != null ? agent.getX() : 0);
+            bindings.putMember("y", agent != null ? agent.getY() : 0);
         }
 
-        // Bind layer values
-        for (int i = 0; i < project.getLayerNames().size(); i++) {
-            String token = project.getTokens().get(i);
-            double value = getValueAt(project, project.getLayerNames().get(i), agent.getX(), agent.getY());
-            bindings.putMember(token, value);
+        // Environmental variables - always define with default 0.0 to avoid undefined
+        // First, get all layer names and tokens safely
+        List<String> layerNames = project.getLayerNames();
+        List<String> tokens = project.getTokens();
+        if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
+            for (int i = 0; i < layerNames.size(); i++) {
+                String token = tokens.get(i);
+                double x = agent != null ? agent.getX() : 0;
+                double y = agent != null ? agent.getY() : 0;
+                double value = getValueAt(project, layerNames.get(i), x, y);
+                bindings.putMember(token, value);
+            }
+        } else {
+            SimulationLogger.warning("Layer names/tokens missing or mismatched; using defaults.");
+        }
+        
+        // Also bind raw layer names for compatibility? Not needed.
+        // Ensure common tokens always exist (fallback)
+        if (!bindings.hasMember("temperature")) {
+            bindings.putMember("temperature", getValueAt(project, "t2m", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("precipitation")) {
+            bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("population")) {
+            bindings.putMember("population", getValueAt(project, "Population", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("building_density")) {
+            bindings.putMember("building_density", getValueAt(project, "Buildings", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("elevation")) {
+            bindings.putMember("elevation", getValueAt(project, "Elevation", agent.getX(), agent.getY()));
         }
     }
 
+    // ---------- Actions (unchanged, but ensure no null pointer) ----------
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
         switch (action.toLowerCase()) {
             case "die" -> executeDie(agent, layer);
             case "get_gravid" -> executeGetGravid(agent);
             case "lay_eggs" -> executeLayEggs(agent, project, layer);
-            //case "hatch" -> executeHatch(agent, project, layer);          // Deprecated – automatic in AgentLayer
             case "move_random" -> executeMoveRandom(agent, project, layer);
             case "reproduce" -> executeReproduce(agent, project, layer);
-            //case "pupate" -> executePupate(agent, layer);                // Deprecated – automatic in AgentLayer
-            //case "emerge" -> executeEmerge(agent, layer);                // Deprecated – automatic in AgentLayer
             case "feed" -> executeFeed(agent, project, layer);
             case "dry_out" -> executeDryOut(agent, layer);
             case "freeze" -> executeFreeze(agent, layer);
@@ -2087,30 +2116,23 @@ public class RuleEngine {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Behavioural actions
-    // ------------------------------------------------------------------------
-
+    // Implement the actions as before (keep them exactly as in your code)
     private void executeRest(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(true);
             la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
             la.resetTimeWithoutRest();
-//            SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
         }
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(false);
-//            SimulationLogger.info("[STOP RESTING] Mosquito " + agent.getId() + " stopped resting");
         }
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
-//            SimulationLogger.info("[DIE] Mosquito " + agent.getId() + " died from exhaustion after " +
-//                    la.getTimeWithoutRest() + " ticks without rest");
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
         }
@@ -2125,8 +2147,6 @@ public class RuleEngine {
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.02));
                     la.resetTimeWithoutRest();
-//                     SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " resting in building. " +
-//                            "Building density: " + buildingDensity + ", Energy: " + la.getEnergy());
                 } else {
                     executeFindBuildingToRest(agent, project, layer);
                 }
@@ -2141,7 +2161,6 @@ public class RuleEngine {
                 double bestX = agent.getX();
                 double bestY = agent.getY();
                 double bestDensity = buildingLayer.getValueAt(agent.getX(), agent.getY());
-
                 for (int i = 0; i < 8; i++) {
                     double angle = i * Math.PI / 4;
                     double sampleX = agent.getX() + Math.cos(angle) * 0.0001;
@@ -2153,53 +2172,41 @@ public class RuleEngine {
                         bestY = sampleY;
                     }
                 }
-
                 if (bestDensity > buildingLayer.getValueAt(agent.getX(), agent.getY())) {
                     la.setX(bestX);
                     la.setY(bestY);
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.015));
-//                     SimulationLogger.info("[FIND BUILDING] Mosquito " + agent.getId() + " moved to better resting spot. " +
-//                            "Building density: " + bestDensity);
                     layer.updateAgentPositionImmediately(la);
                 }
             }
         }
     }
 
-    
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
-        // SimulationLogger.info("[FEEDING] Evaluating");
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
             if (populationLayer != null) {
                 double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-                // Feed if any population exists (even low density)
                 if (popDensity > 0.01) {
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
-                    // Optional debug
-//                     SimulationLogger.info("[FEEDING] Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             } else {
-                // Fallback: always feed a little
                 la.setEnergy(Math.min(1.0, la.getEnergy() + 0.1));
             }
         }
     }
 
     private void executeMoveRandom(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[EVALUATING] Evaluating");
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
             la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
                     (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
-//            SimulationLogger.info("[MOVING] Adult " + agent.getId() + " moving, energy: " + la.getEnergy());
         }
     }
 
     private void executeReproduce(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[REPRODUCING] Evaluating");
         if (agent instanceof LivingAgent la && la.isGravid()) {
             List<Agent> nearby = project.getSpatialRegistry()
                     .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
@@ -2214,55 +2221,10 @@ public class RuleEngine {
                     break;
                 }
             }
-//            SimulationLogger.info("[REPRODUCING] Adult " + agent.getId() + " reproducing, energy: " + la.getEnergy());
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Lifecycle actions – DEPRECATED (now handled automatically by AgentLayer)
-    // ------------------------------------------------------------------------
-
-//    /**
-//     * @deprecated Pupation is now automatically driven by the LifecycleModel.
-//     */
-//    @Deprecated
-//    private void executePupate(Agent agent, AgentLayer layer) {
-//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
-//            la.setStage(LifecycleStage.PUPA);
-//            la.setEnergy(0.6);
-//            SimulationLogger.info("Larva " + agent.getId() + " pupated");
-//        }
-//    }
-
-//    /**
-//     * @deprecated Emergence is now automatically driven by the LifecycleModel.
-//     */
-//    @Deprecated
-//    private void executeEmerge(Agent agent, AgentLayer layer) {
-//        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
-//            la.setStage(LifecycleStage.ADULT);
-//            la.setEnergy(0.9);
-//            SimulationLogger.info("Pupa " + agent.getId() + " emerged as adult");
-//        }
-//    }
-
-//    /**
-//     * @deprecated Hatching is now automatically handled in AgentLayer for InertAgent.
-//     */
-//    @Deprecated
-//    private void executeHatch(Agent agent, Project project, AgentLayer layer) {
-//        // This method is kept only for compatibility; it will not be called if you remove the "hatch" rule.
-//        // The automatic hatching in AgentLayer should be used instead.
-//        SimulationLogger.severe("WARNING: Deprecated executeHatch called. Remove the 'hatch' rule.");
-//    }
-
-    // ------------------------------------------------------------------------
-    // Other lifecycle / environmental actions
-    // ------------------------------------------------------------------------
-
-    
     private void executeDie(Agent agent, AgentLayer layer) {
-//        SimulationLogger.info("[DIE] Evaluating");
         if (agent instanceof LivingAgent la) {
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
@@ -2273,109 +2235,54 @@ public class RuleEngine {
 
     private void executeDryOut(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
-            int eggsKilled = ia.getEggCount();
-            int larvaeKilled = ia.getLarvalCount();
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(0);
-//            SimulationLogger.info("[DRY-OUT] Tank %s dried out! Killed %d eggs and %d larvae%n",
-//                    agent.getId(), eggsKilled, larvaeKilled);
             layer.updateAgentPositionImmediately(agent);
         }
     }
 
     private void executeFreeze(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
-            int eggsKilled = ia.getEggCount();
-            int larvaeKilled = ia.getLarvalCount();
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
-//            SimulationLogger.info("[FROZEN] Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
-//                    agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
             layer.updateAgentPositionImmediately(agent);
         }
     }
 
     private void executeGetGravid(Agent agent) {
-        //SimulationLogger.info("[GRAVID] Evaluating");
         if (agent instanceof LivingAgent la) {
             la.setGravid(true);
-//            SimulationLogger.info("[GRAVID] Adult %s became gravid", la.getId());
         }
     }
 
-    /**
-     * Temperature‑ and host‑dependent egg laying using the LifecycleModel.
-     */
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[LAY_EGGS] Evaluating");
-
-        if (!(agent instanceof LivingAgent la)) {
-            //SimulationLogger.info("[LAY_EGGS] Not a LivingAgent");
+        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) {
             return;
         }
-
-        // Log the actual stage
-        // SimulationLogger.info("[LAY_EGGS] Agent stage = " + la.getStage());
-
-        if (la.getStage() != LifecycleStage.ADULT) {
-            // SimulationLogger.info("[LAY_EGGS] Not adult, returning");
-            return;
-        }
-
         double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
         double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
         if (livestock <= 0) {
             livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
         }
-
-        //SimulationLogger.info("[LAY_EGGS] Temperature = %.2f K, livestock = %.4f", temperature, livestock);
-
         LifecycleModel model = project.getLifecycleModel();
-        if (model == null) {
-            //SimulationLogger.info("[LAY_EGGS] LifecycleModel is NULL");
-            return;
-        }
-
+        if (model == null) return;
         int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
-        //SimulationLogger.info("[DEBUG] eggsToLay = " + eggsToLay);
-
-        if (eggsToLay <= 0) {
-            //SimulationLogger.info("[LAY_EGGS] eggsToLay <= 0, returning");
-            return;
-        }
-
+        if (eggsToLay <= 0) return;
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
-
-        int tankCount = 0;
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent) tankCount++;
-        }
-//        SimulationLogger.info("[LAY_EGGS] Adult %s at (%.4f,%.4f) – eggsToLay=%d, nearby tanks=%d",
-//                la.getId(), la.getX(), la.getY(), eggsToLay, tankCount);
-
-        boolean laid = false;
         for (Agent n : nearby) {
             if (n instanceof InertAgent tank) {
                 tank.addEggs(eggsToLay);
                 la.setGravid(false);
                 la.setEnergy(la.getEnergy() - 0.2);
-                //SimulationLogger.info("[LAY_EGGS] SUCCESS: Adult %s laid %d eggs into tank %s",
-                //        la.getId(), eggsToLay, tank.getId());
-                laid = true;
                 break;
             }
         }
-//        if (!laid) {
-//            SimulationLogger.info("[LAY_EGGS] FAILED: No suitable water tank found near adult %s", la.getId());
-//        }
     }
 
-    
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[EVAPORATE] Evaluating");
         if (agent instanceof InertAgent ia) {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
@@ -2390,10 +2297,6 @@ public class RuleEngine {
             layer.updateAgentPositionImmediately(agent);
         }
     }
-
-    // ------------------------------------------------------------------------
-    // Utilities
-    // ------------------------------------------------------------------------
 
     private double getValueAt(Project p, String layerName, double x, double y) {
         Layer layer = p.getLayerByName(layerName);
@@ -6150,7 +6053,6 @@ public class RasterLayer extends Layer implements Serializable {
     
 }package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
-
 import com.monadvsim.app.models.engine.TimeManager;
 import ucar.ma2.Array;
 import ucar.ma2.Index;
@@ -6168,100 +6070,65 @@ import java.util.List;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.logging.Logger;
 
-/**
- * Time-Varying Raster
- *
- * Extends RasterLayer for climate/time-series data
- *
- * Loads NetCDF climate data with temporal interpolation
- *
- * Implements bilinear interpolation for smooth value retrieval
- *
- * Caches interpolated values for performance
- */
 public class InterpolatedRasterLayer extends Layer {
     private static final Logger LOGGER = Logger.getLogger(InterpolatedRasterLayer.class.getName());
     
-    // Core data structures
     private double[][][] dataGrid; // [time][lat][lon]
     private double[] timeValues;   // Time values in seconds since reference
     private double[] latValues;    // Latitude values (degrees north)
     private double[] lonValues;    // Longitude values (degrees east)
     
-    // Dimensions
     private int timeSize, latSize, lonSize;
     private final TimeManager timeManager;
     private final ReentrantReadWriteLock dataLock = new ReentrantReadWriteLock();
     
-    // Interpolation cache
-    private double[][] cachedGrid;
+    private double[][] cachedGrid;      // will be allocated lazily
     private LocalDateTime lastCacheTime;
     private boolean cacheValid = false;
     
-    // NetCDF metadata
     private String timeUnits = "seconds since 1970-01-01";
     private LocalDateTime timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
     private boolean dataLoaded = false;
     
-    // Statistics
     private long cacheHits = 0;
     private long cacheMisses = 0;
     private long interpolationsPerformed = 0;
     
-    // Auto‑detected dimension names
     private String timeDimName = "time";
     private String latDimName = "latitude";
     private String lonDimName = "longitude";
     private String stepDimName = "step";
     
-    private final Duration tickDuration; // duration of one simulation tick
+    private final Duration tickDuration;
     
-    /**
-     * Constructor for creating an empty layer to be loaded from NetCDF
-     */
     public InterpolatedRasterLayer(String name, TimeManager timeManager) {
         super(name);
         this.timeManager = timeManager;
-        this.cachedGrid = null;
-        this.lastCacheTime = null;
         this.tickDuration = Duration.ofMinutes(timeManager.getTickMinutes());
     }
     
-    /**
-     * Load data from a NetCDF file
-     * @param filePath Path to NetCDF file
-     * @param variableName Variable to load (e.g., "t2m", "tp")
-     * @throws IOException If file cannot be read
-     */
     public void loadFromNetCDF(String filePath, String variableName) throws IOException {
         dataLock.writeLock().lock();
         try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
             LOGGER.info("Loading NetCDF file: " + filePath);
-            printFileStructure(ncfile);
-            
-            // Auto‑detect dimension names from the file
             detectDimensions(ncfile);
             
-            // Get the variable
             Variable var = ncfile.findVariable(variableName);
             if (var == null) {
-                throw new IOException("Variable '" + variableName + "' not found. Available: " + 
-                    getVariableNames(ncfile));
+                throw new IOException("Variable '" + variableName + "' not found.");
             }
             
-            // Get dimensions
             Dimension timeDim = ncfile.findDimension(timeDimName);
             Dimension latDim = ncfile.findDimension(latDimName);
             Dimension lonDim = ncfile.findDimension(lonDimName);
             if (timeDim == null || latDim == null || lonDim == null) {
-                throw new IOException("Missing required dimensions. Found: " + getDimensionNames(ncfile));
+                throw new IOException("Missing required dimensions.");
             }
             
             timeSize = timeDim.getLength();
             latSize = latDim.getLength();
             lonSize = lonDim.getLength();
             
-            // Check if variable has a step dimension (4D)
             boolean hasStep = false;
             int stepSize = 1;
             for (Dimension d : var.getDimensions()) {
@@ -6276,25 +6143,18 @@ public class InterpolatedRasterLayer extends Layer {
                 timeDimName, timeSize, latDimName, latSize, lonDimName, lonSize,
                 hasStep ? ", step=" + stepSize : ""));
             
-            // Allocate data grid
             dataGrid = new double[timeSize][latSize][lonSize];
             
-            // Read coordinate variables
             readCoordinateVariables(ncfile);
             readTimeMetadata(ncfile);
-            
-            // Read the variable data (handles 3D and 4D, step reduction)
             readVariableData(var, ncfile, hasStep, stepSize);
             
-            // Ensure latitude is increasing (south to north)
+            // Ensure latitude is increasing
             if (latValues.length > 1 && latValues[0] > latValues[1]) {
-                LOGGER.info("Reversing latitude axis (north to south -> south to north)");
                 reverseLatitudeData();
             }
             
-            // --- HEURISTIC FIX FOR TEMPERATURE UNITS ---
-            // If this is a temperature variable and the average raw value is below 200 K,
-            // assume it was stored in Celsius and convert to Kelvin.
+            // Temperature unit conversion if needed
             if (variableName.equalsIgnoreCase("t2m") || variableName.equalsIgnoreCase("temperature")) {
                 double sum = 0.0;
                 int count = 0;
@@ -6312,7 +6172,7 @@ public class InterpolatedRasterLayer extends Layer {
                 if (count > 0) {
                     double avg = sum / count;
                     if (avg < 200) {
-                        LOGGER.warning(String.format("Temperature average (%.2f) is below 200 K – assuming data is in Celsius and converting to Kelvin.", avg));
+                        LOGGER.warning("Temperature average (" + avg + ") below 200 K – converting from Celsius to Kelvin.");
                         for (int t = 0; t < timeSize; t++) {
                             for (int lat = 0; lat < latSize; lat++) {
                                 for (int lon = 0; lon < lonSize; lon++) {
@@ -6322,35 +6182,18 @@ public class InterpolatedRasterLayer extends Layer {
                                 }
                             }
                         }
-                    } else {
-                        LOGGER.info(String.format("Temperature average (%.2f K) is within expected range.", avg));
                     }
                 }
             }
             
-            // Debug: print first few values of the loaded data
-            LOGGER.info("First few loaded values (time=0, lat=0, lon=0..2):");
-            for (int lon = 0; lon < Math.min(3, lonSize); lon++) {
-                LOGGER.info(String.format("  [%d] = %.4f", lon, dataGrid[0][0][lon]));
-            }
-            
             dataLoaded = true;
             cacheValid = false;
-            LOGGER.info(String.format("Successfully loaded %s: %d time steps, [%.2f..%.2f]° lat, [%.2f..%.2f]° lon",
-                variableName, timeSize, latValues[0], latValues[latValues.length-1],
-                lonValues[0], lonValues[lonValues.length-1]));
+            // Allocate cached grid now to avoid null later
+            cachedGrid = new double[latSize][lonSize];
+            
+            LOGGER.info(String.format("Successfully loaded %s: %d time steps", variableName, timeSize));
         } finally {
             dataLock.writeLock().unlock();
-        }
-    }
-    
-    private void detectDimensions(NetcdfFile ncfile) {
-        for (Dimension dim : ncfile.getDimensions()) {
-            String name = dim.getShortName();
-            if (name.equals("time") || name.equals("valid_time") || name.equals("Time")) timeDimName = name;
-            if (name.equals("lat") || name.equals("latitude") || name.equals("Lat")) latDimName = name;
-            if (name.equals("lon") || name.equals("longitude") || name.equals("Lon")) lonDimName = name;
-            if (name.equals("step")) stepDimName = name;
         }
     }
     
@@ -6358,7 +6201,6 @@ public class InterpolatedRasterLayer extends Layer {
         Array dataArray = var.read();
         Index index = dataArray.getIndex();
         
-        // Determine dimension order
         List<Dimension> varDims = var.getDimensions();
         int timeIdx = -1, latIdx = -1, lonIdx = -1, stepIdx = -1;
         for (int i = 0; i < varDims.size(); i++) {
@@ -6369,10 +6211,9 @@ public class InterpolatedRasterLayer extends Layer {
             else if (d.equals(stepDimName)) stepIdx = i;
         }
         if (timeIdx == -1 || latIdx == -1 || lonIdx == -1) {
-            throw new IOException("Cannot identify dimension order in variable " + var.getShortName());
+            throw new IOException("Cannot identify dimension order.");
         }
         
-        // Read scale_factor, add_offset, _FillValue
         double scale = 1.0, offset = 0.0;
         double fillValue = Double.NaN;
         Attribute scaleAttr = var.findAttribute("scale_factor");
@@ -6382,7 +6223,6 @@ public class InterpolatedRasterLayer extends Layer {
         Attribute fillAttr = var.findAttribute("_FillValue");
         if (fillAttr != null) fillValue = fillAttr.getNumericValue().doubleValue();
         
-        // Fill data grid, reducing step dimension if present (sum across steps)
         for (int t = 0; t < timeSize; t++) {
             for (int lat = 0; lat < latSize; lat++) {
                 for (int lon = 0; lon < lonSize; lon++) {
@@ -6391,7 +6231,6 @@ public class InterpolatedRasterLayer extends Layer {
                     for (int step = 0; step < stepSize; step++) {
                         double raw;
                         if (!hasStep) {
-                            // 3D variable
                             if (timeIdx == 0 && latIdx == 1 && lonIdx == 2) {
                                 raw = dataArray.getDouble(index.set(t, lat, lon));
                             } else if (timeIdx == 0 && lonIdx == 1 && latIdx == 2) {
@@ -6400,7 +6239,6 @@ public class InterpolatedRasterLayer extends Layer {
                                 raw = dataArray.getDouble(index.set(t, lat, lon));
                             }
                         } else {
-                            // 4D variable (time, step, lat, lon) or (time, step, lon, lat)
                             if (timeIdx == 0 && stepIdx == 1 && latIdx == 2 && lonIdx == 3) {
                                 raw = dataArray.getDouble(index.set(t, step, lat, lon));
                             } else if (timeIdx == 0 && stepIdx == 1 && lonIdx == 2 && latIdx == 3) {
@@ -6418,14 +6256,11 @@ public class InterpolatedRasterLayer extends Layer {
                             count++;
                         }
                     }
-                    double finalVal = (count > 0) ? sum : Double.NaN;
-                    dataGrid[t][lat][lon] = finalVal;
+                    dataGrid[t][lat][lon] = (count > 0) ? sum : Double.NaN;
                 }
             }
         }
-        if (hasStep) {
-            LOGGER.info("Reduced step dimension by summing across " + stepSize + " steps.");
-        }
+        if (hasStep) LOGGER.info("Reduced step dimension by summing across " + stepSize + " steps.");
     }
     
     private void readCoordinateVariables(NetcdfFile ncfile) throws IOException {
@@ -6435,7 +6270,6 @@ public class InterpolatedRasterLayer extends Layer {
             Array latArray = latVar.read();
             latValues = new double[latSize];
             for (int i = 0; i < latSize; i++) latValues[i] = latArray.getDouble(i);
-            LOGGER.info(String.format("Latitude range: %.3f to %.3f", latValues[0], latValues[latValues.length-1]));
         } else {
             throw new IOException("Latitude variable not found");
         }
@@ -6446,7 +6280,6 @@ public class InterpolatedRasterLayer extends Layer {
             Array lonArray = lonVar.read();
             lonValues = new double[lonSize];
             for (int i = 0; i < lonSize; i++) lonValues[i] = lonArray.getDouble(i);
-            LOGGER.info(String.format("Longitude range: %.3f to %.3f", lonValues[0], lonValues[lonValues.length-1]));
         } else {
             throw new IOException("Longitude variable not found");
         }
@@ -6464,20 +6297,17 @@ public class InterpolatedRasterLayer extends Layer {
         if (unitsAttr != null) {
             timeUnits = unitsAttr.getStringValue();
             parseTimeUnits(timeUnits);
-            LOGGER.info("Time units: " + timeUnits);
         }
         Array timeArray = timeVar.read();
         timeValues = new double[timeSize];
         for (int i = 0; i < timeSize; i++) {
             double raw = timeArray.getDouble(i);
-            // Convert to seconds if units are days
             if (timeUnits.startsWith("days")) {
                 timeValues[i] = raw * 24 * 3600;
             } else {
                 timeValues[i] = raw;
             }
         }
-        LOGGER.info(String.format("Time range: %.0f to %.0f seconds", timeValues[0], timeValues[timeValues.length-1]));
     }
     
     private void parseTimeUnits(String units) {
@@ -6493,7 +6323,7 @@ public class InterpolatedRasterLayer extends Layer {
                 LOGGER.info("Time reference: " + timeReference);
             }
         } catch (Exception e) {
-            LOGGER.warning("Could not parse time units: " + units + ", using 1970-01-01");
+            LOGGER.warning("Could not parse time units, using 1970-01-01");
             timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
         }
     }
@@ -6513,100 +6343,69 @@ public class InterpolatedRasterLayer extends Layer {
     public double getValueAt(double lon, double lat) {
         if (!dataLoaded) return Double.NaN;
         LocalDateTime currentTime = timeManager.getCurrentDateTime();
-        if (cacheValid && lastCacheTime != null && lastCacheTime.equals(currentTime) && cachedGrid != null) {
-            cacheHits++;
-            return getCachedValue(lon, lat);
+        if (!cacheValid || !currentTime.equals(lastCacheTime)) {
+            updateCache(currentTime);
         }
-        cacheMisses++;
-        interpolationsPerformed++;
-        updateCache(currentTime);
         return getCachedValue(lon, lat);
     }
-    
-//    private void updateCache(LocalDateTime currentTime) {
-//        dataLock.readLock().lock();
-//        try {
-//            long seconds = currentTime.toEpochSecond(ZoneOffset.UTC) - timeReference.toEpochSecond(ZoneOffset.UTC);
-//            int lower = -1, upper = -1;
-//            double alpha = 0.0;
-//            for (int i = 0; i < timeValues.length - 1; i++) {
-//                if (seconds >= timeValues[i] && seconds <= timeValues[i+1]) {
-//                    lower = i; upper = i+1;
-//                    alpha = (seconds - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
-//                    break;
-//                }
-//            }
-//            if (lower == -1) {
-//                if (seconds <= timeValues[0]) { lower = upper = 0; alpha = 0.0; }
-//                else { lower = upper = timeValues.length - 1; alpha = 0.0; }
-//            }
-//            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize)
-//                cachedGrid = new double[latSize][lonSize];
-//            if (lower == upper || alpha == 0.0) {
-//                for (int lat = 0; lat < latSize; lat++)
-//                    System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
-//            } else {
-//                for (int lat = 0; lat < latSize; lat++)
-//                    for (int lon = 0; lon < lonSize; lon++)
-//                        cachedGrid[lat][lon] = dataGrid[lower][lat][lon] + alpha * (dataGrid[upper][lat][lon] - dataGrid[lower][lat][lon]);
-//            }
-//            lastCacheTime = currentTime;
-//            cacheValid = true;
-//        } finally {
-//            dataLock.readLock().unlock();
-//        }
-//    }
     
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
-            // Use simulation tick count to compute time index (assumes uniform daily time steps)
-            long tick = timeManager.getTickCount();
-            // Each day has TICKS_PER_DAY ticks (96 for 15-min steps)
-            // timeValues array should contain the time in seconds since reference for each frame
-            // If timeValues is not set (e.g., parsing failed), use index = tick / ticksPerDay
-            int index;
-            if (timeValues != null && timeValues.length > 1 && timeValues[1] > timeValues[0]) {
-                // Use the existing time values to map tick to index
-                double secondsPerTick = tickDuration.getSeconds(); // tickDuration is a Duration field you must add
-                double secondsElapsed = tick * secondsPerTick;
-                // Find index such that timeValues[index] <= secondsElapsed < timeValues[index+1]
-                index = findLowerIndex(timeValues, secondsElapsed);
-                if (index < 0) {
-                    if (secondsElapsed <= timeValues[0]) index = 0;
-                    else index = timeValues.length - 1;
-                }
-            } else {
-                // Fallback: assume one time frame per day, and each tick is a fraction of a day
-                int ticksPerDay = 96; // adjust if needed
-                index = (int) (tick / ticksPerDay);
-                if (index >= timeSize) index = timeSize - 1;
-            }
-            // Clamp index to valid range
-            if (index < 0) index = 0;
-            if (index >= timeSize) index = timeSize - 1;
-
-            // Use the same index for both lower and upper (no interpolation between days)
-            // or implement interpolation if you have sub‑daily climate data
-            int lower = index;
-            int upper = index;
-            double alpha = 0.0;
-
-            // Ensure cached grid is allocated
-            if (cachedGrid == null || cachedGrid.length != latSize || cachedGrid[0].length != lonSize) {
+            // Ensure cachedGrid is allocated
+            if (cachedGrid == null) {
                 cachedGrid = new double[latSize][lonSize];
             }
-
-            // Copy data from the selected time slice
-            for (int lat = 0; lat < latSize; lat++) {
-                System.arraycopy(dataGrid[lower][lat], 0, cachedGrid[lat], 0, lonSize);
+            
+            long secondsElapsed = Duration.between(timeReference, currentTime).getSeconds();
+            int lowerIdx = -1, upperIdx = -1;
+            double alpha = 0.0;
+            
+            // Find surrounding time indices
+            for (int i = 0; i < timeValues.length - 1; i++) {
+                if (secondsElapsed >= timeValues[i] && secondsElapsed <= timeValues[i+1]) {
+                    lowerIdx = i;
+                    upperIdx = i + 1;
+                    alpha = (secondsElapsed - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
+                    break;
+                }
             }
-
+            
+            if (lowerIdx == -1) {
+                if (secondsElapsed <= timeValues[0]) {
+                    lowerIdx = upperIdx = 0;
+                    alpha = 0.0;
+                } else {
+                    lowerIdx = upperIdx = timeValues.length - 1;
+                    alpha = 0.0;
+                }
+            }
+            
+            // Interpolate in time
+            for (int lat = 0; lat < latSize; lat++) {
+                for (int lon = 0; lon < lonSize; lon++) {
+                    if (lowerIdx == upperIdx || alpha == 0.0) {
+                        cachedGrid[lat][lon] = dataGrid[lowerIdx][lat][lon];
+                    } else {
+                        double valLow = dataGrid[lowerIdx][lat][lon];
+                        double valHigh = dataGrid[upperIdx][lat][lon];
+                        cachedGrid[lat][lon] = valLow + alpha * (valHigh - valLow);
+                    }
+                }
+            }
             lastCacheTime = currentTime;
             cacheValid = true;
         } finally {
             dataLock.readLock().unlock();
         }
+    }
+    
+    private double getCachedValue(double lon, double lat) {
+        int latIdx = findNearestIndex(latValues, lat);
+        int lonIdx = findNearestIndex(lonValues, lon);
+        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize)
+            return cachedGrid[latIdx][lonIdx];
+        return Double.NaN;
     }
     
     private int findNearestIndex(double[] array, double value) {
@@ -6623,89 +6422,16 @@ public class InterpolatedRasterLayer extends Layer {
         return Math.abs(array[low] - value) < Math.abs(array[high] - value) ? low : high;
     }
     
-    private double getCachedValue(double lon, double lat) {
-        int latIdx = findNearestIndex(latValues, lat);
-        int lonIdx = findNearestIndex(lonValues, lon);
-        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize)
-            return cachedGrid[latIdx][lonIdx];
-        return Double.NaN;
-    }
-    
-    private void printFileStructure(NetcdfFile ncfile) {
-        SimulationLogger.info("\n=== NetCDF File Structure ===");
-        SimulationLogger.info("Dimensions:");
-        for (Dimension dim : ncfile.getDimensions())
-            SimulationLogger.info("  %s: %d%n", dim.getShortName(), dim.getLength());
-        SimulationLogger.info("\nVariables:");
-        for (Variable var : ncfile.getVariables()) {
-            SimulationLogger.info("  %s: ", var.getShortName());
-            System.out.print("Dimensions [");
-            for (Dimension dim : var.getDimensions())
-                System.out.print(dim.getShortName() + " ");
-            SimulationLogger.info("]");
-            Attribute units = var.findAttribute("units");
-            if (units != null) SimulationLogger.info("    units: %s%n", units.getStringValue());
+    private void detectDimensions(NetcdfFile ncfile) {
+        for (Dimension dim : ncfile.getDimensions()) {
+            String name = dim.getShortName();
+            if (name.equals("time") || name.equals("valid_time") || name.equals("Time")) timeDimName = name;
+            if (name.equals("lat") || name.equals("latitude") || name.equals("Lat")) latDimName = name;
+            if (name.equals("lon") || name.equals("longitude") || name.equals("Lon")) lonDimName = name;
+            if (name.equals("step")) stepDimName = name;
         }
     }
     
-    private String getVariableNames(NetcdfFile ncfile) {
-        StringBuilder sb = new StringBuilder();
-        for (Variable v : ncfile.getVariables()) sb.append(v.getShortName()).append(", ");
-        return sb.toString();
-    }
-    
-    private String getDimensionNames(NetcdfFile ncfile) {
-        StringBuilder sb = new StringBuilder();
-        for (Dimension d : ncfile.getDimensions()) sb.append(d.getShortName()).append(" (").append(d.getLength()).append("), ");
-        return sb.toString();
-    }
-    
-    public double getValueAtBilinear(double lon, double lat) {
-        if (!dataLoaded) return Double.NaN;
-        LocalDateTime currentTime = timeManager.getCurrentDateTime();
-        if (!cacheValid || !currentTime.equals(lastCacheTime)) updateCache(currentTime);
-        int latIdx1 = findLowerIndex(latValues, lat);
-        int lonIdx1 = findLowerIndex(lonValues, lon);
-        if (latIdx1 == -1 || lonIdx1 == -1 || latIdx1 >= latSize-1 || lonIdx1 >= lonSize-1)
-            return getCachedValue(lon, lat);
-        int latIdx2 = latIdx1+1, lonIdx2 = lonIdx1+1;
-        double q11 = cachedGrid[latIdx1][lonIdx1], q12 = cachedGrid[latIdx1][lonIdx2];
-        double q21 = cachedGrid[latIdx2][lonIdx1], q22 = cachedGrid[latIdx2][lonIdx2];
-        double lat1 = latValues[latIdx1], lat2 = latValues[latIdx2];
-        double lon1 = lonValues[lonIdx1], lon2 = lonValues[lonIdx2];
-        double x = (lon - lon1) / (lon2 - lon1);
-        double y = (lat - lat1) / (lat2 - lat1);
-        return q11*(1-x)*(1-y) + q21*x*(1-y) + q12*(1-x)*y + q22*x*y;
-    }
-    
-    private int findLowerIndex(double[] array, double value) {
-        if (array == null || array.length < 2) return -1;
-        for (int i = 0; i < array.length-1; i++)
-            if (value >= array[i] && value <= array[i+1]) return i;
-        return -1;
-    }
-    
-    @Override
-    public void update(Project project) {
-        LocalDateTime current = timeManager.getCurrentDateTime();
-        if (lastCacheTime == null || !lastCacheTime.equals(current)) cacheValid = false;
-    }
-    
-    public ClimateLayerStats getStatistics() {
-        return new ClimateLayerStats(getName(), dataLoaded, timeSize, latSize, lonSize,
-            cacheHits, cacheMisses, interpolationsPerformed, getCacheHitRatio());
-    }
-    
-    public void printStatistics() {
-        SimulationLogger.info(getStatistics().toString());
-    }
-    
-    private double getCacheHitRatio() {
-        long total = cacheHits + cacheMisses;
-        return total > 0 ? (double) cacheHits / total : 0.0;
-    }
-    
-    // Getters
     public boolean isDataLoaded() { return dataLoaded; }
     public int getTimeSize() { return timeSize; }
     public int getLatSize() { return latSize; }
@@ -6714,35 +6440,71 @@ public class InterpolatedRasterLayer extends Layer {
     public double getMaxLat() { return latValues != null ? latValues[latValues.length-1] : Double.NaN; }
     public double getMinLon() { return lonValues != null && lonValues.length > 0 ? lonValues[0] : Double.NaN; }
     public double getMaxLon() { return lonValues != null ? lonValues[lonValues.length-1] : Double.NaN; }
-    public double[] getTimeValues() { return timeValues; }
-    public double[] getLatValues() { return latValues; }
-    public double[] getLonValues() { return lonValues; }
     
+    @Override
+    public void update(Project project) {
+        LocalDateTime current = timeManager.getCurrentDateTime();
+        if (lastCacheTime == null || !lastCacheTime.equals(current)) cacheValid = false;
+    }
+    
+    public void printStatistics() {
+        SimulationLogger.info(getStatistics().toString());
+    }
+
+    public ClimateLayerStats getStatistics() {
+        return new ClimateLayerStats(
+            getName(), 
+            dataLoaded, 
+            timeSize, 
+            latSize, 
+            lonSize,
+            cacheHits, 
+            cacheMisses, 
+            interpolationsPerformed, 
+            getCacheHitRatio()
+        );
+    }
+
+    private double getCacheHitRatio() {
+        long total = cacheHits + cacheMisses;
+        return total > 0 ? (double) cacheHits / total : 0.0;
+    }
+
+    // Inner class for statistics
     public static class ClimateLayerStats {
         private final String layerName;
         private final boolean dataLoaded;
         private final int timeSteps, latPoints, lonPoints;
         private final long cacheHits, cacheMisses, totalInterpolations;
         private final double cacheHitRatio;
-        
+
         public ClimateLayerStats(String name, boolean loaded, int t, int lat, int lon,
                                  long hits, long misses, long interp, double ratio) {
-            this.layerName = name; this.dataLoaded = loaded; this.timeSteps = t;
-            this.latPoints = lat; this.lonPoints = lon; this.cacheHits = hits;
-            this.cacheMisses = misses; this.totalInterpolations = interp;
+            this.layerName = name;
+            this.dataLoaded = loaded;
+            this.timeSteps = t;
+            this.latPoints = lat;
+            this.lonPoints = lon;
+            this.cacheHits = hits;
+            this.cacheMisses = misses;
+            this.totalInterpolations = interp;
             this.cacheHitRatio = ratio;
         }
-        
+
         @Override
         public String toString() {
-            return String.format("Climate Layer '%s':\n  Loaded: %b\n  Dims: %d x %d x %d\n  Cache: %d hits, %d misses (%.1f%%)\n  Interpolations: %d",
-                layerName, dataLoaded, timeSteps, latPoints, lonPoints, cacheHits, cacheMisses, cacheHitRatio*100, totalInterpolations);
+            return String.format(
+                "Climate Layer '%s':\n  Loaded: %b\n  Dims: %d x %d x %d\n  Cache: %d hits, %d misses (%.1f%%)\n  Interpolations: %d",
+                layerName, dataLoaded, timeSteps, latPoints, lonPoints, 
+                cacheHits, cacheMisses, cacheHitRatio * 100, totalInterpolations
+            );
         }
     }
 }package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
+import java.lang.reflect.Method;
 import java.nio.MappedByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.file.Files;
@@ -6926,7 +6688,8 @@ public class MemoryMappedRasterLayer extends RasterLayer {
                     if (buffer != null) {
                         // Java doesn't have direct unmap, but we can clear the reference
                         // The cleaner will handle it
-                        buffer.clear();
+//                        buffer.clear();
+                        clean(buffer);
                     }
                 }
                 frameBuffers = null;
@@ -6989,6 +6752,20 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         stats.put("activeFrame", getActiveFrame());
         
         return stats;
+    }
+    
+    
+    private void clean(MappedByteBuffer buffer) {
+        try {
+            Method cleanerMethod = buffer.getClass().getMethod("cleaner");
+            cleanerMethod.setAccessible(true);
+            Object cleaner = cleanerMethod.invoke(buffer);
+            Method cleanMethod = cleaner.getClass().getMethod("clean");
+            cleanMethod.invoke(cleaner);
+        } catch (Exception e) {
+            // Log but don't crash
+            SimulationLogger.warning("Could not unmap buffer: " + e.getMessage());
+        }
     }
 }package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;

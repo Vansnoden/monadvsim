@@ -401,3 +401,10 @@ If you use this framework in a publication, cite:
 renaming variable:
 
 ```cdo chname,2t,t2m,tp,tp climate_t2m_tp_2020.nc climate_t2m_tp_2020.nc```
+
+
+#### Downscaling large rasters before processing
+
+```
+gdal_translate -outsize 10% 10% /mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/somali_building.tif /mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/small_somali_building.tif
+```

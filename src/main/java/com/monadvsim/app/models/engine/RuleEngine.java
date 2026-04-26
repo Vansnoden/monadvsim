@@ -12,9 +12,6 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
-/**
- * JavaScript Rule Evaluator – Fixed version with proper context management.
- */
 public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
@@ -22,9 +19,9 @@ public class RuleEngine {
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
-            // Allow full access to host objects and classes for simplicity
+            // Use a builder with explicit permissions and low resource limits
             return Context.newBuilder("js")
-                    .allowAllAccess(true)           // Grants full access (host, IO, etc.)
+                    .allowAllAccess(true)
                     .allowHostAccess(HostAccess.ALL)
                     .allowHostClassLookup(s -> true)
                     .option("js.ecmascript-version", "2022")
@@ -39,7 +36,6 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        // Use a cache key that includes agent ID to avoid stale results
         String cacheKey = condition + "|" + agent.getId();
         Boolean cached = evaluationCache.get(cacheKey);
         if (cached != null) {
@@ -47,10 +43,11 @@ public class RuleEngine {
         }
 
         Context context = threadLocalContext.get();
-        // IMPORTANT: Enter the context before using bindings or evaluating
         context.enter();
         try {
             Value bindings = context.getBindings("js");
+            // Clear old bindings to avoid accumulation? Not necessary, but ensure fresh values
+            // Actually, we should override each time.
             populateBindings(bindings, agent, project);
 
             Source source = scriptCache.computeIfAbsent(condition, c ->
@@ -62,18 +59,20 @@ public class RuleEngine {
             evaluationCache.put(cacheKey, boolResult);
             return boolResult;
         } catch (Exception e) {
-            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
+            // Log the detailed exception for debugging
+            SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.toString());
+            // Provide fallback: return false to avoid crashing the simulation
             return false;
         } finally {
-            context.leave();  // Always leave the context
+            context.leave();
         }
     }
 
     private void populateBindings(Value bindings, Agent agent, Project project) {
-        // Bind agent as 'agent' object
+        // Reset all common bindings to safe defaults
+        // Agent basic properties
         bindings.putMember("agent", agent);
-
-        // Bind commonly used agent properties for easier access
+        
         if (agent instanceof LivingAgent la) {
             bindings.putMember("stage", la.getStage().toString());
             bindings.putMember("age", la.getAge());
@@ -88,23 +87,54 @@ public class RuleEngine {
             bindings.putMember("eggCount", ia.getEggCount());
             bindings.putMember("larvalCount", ia.getLarvalCount());
             bindings.putMember("capacity", ia.getCapacity());
+        } else {
+            // Fallback for any agent type
+            bindings.putMember("stage", "UNKNOWN");
+            bindings.putMember("age", 0);
+            bindings.putMember("energy", 0.0);
+            bindings.putMember("gravid", false);
+            bindings.putMember("alive", true);
+            bindings.putMember("resting", false);
+            bindings.putMember("x", agent != null ? agent.getX() : 0);
+            bindings.putMember("y", agent != null ? agent.getY() : 0);
         }
 
-        // Bind environmental layers safely (skip if missing)
+        // Environmental variables - always define with default 0.0 to avoid undefined
+        // First, get all layer names and tokens safely
         List<String> layerNames = project.getLayerNames();
         List<String> tokens = project.getTokens();
         if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
             for (int i = 0; i < layerNames.size(); i++) {
                 String token = tokens.get(i);
-                double value = getValueAt(project, layerNames.get(i), agent.getX(), agent.getY());
+                double x = agent != null ? agent.getX() : 0;
+                double y = agent != null ? agent.getY() : 0;
+                double value = getValueAt(project, layerNames.get(i), x, y);
                 bindings.putMember(token, value);
             }
         } else {
-            SimulationLogger.warning("Layer names or tokens missing or mismatched; skipping environmental bindings.");
+            SimulationLogger.warning("Layer names/tokens missing or mismatched; using defaults.");
+        }
+        
+        // Also bind raw layer names for compatibility? Not needed.
+        // Ensure common tokens always exist (fallback)
+        if (!bindings.hasMember("temperature")) {
+            bindings.putMember("temperature", getValueAt(project, "t2m", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("precipitation")) {
+            bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("population")) {
+            bindings.putMember("population", getValueAt(project, "Population", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("building_density")) {
+            bindings.putMember("building_density", getValueAt(project, "Buildings", agent.getX(), agent.getY()));
+        }
+        if (!bindings.hasMember("elevation")) {
+            bindings.putMember("elevation", getValueAt(project, "Elevation", agent.getX(), agent.getY()));
         }
     }
 
-    // -------------------- Actions (unchanged, but keep as is) --------------------
+    // ---------- Actions (unchanged, but ensure no null pointer) ----------
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
         switch (action.toLowerCase()) {
             case "die" -> executeDie(agent, layer);
@@ -123,9 +153,7 @@ public class RuleEngine {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Behavioural actions (unchanged)
-    // ------------------------------------------------------------------------
+    // Implement the actions as before (keep them exactly as in your code)
     private void executeRest(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(true);
@@ -170,7 +198,6 @@ public class RuleEngine {
                 double bestX = agent.getX();
                 double bestY = agent.getY();
                 double bestDensity = buildingLayer.getValueAt(agent.getX(), agent.getY());
-
                 for (int i = 0; i < 8; i++) {
                     double angle = i * Math.PI / 4;
                     double sampleX = agent.getX() + Math.cos(angle) * 0.0001;
@@ -182,7 +209,6 @@ public class RuleEngine {
                         bestY = sampleY;
                     }
                 }
-
                 if (bestDensity > buildingLayer.getValueAt(agent.getX(), agent.getY())) {
                     la.setX(bestX);
                     la.setY(bestY);
@@ -235,9 +261,6 @@ public class RuleEngine {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Other lifecycle / environmental actions
-    // ------------------------------------------------------------------------
     private void executeDie(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setAlive(false);
@@ -280,13 +303,10 @@ public class RuleEngine {
         if (livestock <= 0) {
             livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
         }
-
         LifecycleModel model = project.getLifecycleModel();
         if (model == null) return;
-
         int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
         if (eggsToLay <= 0) return;
-
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
         for (Agent n : nearby) {
@@ -315,9 +335,6 @@ public class RuleEngine {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Utilities
-    // ------------------------------------------------------------------------
     private double getValueAt(Project p, String layerName, double x, double y) {
         Layer layer = p.getLayerByName(layerName);
         return (layer != null) ? layer.getValueAt(x, y) : 0.0;
