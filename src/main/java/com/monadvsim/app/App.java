@@ -282,13 +282,14 @@ public class App {
         target.adultMortC = source.adult_mort_c;
     }
 
+    
     private static void seedInitialPopulation(Project project,
-                                              SimulationConfig.SeedingConfig seeding,
-                                              RasterLayer buildings,
-                                              RasterLayer population,
-                                              SpatialRegistry spatialRegistry,
-                                              Rectangle2D worldBounds,
-                                              Geometry studyAreaGeometry) {  // NEW: added geometry parameter
+                                          SimulationConfig.SeedingConfig seeding,
+                                          RasterLayer buildings,
+                                          RasterLayer population,
+                                          SpatialRegistry spatialRegistry,
+                                          Rectangle2D worldBounds,
+                                          Geometry studyAreaGeometry) {
         Random rand = new Random();
 
         AgentLayer habitatLayer = project.getAgentLayers().stream()
@@ -300,12 +301,105 @@ public class App {
             return;
         }
 
-        // Create habitat calculator with study area geometry (if provided)
+        // ===== UNIFORM SEEDING (memory‑efficient rejection sampling) =====
+        if (seeding.seedAcrossFullStudySite) {
+            SimulationLogger.info("Seeding uniformly across the whole study area (seedAcrossFullStudySite = true)");
+
+            // Point generator that returns random points inside the study area (rejection sampling)
+            java.util.function.Supplier<double[]> pointGenerator;
+            if (studyAreaGeometry != null && !studyAreaGeometry.isEmpty()) {
+                GeometryFactory geomFactory = new GeometryFactory();
+                pointGenerator = () -> {
+                    double x, y;
+                    do {
+                        x = worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth();
+                        y = worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight();
+                    } while (!studyAreaGeometry.contains(geomFactory.createPoint(new Coordinate(x, y))));
+                    return new double[]{x, y};
+                };
+                SimulationLogger.info("Using polygon‑constrained uniform points (rejection sampling)");
+            } else {
+                // No polygon – just the bounding box
+                pointGenerator = () -> new double[]{
+                        worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth(),
+                        worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight()
+                };
+                SimulationLogger.info("Using bounding‑box uniform points (no polygon)");
+            }
+
+            // Seed water tanks
+            SimulationLogger.info("Seeding water tanks uniformly...");
+            int tanksPlaced = 0;
+            for (int i = 0; i < seeding.tanksToSeed; i++) {
+                double[] point = pointGenerator.get();
+                double rx = point[0], ry = point[1];
+                InertAgent tank = new InertAgent(rx, ry);
+                tank.setWaterVolume(30 + rand.nextDouble() * 70);
+                tank.setLarvalCount(rand.nextInt(30) + 10);
+                tank.setEggCount(rand.nextInt(80) + 20);
+                tank.setCapacity(300 + rand.nextDouble() * 200);
+                habitatLayer.addAgent(tank);
+                spatialRegistry.registerAgent(tank);
+                tanksPlaced++;
+                if (tanksPlaced % 100 == 0) {
+                    SimulationLogger.info("  Placed %d/%d water tanks", tanksPlaced, seeding.tanksToSeed);
+                }
+            }
+            SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
+
+            // Seed mosquitoes
+            SimulationLogger.info("Seeding mosquitoes uniformly...");
+            int mosquitoesPlaced = 0;
+            for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
+                double[] point = pointGenerator.get();
+                double rx = point[0], ry = point[1];
+                LivingAgent mosquito = new LivingAgent(rx, ry);
+                double r = rand.nextDouble();
+                LifecycleStage stage = r < 0.6 ? LifecycleStage.ADULT : (r < 0.85 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
+                mosquito.setStage(stage);
+                switch (stage) {
+                    case ADULT:
+                        mosquito.setAge(0);
+                        mosquito.setGravid(rand.nextDouble() < 0.2);
+                        mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5);
+                        if (rand.nextDouble() < 0.3) {
+                            mosquito.setResting(true);
+                            mosquito.setRestingDuration(rand.nextInt(4));
+                        }
+                        break;
+                    case LARVA:
+                        mosquito.setAge(rand.nextInt(10 * 24 * 4));
+                        mosquito.setEnergy(0.6 + rand.nextDouble() * 0.3);
+                        break;
+                    case PUPA:
+                        mosquito.setAge(rand.nextInt(3 * 24 * 4));
+                        mosquito.setEnergy(0.5 + rand.nextDouble() * 0.3);
+                        break;
+                    default:
+                        break;
+                }
+                mosquitoLayer.addAgent(mosquito);
+                spatialRegistry.registerAgent(mosquito);
+                mosquitoesPlaced++;
+                if (mosquitoesPlaced % 500 == 0) {
+                    SimulationLogger.info("  Placed %d/%d mosquitoes", mosquitoesPlaced, seeding.mosquitoesToSeed);
+                }
+            }
+            SimulationLogger.info("Seeded %d mosquitoes", mosquitoesPlaced);
+            SimulationLogger.info("\n=== Seeding Summary (Uniform) ===");
+            SimulationLogger.info("Water tanks: %d (target: %d)", tanksPlaced, seeding.tanksToSeed);
+            SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, seeding.mosquitoesToSeed);
+            return;  // exit early – uniform seeding done
+        }
+
+        // ===== ORIGINAL WEIGHTED HABITAT SEEDING (seedAcrossFullStudySite = false) =====
+        SimulationLogger.info("Seeding using weighted habitat selection (seedAcrossFullStudySite = false)");
+
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
                 seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
 
-        // Seed water tanks
-        SimulationLogger.info("\nSeeding water tanks...");
+        // Seed water tanks (weighted)
+        SimulationLogger.info("Seeding water tanks (weighted)...");
         int tanksPlaced = 0;
         for (int i = 0; i < seeding.tanksToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -322,14 +416,14 @@ public class App {
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
                 if (tanksPlaced % 100 == 0)
-                    SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)",
                             tanksPlaced, seeding.tanksToSeed, buildingDensity, popDensity);
             }
         }
-        SimulationLogger.info("Seeded %d water tanks%n", tanksPlaced);
+        SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
 
-        // Seed mosquitoes
-        SimulationLogger.info("\nSeeding mosquitoes...");
+        // Seed mosquitoes (weighted)
+        SimulationLogger.info("Seeding mosquitoes (weighted)...");
         int mosquitoesPlaced = 0;
         for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
             double[] point = habitatCalc.getRandomWeightedPoint();
@@ -364,16 +458,18 @@ public class App {
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
                 if (mosquitoesPlaced % 500 == 0)
-                    SimulationLogger.info("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)%n",
+                    SimulationLogger.info("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)",
                             mosquitoesPlaced, seeding.mosquitoesToSeed, buildingDensity, popDensity);
             }
         }
-        SimulationLogger.info("Seeded %d mosquitoes%n", mosquitoesPlaced);
-        SimulationLogger.info("\n=== Seeding Summary ===");
-        SimulationLogger.info("Water tanks: %d (target: %d)%n", tanksPlaced, seeding.tanksToSeed);
-        SimulationLogger.info("Mosquitoes: %d (target: %d)%n", mosquitoesPlaced, seeding.mosquitoesToSeed);
+        SimulationLogger.info("Seeded %d mosquitoes", mosquitoesPlaced);
+        SimulationLogger.info("\n=== Seeding Summary (Weighted) ===");
+        SimulationLogger.info("Water tanks: %d (target: %d)", tanksPlaced, seeding.tanksToSeed);
+        SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, seeding.mosquitoesToSeed);
     }
-
+    
+    
+    
     // ------------------------------------------------------------------------
     // The rest of the helper methods (unchanged)
     // ------------------------------------------------------------------------

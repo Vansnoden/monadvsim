@@ -14,12 +14,13 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 /**
  * Large Raster Handler using memory‑mapped files.
- * Avoids heap allocation of the full 3D array.
+ * Avoids heap allocation; fails fast if mapping is impossible.
  */
 public class MemoryMappedRasterLayer extends RasterLayer {
 
     private static final int DOUBLE_BYTES = Double.BYTES;
-    private static final long MEMORY_THRESHOLD = 100 * 1024 * 1024; // 100 MB
+    private static final long MEMORY_THRESHOLD = 100 * 1024 * 1024;        // 100 MB
+    private static final long MAX_MAPPABLE_BYTES = 8L * 1024 * 1024 * 1024; // 8 GB
 
     private File dataFile;
     private MappedByteBuffer[] frameBuffers;
@@ -27,16 +28,14 @@ public class MemoryMappedRasterLayer extends RasterLayer {
     private boolean memoryMapped = false;
     private final ReentrantReadWriteLock fileLock = new ReentrantReadWriteLock();
 
-    // Local copy of dimensions (superclass fields are also available)
     private int localWidth, localHeight, localFrames;
 
     public MemoryMappedRasterLayer(String name, int width, int height, int frames) {
-        super(name);   // now valid – uses the name‑only constructor
+        super(name);
         this.localWidth = width;
         this.localHeight = height;
         this.localFrames = frames;
 
-        // Set dimensions in superclass (so getWidth() etc. work)
         setWidth(width);
         setHeight(height);
         setFrames(frames);
@@ -45,7 +44,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         if (estimatedSize > MEMORY_THRESHOLD) {
             enableMemoryMapping();
         } else {
-            // Fallback: allocate in‑memory array via super.initialize()
+            // Small raster – safe to use heap
             super.initialize(width, height, frames);
             memoryMapped = false;
         }
@@ -53,10 +52,17 @@ public class MemoryMappedRasterLayer extends RasterLayer {
 
     private void enableMemoryMapping() {
         try {
+            long fileSize = (long) localWidth * localHeight * localFrames * DOUBLE_BYTES;
+            if (fileSize > MAX_MAPPABLE_BYTES) {
+                throw new IOException(String.format(
+                    "Raster %s is too large to memory‑map (%.1f GB). Maximum allowed is %.1f GB.",
+                    getName(), fileSize / (1024.0 * 1024.0 * 1024.0),
+                    MAX_MAPPABLE_BYTES / (1024.0 * 1024.0 * 1024.0)));
+            }
+
             dataFile = File.createTempFile("raster_" + getName(), ".dat");
             dataFile.deleteOnExit();
 
-            long fileSize = (long) localWidth * localHeight * localFrames * DOUBLE_BYTES;
             fileChannel = FileChannel.open(dataFile.toPath(),
                     StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
 
@@ -72,12 +78,34 @@ public class MemoryMappedRasterLayer extends RasterLayer {
             SimulationLogger.info("✓ Memory‑mapped raster: %s [%d MB]",
                     getName(), fileSize / (1024 * 1024));
         } catch (IOException e) {
-            SimulationLogger.severe("Failed to enable memory mapping for %s: %s", getName(), e.getMessage());
-            memoryMapped = false;
-            super.initialize(localWidth, localHeight, localFrames);
+            SimulationLogger.severe("Failed to memory‑map %s: %s", getName(), e.getMessage());
+            SimulationLogger.severe("Consider downscaling the raster further or increasing MAX_MAPPABLE_BYTES.");
+            // Do NOT fall back to heap allocation – that will cause OOM.
+            throw new RuntimeException("Cannot load raster " + getName() + " – memory mapping failed.", e);
         }
     }
 
+//    @Override
+//    public double getValueAt(double lon, double lat) {
+//        if (!memoryMapped) return super.getValueAt(lon, lat);
+//        if (getMaxLon() == getMinLon() || getMaxLat() == getMinLat()) return 0.0;
+//
+//        double xFrac = (lon - getMinLon()) / (getMaxLon() - getMinLon());
+//        double yFrac = (lat - getMinLat()) / (getMaxLat() - getMinLat());
+//
+//        int x = (int) (xFrac * (localWidth - 1));
+//        int y = (int) (yFrac * (localHeight - 1));
+//
+//        if (x < 0 || x >= localWidth || y < 0 || y >= localHeight) return 0.0;
+//
+//        fileLock.readLock().lock();
+//        try {
+//            int index = y * localWidth + x;
+//            return frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+//        } finally {
+//            fileLock.readLock().unlock();
+//        }
+//    }
     @Override
     public double getValueAt(double lon, double lat) {
         if (!memoryMapped) return super.getValueAt(lon, lat);
@@ -95,7 +123,9 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         fileLock.readLock().lock();
         try {
             int index = y * localWidth + x;
-            return frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+            double value = frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+            // Treat NaN as 0.0
+            return Double.isNaN(value) ? 0.0 : value;
         } finally {
             fileLock.readLock().unlock();
         }
@@ -129,7 +159,7 @@ public class MemoryMappedRasterLayer extends RasterLayer {
 
     @Override
     public void initialize(int width, int height, int frames) {
-        // Called only if we fall back to in‑memory storage.
+        // Not used for memory‑mapped case; kept for heap fallback (never called).
         if (!memoryMapped) {
             super.initialize(width, height, frames);
         }

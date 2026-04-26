@@ -171,218 +171,154 @@ public class LifecycleModel {
         }
     }
 }package com.monadvsim.app.models.engine;
-import com.monadvsim.app.models.utils.SimulationLogger;
-
 
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.GridCell;
+import com.monadvsim.app.models.utils.SimulationLogger;
+
 import java.awt.geom.Rectangle2D;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Queue;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.StampedLock;
 
-
 /**
- * Spatial Indexing System
- *
- * Grid-based spatial partitioning for efficient agent queries
- *
- * Manages agent positions with cell-based spatial indexing
- *
- * Tracks agent movements, births, and deaths incrementally
- *
- * Provides radius-based nearby agent queries with caching
- *
- * Thread-safe with StampedLock for concurrent access
- *
- * Includes statistics tracking and consistency validation
- * 
- * 
- * @author void
+ * Spatial Indexing System – Lazy cell creation.
+ * No pre‑allocation of grid cells; cells are created on first use.
  */
-
-
 public class SpatialRegistry {
-    
-    private final Map<GridCell, List<Agent>> spatialGrid;
+
+    // Maps a GridCell (key) to a thread‑safe list of agents in that cell
+    private final ConcurrentHashMap<GridCell, List<Agent>> spatialGrid = new ConcurrentHashMap<>();
     private final Rectangle2D worldBounds;
     private final double cellSize;
     private final int gridWidth;
     private final int gridHeight;
-    // Agent tracking with versioning
+
+    // Agent tracking
     private final Map<String, AgentRecord> agentRecords = new ConcurrentHashMap<>();
     private final Map<String, GridCell> agentPositions = new ConcurrentHashMap<>();
-    
-    // Change tracking
+
+    // Change tracking (optional, kept for compatibility)
     private final Queue<SpatialChange> pendingChanges = new ConcurrentLinkedQueue<>();
     private final AtomicInteger changeCount = new AtomicInteger(0);
     private final StampedLock updateLock = new StampedLock();
-    
+
     // Statistics
     private final AtomicInteger totalInserts = new AtomicInteger(0);
     private final AtomicInteger totalRemoves = new AtomicInteger(0);
     private final AtomicInteger totalUpdates = new AtomicInteger(0);
     private final AtomicInteger queryCount = new AtomicInteger(0);
-    
-    // Optimization: cache for frequently accessed cells
+
+    // Result cache
     private final Map<GridCell, CellCacheEntry> cellCache = new ConcurrentHashMap<>();
     private final int maxCacheSize = 1000;
-    
-    
+
     public SpatialRegistry(Rectangle2D worldBounds, double cellSize) {
         this.worldBounds = worldBounds;
         this.cellSize = cellSize;
-        
         this.gridWidth = (int) Math.ceil(worldBounds.getWidth() / cellSize);
         this.gridHeight = (int) Math.ceil(worldBounds.getHeight() / cellSize);
-        
-        this.spatialGrid = new ConcurrentHashMap<>(gridWidth * gridHeight);
-        initializeGrid();
-        
-        SimulationLogger.info("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size]%n",
-            gridWidth, gridHeight, cellSize);
+        // No pre‑initialization – cells are created lazily
+        SimulationLogger.info("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size] (lazy)",
+                gridWidth, gridHeight, cellSize);
     }
-    
-    
-    private void initializeGrid() {
-        for (int x = 0; x < gridWidth; x++) {
-            for (int y = 0; y < gridHeight; y++) {
-                spatialGrid.put(new GridCell(x, y),
-                        Collections.synchronizedList(new ArrayList<>()));
-            }
-        }
-    }
-    
-   
+
+    // ------------------------------------------------------------------------
+    // Core operations
+    // ------------------------------------------------------------------------
     private GridCell getCellForPosition(double x, double y) {
-        if (!worldBounds.contains(x, y)) {
-            return null;
-        }
-        
+        if (!worldBounds.contains(x, y)) return null;
         int gridX = (int) ((x - worldBounds.getX()) / cellSize);
         int gridY = (int) ((y - worldBounds.getY()) / cellSize);
-        
-        // Clamp to grid bounds
         gridX = Math.max(0, Math.min(gridX, gridWidth - 1));
         gridY = Math.max(0, Math.min(gridY, gridHeight - 1));
-        
         return new GridCell(gridX, gridY);
     }
-    
-    
-    // Register a new agent (for newborn agents)
+
+    private List<Agent> getOrCreateCellList(GridCell cell) {
+        return spatialGrid.computeIfAbsent(cell, k -> Collections.synchronizedList(new ArrayList<>()));
+    }
+
     public void registerAgent(Agent agent) {
         if (agent == null) return;
-        
         long stamp = updateLock.writeLock();
         try {
             GridCell cell = getCellForPosition(agent.getX(), agent.getY());
-            if (cell != null) {
-                // Add to spatial grid
-                spatialGrid.get(cell).add(agent);
-                
-                // Update tracking
+            if (cell == null) return;
+            List<Agent> cellList = getOrCreateCellList(cell);
+            cellList.add(agent);
+            agentPositions.put(agent.getId(), cell);
+            agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
+            pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
+            changeCount.incrementAndGet();
+            totalInserts.incrementAndGet();
+            cellCache.remove(cell);
+        } finally {
+            updateLock.unlockWrite(stamp);
+        }
+    }
+
+    public void registerAgents(Collection<Agent> agents) {
+        if (agents == null || agents.isEmpty()) return;
+        long stamp = updateLock.writeLock();
+        try {
+            for (Agent agent : agents) {
+                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
+                if (cell == null) continue;
+                List<Agent> cellList = getOrCreateCellList(cell);
+                cellList.add(agent);
                 agentPositions.put(agent.getId(), cell);
                 agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
-                
-                // Record change
-                pendingChanges.offer(new SpatialChange(
-                    SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
+                pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
                 changeCount.incrementAndGet();
-                
                 totalInserts.incrementAndGet();
-                
-                // Invalidate cell cache
                 cellCache.remove(cell);
             }
         } finally {
             updateLock.unlockWrite(stamp);
         }
     }
-    
-    
-    // Batch register multiple agents (efficient for newborns)
-    public void registerAgents(Collection<Agent> agents) {
-        if (agents == null || agents.isEmpty()) return;
-        
+
+    public void unregisterAgent(String agentId) {
+        if (agentId == null) return;
         long stamp = updateLock.writeLock();
         try {
-            Map<GridCell, List<Agent>> cellsToAdd = new HashMap<>();
-            
-            // Group agents by cell
-            for (Agent agent : agents) {
-                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
-                if (cell != null) {
-                    cellsToAdd.computeIfAbsent(cell, k -> new ArrayList<>()).add(agent);
-                }
-            }
-            
-            // Bulk add to cells
-            for (Map.Entry<GridCell, List<Agent>> entry : cellsToAdd.entrySet()) {
-                GridCell cell = entry.getKey();
-                List<Agent> cellAgents = spatialGrid.get(cell);
-                
-                if (cellAgents != null) {
-                    cellAgents.addAll(entry.getValue());
-                    
-                    // Update tracking for each agent
-                    for (Agent agent : entry.getValue()) {
-                        agentPositions.put(agent.getId(), cell);
-                        agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
-                        
-                        pendingChanges.offer(new SpatialChange(
-                            SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
+            GridCell oldCell = agentPositions.remove(agentId);
+            if (oldCell != null) {
+                List<Agent> cellList = spatialGrid.get(oldCell);
+                if (cellList != null) {
+                    boolean removed = cellList.removeIf(a -> a.getId().equals(agentId));
+                    if (removed) {
+                        agentRecords.remove(agentId);
+                        pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
                         changeCount.incrementAndGet();
-                        
-                        totalInserts.incrementAndGet();
+                        totalRemoves.incrementAndGet();
+                        cellCache.remove(oldCell);
+                        // If cell becomes empty, we may leave it – optional cleanup
                     }
-                    
-                    // Invalidate cell cache
-                    cellCache.remove(cell);
                 }
             }
-            
         } finally {
             updateLock.unlockWrite(stamp);
         }
     }
-    
-    
-    // Unregister an agent (for dead agents)
-    public void unregisterAgent(String agentId) {
-        if (agentId == null) return;
-        
+
+    public void unregisterAgents(Collection<String> agentIds) {
+        if (agentIds == null || agentIds.isEmpty()) return;
         long stamp = updateLock.writeLock();
         try {
-            GridCell oldCell = agentPositions.get(agentId);
-            if (oldCell != null) {
-                List<Agent> cellAgents = spatialGrid.get(oldCell);
-                if (cellAgents != null) {
-                    // Remove agent from cell
-                    boolean removed = cellAgents.removeIf(a -> a.getId().equals(agentId));
-                    
-                    if (removed) {
-                        // Update tracking
-                        agentPositions.remove(agentId);
+            for (String agentId : agentIds) {
+                GridCell oldCell = agentPositions.remove(agentId);
+                if (oldCell != null) {
+                    List<Agent> cellList = spatialGrid.get(oldCell);
+                    if (cellList != null) {
+                        cellList.removeIf(a -> a.getId().equals(agentId));
                         agentRecords.remove(agentId);
-                        
-                        // Record change
-                        pendingChanges.offer(new SpatialChange(
-                            SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
+                        pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
                         changeCount.incrementAndGet();
-                        
                         totalRemoves.incrementAndGet();
-                        
-                        // Invalidate cell cache
                         cellCache.remove(oldCell);
                     }
                 }
@@ -391,81 +327,49 @@ public class SpatialRegistry {
             updateLock.unlockWrite(stamp);
         }
     }
-    
-    
-    // Update agent position (for moving agents)
+
     public void updateAgentPosition(Agent agent) {
         if (agent == null) return;
-        
         long stamp = updateLock.writeLock();
         try {
             String agentId = agent.getId();
             GridCell oldCell = agentPositions.get(agentId);
             GridCell newCell = getCellForPosition(agent.getX(), agent.getY());
-            
             if (newCell == null) {
-                // Agent moved out of bounds - remove it
-                if (oldCell != null) {
-                    unregisterAgent(agentId);
-                }
+                if (oldCell != null) unregisterAgent(agentId);
                 return;
             }
-            
             if (oldCell == null) {
-                // Agent not previously registered (shouldn't happen)
                 registerAgent(agent);
             } else if (!oldCell.equals(newCell)) {
-                // Agent moved to different cell
-                // Remove from old cell
-                List<Agent> oldCellAgents = spatialGrid.get(oldCell);
-                if (oldCellAgents != null) {
-                    oldCellAgents.removeIf(a -> a.getId().equals(agentId));
-                }
-                
-                // Add to new cell
-                List<Agent> newCellAgents = spatialGrid.get(newCell);
-                if (newCellAgents != null) {
-                    newCellAgents.add(agent);
-                }
-                
-                // Update tracking
+                List<Agent> oldList = spatialGrid.get(oldCell);
+                if (oldList != null) oldList.removeIf(a -> a.getId().equals(agentId));
+                List<Agent> newList = getOrCreateCellList(newCell);
+                newList.add(agent);
                 agentPositions.put(agentId, newCell);
                 agentRecords.put(agentId, new AgentRecord(agent, newCell));
-                
-                // Record change
-                pendingChanges.offer(new SpatialChange(
-                    SpatialChange.ChangeType.MOVE, agentId, newCell, oldCell));
+                pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.MOVE, agentId, newCell, oldCell));
                 changeCount.incrementAndGet();
-                
                 totalUpdates.incrementAndGet();
-                
-                // Invalidate both cell caches
                 cellCache.remove(oldCell);
                 cellCache.remove(newCell);
             }
-            // If same cell, no update needed
         } finally {
             updateLock.unlockWrite(stamp);
         }
     }
-    
-    
-    // Get nearby agents (includes newly registered agents)
+
+    // ------------------------------------------------------------------------
+    // Queries
+    // ------------------------------------------------------------------------
     public List<Agent> getNearbyAgents(double x, double y, double radius) {
         queryCount.incrementAndGet();
-        
-        // Use optimistic read lock for high concurrency
         long stamp = updateLock.tryOptimisticRead();
         GridCell centerCell = getCellForPosition(x, y);
-        
-        if (centerCell == null) {
-            return Collections.emptyList();
-        }
-        
+        if (centerCell == null) return Collections.emptyList();
+
         List<Agent> result = queryNearbyOptimistic(x, y, radius, centerCell);
-        
         if (!updateLock.validate(stamp)) {
-            // Optimistic read failed, use full read lock
             stamp = updateLock.readLock();
             try {
                 result = queryNearbyOptimistic(x, y, radius, centerCell);
@@ -473,150 +377,101 @@ public class SpatialRegistry {
                 updateLock.unlockRead(stamp);
             }
         }
-        
         return result;
     }
-    
-    
+
     private List<Agent> queryNearbyOptimistic(double x, double y, double radius, GridCell centerCell) {
-        // Check cache first
         CellCacheKey cacheKey = new CellCacheKey(centerCell, radius);
         CellCacheEntry cached = cellCache.get(centerCell);
-        
-        if (cached != null && cached.isValidFor(cacheKey)) {
+        if (cached != null && cached.isValidFor(cacheKey))
             return new ArrayList<>(cached.agents);
-        }
-        
+
         List<Agent> result = new ArrayList<>();
         int cellsRadius = (int) Math.ceil(radius / cellSize);
-        
-        // Search cells within radius
+
         for (int dx = -cellsRadius; dx <= cellsRadius; dx++) {
             for (int dy = -cellsRadius; dy <= cellsRadius; dy++) {
                 int checkX = centerCell.gridX + dx;
                 int checkY = centerCell.gridY + dy;
-                
-                if (checkX >= 0 && checkX < gridWidth && 
-                    checkY >= 0 && checkY < gridHeight) {
-                    
+                if (checkX >= 0 && checkX < gridWidth && checkY >= 0 && checkY < gridHeight) {
                     GridCell checkCell = new GridCell(checkX, checkY);
                     List<Agent> cellAgents = spatialGrid.get(checkCell);
-                    
                     if (cellAgents != null) {
-                        // Filter by actual distance
                         for (Agent agent : cellAgents) {
-                            double distance = calculateDistance(x, y, agent.getX(), agent.getY());
-                            if (distance <= radius) {
-                                result.add(agent);
-                            }
+                            double dist = Math.hypot(agent.getX() - x, agent.getY() - y);
+                            if (dist <= radius) result.add(agent);
                         }
                     }
                 }
             }
         }
-        
-        // Cache result if within limits
-        if (result.size() <= 1000) { // Don't cache huge results
+
+        if (result.size() <= 1000)
             cacheQueryResult(centerCell, radius, result);
-        }
-        
         return result;
     }
-    
-    
-    private double calculateDistance(double x1, double y1, double x2, double y2) {
-        // Simple Euclidean distance (for small areas)
-        // For larger areas, use Haversine formula
-        double dx = x2 - x1;
-        double dy = y2 - y1;
-        return Math.sqrt(dx * dx + dy * dy);
-    }
-    
-    
+
     private void cacheQueryResult(GridCell cell, double radius, List<Agent> agents) {
         if (cellCache.size() >= maxCacheSize) {
-            // Remove oldest entry (simplified LRU)
             GridCell oldest = cellCache.keySet().iterator().next();
             cellCache.remove(oldest);
         }
-        
-        CellCacheKey key = new CellCacheKey(cell, radius);
-        cellCache.put(cell, new CellCacheEntry(key, agents));
+        cellCache.put(cell, new CellCacheEntry(new CellCacheKey(cell, radius), agents));
     }
-    
 
-    // Apply pending changes from current tick
+    // ------------------------------------------------------------------------
+    // Maintenance & statistics
+    // ------------------------------------------------------------------------
     public void applyPendingChanges() {
-        // This is called at the end of each tick to finalize changes
-        // In our incremental approach, changes are applied immediately,
-        // but we can use this to clear the change queue
         pendingChanges.clear();
         changeCount.set(0);
     }
-    
 
-    // Bulk update (for initial load or reset)
     public void bulkUpdate(List<Agent> allAgents) {
         long stamp = updateLock.writeLock();
         try {
-            // Clear existing data
-            spatialGrid.values().forEach(List::clear);
+            spatialGrid.clear();
             agentPositions.clear();
             agentRecords.clear();
             cellCache.clear();
-            
-            // Bulk insert all agents
             for (Agent agent : allAgents) {
                 GridCell cell = getCellForPosition(agent.getX(), agent.getY());
                 if (cell != null) {
-                    spatialGrid.get(cell).add(agent);
+                    List<Agent> cellList = getOrCreateCellList(cell);
+                    cellList.add(agent);
                     agentPositions.put(agent.getId(), cell);
                     agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
                 }
             }
-            
-            // Reset counters
             pendingChanges.clear();
             changeCount.set(0);
-            
         } finally {
             updateLock.unlockWrite(stamp);
         }
     }
-    
 
-    // Get all agents (for debugging or serialization)
     public List<Agent> getAllAgents() {
-        List<Agent> allAgents = new ArrayList<>();
+        List<Agent> all = new ArrayList<>();
         long stamp = updateLock.readLock();
         try {
-            for (List<Agent> cellAgents : spatialGrid.values()) {
-                allAgents.addAll(cellAgents);
+            for (List<Agent> list : spatialGrid.values()) {
+                all.addAll(list);
             }
         } finally {
             updateLock.unlockRead(stamp);
         }
-        return allAgents;
+        return all;
     }
-    
-    
-    // Get agents in a specific cell (for testing)
-    public List<Agent> getAgentsInCell(GridCell cell) {
-        List<Agent> cellAgents = spatialGrid.get(cell);
-        return cellAgents != null ? new ArrayList<>(cellAgents) : Collections.emptyList();
-    }
-    
 
-    // Get agent position cell
-    public GridCell getAgentCell(String agentId) {
-        return agentPositions.get(agentId);
+    public List<Agent> getAgentsInCell(GridCell cell) {
+        List<Agent> list = spatialGrid.get(cell);
+        return list != null ? new ArrayList<>(list) : Collections.emptyList();
     }
-    
- 
-    // Get statistics
+
+    public GridCell getAgentCell(String agentId) { return agentPositions.get(agentId); }
+
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
-        
         stats.put("totalAgents", agentRecords.size());
         stats.put("gridCells", gridWidth * gridHeight);
         stats.put("cellSizeDegrees", cellSize);
@@ -626,32 +481,24 @@ public class SpatialRegistry {
         stats.put("totalRemoves", totalRemoves.get());
         stats.put("totalUpdates", totalUpdates.get());
         stats.put("cacheSize", cellCache.size());
-        
-        // Distribution statistics
-        int maxAgentsPerCell = 0;
-        int emptyCells = 0;
-        int totalAgentsInGrid = 0;
-        
-        for (List<Agent> cellAgents : spatialGrid.values()) {
-            int count = cellAgents.size();
-            totalAgentsInGrid += count;
-            maxAgentsPerCell = Math.max(maxAgentsPerCell, count);
-            if (count == 0) emptyCells++;
+
+        int maxAgents = 0, empty = 0, total = 0;
+        for (List<Agent> list : spatialGrid.values()) {
+            int size = list.size();
+            total += size;
+            maxAgents = Math.max(maxAgents, size);
+            if (size == 0) empty++;
         }
-        
-        stats.put("maxAgentsPerCell", maxAgentsPerCell);
-        stats.put("emptyCells", emptyCells);
-        stats.put("avgAgentsPerCell", totalAgentsInGrid / (double)(gridWidth * gridHeight));
-        
+        stats.put("maxAgentsPerCell", maxAgents);
+        stats.put("emptyCells", empty);
+        stats.put("avgAgentsPerCell", total / (double) (gridWidth * gridHeight));
         return stats;
     }
 
-    
-    // Clear all data
     public void clear() {
         long stamp = updateLock.writeLock();
         try {
-            spatialGrid.values().forEach(List::clear);
+            spatialGrid.clear();
             agentPositions.clear();
             agentRecords.clear();
             cellCache.clear();
@@ -661,140 +508,50 @@ public class SpatialRegistry {
             updateLock.unlockWrite(stamp);
         }
     }
-    
-    
-    // Inner classes
+
+    // ------------------------------------------------------------------------
+    // Inner classes (unchanged)
+    // ------------------------------------------------------------------------
     private static class AgentRecord {
-        final Agent agent;
-        final GridCell cell;
-        final long timestamp;
-        
+        final Agent agent; final GridCell cell; final long timestamp;
         AgentRecord(Agent agent, GridCell cell) {
-            this.agent = agent;
-            this.cell = cell;
-            this.timestamp = System.currentTimeMillis();
+            this.agent = agent; this.cell = cell; this.timestamp = System.currentTimeMillis();
         }
     }
-    
-    
+
     private static class SpatialChange {
         enum ChangeType { INSERT, REMOVE, MOVE }
-        
-        final ChangeType type;
-        final String agentId;
-        final GridCell newCell;
-        final GridCell oldCell;
-        final long timestamp;
-        
+        final ChangeType type; final String agentId; final GridCell newCell, oldCell; final long timestamp;
         SpatialChange(ChangeType type, String agentId, GridCell newCell, GridCell oldCell) {
-            this.type = type;
-            this.agentId = agentId;
-            this.newCell = newCell;
-            this.oldCell = oldCell;
+            this.type = type; this.agentId = agentId; this.newCell = newCell; this.oldCell = oldCell;
             this.timestamp = System.currentTimeMillis();
         }
-        
-        @Override
-        public String toString() {
-            return String.format("%s: %s [%s -> %s]", type, agentId, oldCell, newCell);
-        }
     }
-    
-    
+
     private static class CellCacheKey {
-        final GridCell cell;
-        final double radius;
-        final long timestamp;
-        
+        final GridCell cell; final double radius; final long timestamp;
         CellCacheKey(GridCell cell, double radius) {
-            this.cell = cell;
-            this.radius = radius;
-            this.timestamp = System.currentTimeMillis();
+            this.cell = cell; this.radius = radius; this.timestamp = System.currentTimeMillis();
         }
-        
-        @Override
-        public boolean equals(Object o) {
+        @Override public boolean equals(Object o) {
             if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
+            if (!(o instanceof CellCacheKey)) return false;
             CellCacheKey that = (CellCacheKey) o;
-            return Double.compare(that.radius, radius) == 0 &&
-                   Objects.equals(cell, that.cell);
+            return Double.compare(that.radius, radius) == 0 && Objects.equals(cell, that.cell);
         }
-        
-        @Override
-        public int hashCode() {
-            return Objects.hash(cell, radius);
-        }
+        @Override public int hashCode() { return Objects.hash(cell, radius); }
     }
-    
-    
+
     private static class CellCacheEntry {
-        final CellCacheKey key;
-        final List<Agent> agents;
-        final long created;
-        
+        final CellCacheKey key; final List<Agent> agents; final long created;
         CellCacheEntry(CellCacheKey key, List<Agent> agents) {
-            this.key = key;
-            this.agents = Collections.unmodifiableList(new ArrayList<>(agents));
+            this.key = key; this.agents = Collections.unmodifiableList(new ArrayList<>(agents));
             this.created = System.currentTimeMillis();
         }
-        
         boolean isValidFor(CellCacheKey queryKey) {
-            // Cache valid for 1 second
             return key.equals(queryKey) && (System.currentTimeMillis() - created) < 1000;
         }
     }
-    
-    // Add bulk unregister method to SpatialRegistry:
-    public void unregisterAgents(Collection<String> agentIds) {
-        if (agentIds == null || agentIds.isEmpty()) return;
-
-        long stamp = updateLock.writeLock();
-        try {
-            Map<GridCell, List<String>> cellsToRemove = new HashMap<>();
-
-            // Group by cell for bulk removal
-            for (String agentId : agentIds) {
-                GridCell cell = agentPositions.get(agentId);
-                if (cell != null) {
-                    cellsToRemove.computeIfAbsent(cell, k -> new ArrayList<>())
-                                .add(agentId);
-                }
-            }
-
-            // Bulk remove from cells
-            for (Map.Entry<GridCell, List<String>> entry : cellsToRemove.entrySet()) {
-                GridCell cell = entry.getKey();
-                List<Agent> cellAgents = spatialGrid.get(cell);
-                if (cellAgents != null) {
-                    List<String> idsToRemove = entry.getValue();
-
-                    // Use removeIf for bulk removal
-                    cellAgents.removeIf(a -> idsToRemove.contains(a.getId()));
-
-                    // Update tracking
-                    for (String agentId : idsToRemove) {
-                        agentPositions.remove(agentId);
-                        agentRecords.remove(agentId);
-
-                        // Record change
-                        pendingChanges.offer(new SpatialChange(
-                            SpatialChange.ChangeType.REMOVE, agentId, null, cell));
-                        changeCount.incrementAndGet();
-                        totalRemoves.incrementAndGet();
-                    }
-
-                    // Invalidate cell cache once per cell
-                    cellCache.remove(cell);
-                }
-            }
-
-        } finally {
-            updateLock.unlockWrite(stamp);
-        }
-    }
-
-    
 }package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.*;
@@ -3065,47 +2822,193 @@ public class ProjectPersistenceService {
     }
     
     
+//    public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
+//        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
+//        SimulationLogger.info("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
+//    
+//        long startTime = System.currentTimeMillis();
+//    
+//        try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
+//            SimulationLogger.info("[Export-CSV] File writer created successfully");
+//        
+//            // Collect all layers
+//            List<Layer> allLayers = project.getLayers();
+//            List<AgentLayer> agentLayers = project.getAgentLayers();
+//
+//         
+//            // Build header dynamically
+//            StringBuilder header = new StringBuilder();
+//            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,"
+//                    + "Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
+//
+//            // Add raster layer columns
+//            for (Layer layer : allLayers) {
+//                if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
+//                    header.append(",").append(layer.getName());
+//                }
+//            }
+//
+//            // Add agent layer statistics (nearby counts)
+////            for (AgentLayer agentLayer : agentLayers) {
+////                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
+////            }
+//
+//            writer.println(header.toString());
+//
+//            // Write data for each agent
+//            for (AgentLayer layer : agentLayers) {
+//                String layerName = layer.getName();
+//
+//                for (Agent agent : layer.getAgents()) {
+//                    StringBuilder row = new StringBuilder();
+//
+//                    // Basic agent info
+//                    row.append(tickCount).append(",");
+//                    row.append(agent.getId()).append(",");
+//                    row.append(layerName).append(",");
+//                    row.append(agent.getClass().getSimpleName()).append(",");
+//                    row.append(String.format("%.6f", agent.getX())).append(",");
+//                    row.append(String.format("%.6f", agent.getY())).append(",");
+//
+//                    // Agent-specific attributes
+//                    if (agent instanceof LivingAgent la) {
+//                        row.append(la.isAlive()? "1":"0").append(",");
+//                        row.append(la.getAge()).append(",");
+//                        row.append(la.getStage()).append(",");
+//                        row.append(String.format("%.3f", la.getEnergy())).append(",");
+//                        row.append(la.isGravid() ? "1":"0").append(",");
+//                        // place older for other fields
+//                        row.append("0,");
+//                        row.append("0,");
+//                        row.append("0,");
+//                        row.append(la.isResting() ? "1":"0").append(",");  // Add resting
+//                        row.append(la.getRestingDuration()).append(",");  // Add resting duration
+//                        row.append(la.getTimeWithoutRest());  // Add time without rest
+//                    } else if (agent instanceof InertAgent ia) {
+//                        row.append("-1,"); // Alive placeholder for InertAgent
+//                        row.append("0,"); // Age
+//                        row.append("INERT,");
+//                        row.append("0,"); // Energy
+//                        row.append("0,");
+//                        // Add InertAgent specific fields
+//                        row.append(ia.getEggCount()).append(",");
+//                        row.append(ia.getLarvalCount()).append(",");
+//                        row.append(String.format("%.2f", ia.getWaterVolume())).append(",");
+//                        row.append("0,");
+//                        row.append("0,");
+//                        row.append("0");
+//                    }
+//
+//                    // Add raster layer values
+//                    for (Layer envLayer : allLayers) {
+//                        if (envLayer instanceof RasterLayer || envLayer instanceof InterpolatedRasterLayer) {
+//                            double value = envLayer.getValueAt(agent.getX(), agent.getY());
+//
+//                            // Format based on layer type
+//                            String layerNameLower = envLayer.getName().toLowerCase();
+//                            if (layerNameLower.contains("temp") || layerNameLower.contains("t2m")) {
+//                                // Temperature: convert Kelvin to Celsius
+//                                value = value - 273.15;
+//                                row.append(String.format(",%.2f", value));
+//                            } else if (layerNameLower.contains("rain") || layerNameLower.contains("precip") || 
+//                                      layerNameLower.contains("tp")) {
+//                                // Precipitation: convert m to mm
+//                                value = value * 1000;
+//                                row.append(String.format(",%.4f", value));
+//                            } else if (layerNameLower.contains("pop")) {
+//                                // Population density
+//                                row.append(String.format(",%.2f", value));
+//                            } else {
+//                                // Other layers
+//                                row.append(String.format(",%.4f", value));
+//                            }
+//                        }
+//                    }
+//
+////                    // Add nearby agent counts
+////                    SpatialRegistry spatialRegistry = project.getSpatialRegistry();
+////                    if (spatialRegistry != null) {
+////                        for (AgentLayer otherLayer : agentLayers) {
+////                            // Get agents from this layer that are nearby
+////                            List<Agent> nearbyAgents = spatialRegistry.getNearbyAgents(
+////                                agent.getX(), agent.getY(), 
+////                                project.getDefaultAgentSearchRadius());
+////
+////                            // Count agents from the specific layer
+////                            long count = nearbyAgents.stream()
+////                                .filter(a -> {
+////                                    // Check which layer this agent belongs to
+////                                    for (AgentLayer al : agentLayers) {
+////                                        if (al.getAgents().contains(a)) {
+////                                            return al.getName().equals(otherLayer.getName());
+////                                        }
+////                                    }
+////                                    return false;
+////                                })
+////                                .count();
+////
+////                            row.append(",").append(count);
+////                        }
+////                    } else {
+////                        // If no spatial registry, add zeros
+////                        for (int i = 0; i < agentLayers.size(); i++) {
+////                            row.append(",0");
+////                        }
+////                    }
+//
+//                    writer.println(row.toString());
+//                }
+//            }
+//
+//            SimulationLogger.info("Results exported with Environmental Context to: " + outputPath);
+//            System.out.println("Included " + allLayers.size() + " layers and " + 
+//                                  agentLayers.size() + " agent layers");
+//            return true;
+//        } catch (IOException e) {
+//            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+//            return false;
+//        } catch (Exception e) {
+//            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
+//            return false;
+//        } finally {
+//            long endTime = System.currentTimeMillis();
+//            SimulationLogger.info("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
+//        }
+//    }
+    
+    
+    // Inside ProjectPersistenceService.java – replace exportToCSV with this corrected version.
+    // Only the method that writes the CSV is changed to ensure environmental values are correctly retrieved.
+
     public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
-        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
-        SimulationLogger.info("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
-    
+        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d", outputPath, tickCount);
         long startTime = System.currentTimeMillis();
-    
+
         try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-            SimulationLogger.info("[Export-CSV] File writer created successfully");
-        
-            // Collect all layers
             List<Layer> allLayers = project.getLayers();
             List<AgentLayer> agentLayers = project.getAgentLayers();
 
-         
-            // Build header dynamically
+            // Build header
             StringBuilder header = new StringBuilder();
-            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,"
-                    + "Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
-
-            // Add raster layer columns
+            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
             for (Layer layer : allLayers) {
                 if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
                     header.append(",").append(layer.getName());
                 }
             }
-
-            // Add agent layer statistics (nearby counts)
-//            for (AgentLayer agentLayer : agentLayers) {
-//                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
-//            }
-
             writer.println(header.toString());
 
             // Write data for each agent
             for (AgentLayer layer : agentLayers) {
                 String layerName = layer.getName();
+                // Snapshot agents to avoid concurrent modification
+                List<Agent> agentsCopy;
+                synchronized (layer) {
+                    agentsCopy = new ArrayList<>(layer.getAgents());
+                }
 
-                for (Agent agent : layer.getAgents()) {
+                for (Agent agent : agentsCopy) {
                     StringBuilder row = new StringBuilder();
-
-                    // Basic agent info
                     row.append(tickCount).append(",");
                     row.append(agent.getId()).append(",");
                     row.append(layerName).append(",");
@@ -3113,109 +3016,56 @@ public class ProjectPersistenceService {
                     row.append(String.format("%.6f", agent.getX())).append(",");
                     row.append(String.format("%.6f", agent.getY())).append(",");
 
-                    // Agent-specific attributes
                     if (agent instanceof LivingAgent la) {
-                        row.append(la.isAlive()? "1":"0").append(",");
+                        row.append(la.isAlive() ? "1" : "0").append(",");
                         row.append(la.getAge()).append(",");
                         row.append(la.getStage()).append(",");
                         row.append(String.format("%.3f", la.getEnergy())).append(",");
-                        row.append(la.isGravid() ? "1":"0").append(",");
-                        // place older for other fields
-                        row.append("0,");
-                        row.append("0,");
-                        row.append("0,");
-                        row.append(la.isResting() ? "1":"0").append(",");  // Add resting
-                        row.append(la.getRestingDuration()).append(",");  // Add resting duration
-                        row.append(la.getTimeWithoutRest());  // Add time without rest
+                        row.append(la.isGravid() ? "1" : "0").append(",");
+                        // Inert agent fields (placeholders)
+                        row.append("0,0,0,");
+                        row.append(la.isResting() ? "1" : "0").append(",");
+                        row.append(la.getRestingDuration()).append(",");
+                        row.append(la.getTimeWithoutRest());
                     } else if (agent instanceof InertAgent ia) {
-                        row.append("-1,"); // Alive placeholder for InertAgent
-                        row.append("0,"); // Age
-                        row.append("INERT,");
-                        row.append("0,"); // Energy
-                        row.append("0,");
-                        // Add InertAgent specific fields
+                        row.append("-1,0,INERT,0,0,");
                         row.append(ia.getEggCount()).append(",");
                         row.append(ia.getLarvalCount()).append(",");
                         row.append(String.format("%.2f", ia.getWaterVolume())).append(",");
-                        row.append("0,");
-                        row.append("0,");
-                        row.append("0");
+                        row.append("0,0,0");
+                    } else {
+                        // Fallback for unknown agent type
+                        row.append("-1,0,UNKNOWN,0,0,0,0,0,0,0,0");
                     }
 
-                    // Add raster layer values
+                    // Append environmental values (all raster layers)
                     for (Layer envLayer : allLayers) {
                         if (envLayer instanceof RasterLayer || envLayer instanceof InterpolatedRasterLayer) {
-                            double value = envLayer.getValueAt(agent.getX(), agent.getY());
-
-                            // Format based on layer type
-                            String layerNameLower = envLayer.getName().toLowerCase();
-                            if (layerNameLower.contains("temp") || layerNameLower.contains("t2m")) {
-                                // Temperature: convert Kelvin to Celsius
-                                value = value - 273.15;
-                                row.append(String.format(",%.2f", value));
-                            } else if (layerNameLower.contains("rain") || layerNameLower.contains("precip") || 
-                                      layerNameLower.contains("tp")) {
-                                // Precipitation: convert m to mm
-                                value = value * 1000;
-                                row.append(String.format(",%.4f", value));
-                            } else if (layerNameLower.contains("pop")) {
-                                // Population density
-                                row.append(String.format(",%.2f", value));
+                            double rawValue = envLayer.getValueAt(agent.getX(), agent.getY());
+                            String formatted;
+                            String name = envLayer.getName().toLowerCase();
+                            if (name.contains("temp") || name.contains("t2m")) {
+                                // Convert Kelvin to Celsius for readability
+                                double celsius = rawValue - 273.15;
+                                formatted = String.format("%.2f", celsius);
+                            } else if (name.contains("precip") || name.contains("tp") || name.contains("rain")) {
+                                // Convert m to mm
+                                formatted = String.format("%.4f", rawValue * 1000.0);
                             } else {
-                                // Other layers
-                                row.append(String.format(",%.4f", value));
+                                formatted = String.format("%.4f", rawValue);
                             }
+                            row.append(",").append(formatted);
                         }
                     }
-
-//                    // Add nearby agent counts
-//                    SpatialRegistry spatialRegistry = project.getSpatialRegistry();
-//                    if (spatialRegistry != null) {
-//                        for (AgentLayer otherLayer : agentLayers) {
-//                            // Get agents from this layer that are nearby
-//                            List<Agent> nearbyAgents = spatialRegistry.getNearbyAgents(
-//                                agent.getX(), agent.getY(), 
-//                                project.getDefaultAgentSearchRadius());
-//
-//                            // Count agents from the specific layer
-//                            long count = nearbyAgents.stream()
-//                                .filter(a -> {
-//                                    // Check which layer this agent belongs to
-//                                    for (AgentLayer al : agentLayers) {
-//                                        if (al.getAgents().contains(a)) {
-//                                            return al.getName().equals(otherLayer.getName());
-//                                        }
-//                                    }
-//                                    return false;
-//                                })
-//                                .count();
-//
-//                            row.append(",").append(count);
-//                        }
-//                    } else {
-//                        // If no spatial registry, add zeros
-//                        for (int i = 0; i < agentLayers.size(); i++) {
-//                            row.append(",0");
-//                        }
-//                    }
-
                     writer.println(row.toString());
                 }
             }
-
-            SimulationLogger.info("Results exported with Environmental Context to: " + outputPath);
-            System.out.println("Included " + allLayers.size() + " layers and " + 
-                                  agentLayers.size() + " agent layers");
+            writer.flush();
+            SimulationLogger.info("[Export-CSV] Completed in %d ms", System.currentTimeMillis() - startTime);
             return true;
         } catch (IOException e) {
-            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
-            return false;
-        } catch (Exception e) {
-            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
-            return false;
-        } finally {
-            long endTime = System.currentTimeMillis();
-            SimulationLogger.info("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
+            SimulationLogger.severe("[Export-CSV] Error: " + e.getMessage());
+            throw e;
         }
     }
     
@@ -4720,92 +4570,49 @@ public class ConfigLoader {
         }
     }
 }package com.monadvsim.app.models.utils;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
+import ucar.nc2.NetcdfFile;
+import ucar.nc2.NetcdfFiles;
+
 import java.awt.geom.Rectangle2D;
 import java.io.IOException;
 import java.util.HashMap;
 import java.util.Map;
 
-
 /**
- * Climate Data Handler
- *
- * Manages multiple climate variables from NetCDF files
- *
- * Supports ERA5 climate data format (temperature, precipitation, wind, etc.)
- *
- * Provides value interpolation and unit conversions
- *
- * Integrates with TimeManager for temporal interpolation
- * 
- * 
- * @author void
+ * Manages multiple climate variables from a NetCDF file.
+ * Provides convenient access to temperature, precipitation, wind, etc.
  */
-
-
 public class ClimateDatasetManager {
+
     private final TimeManager timeManager;
     private final Map<String, InterpolatedRasterLayer> layers = new HashMap<>();
-    
+
     // Standard ERA5 variable names
     public static final String TEMPERATURE_2M = "t2m";
     public static final String TOTAL_PRECIPITATION = "tp";
     public static final String SURFACE_PRESSURE = "sp";
     public static final String U_WIND = "u10";
     public static final String V_WIND = "v10";
-    public static final String RELATIVE_HUMIDITY = "r";
-    public static final String DEW_POINT = "d2m";
-    
+
     public ClimateDatasetManager(TimeManager timeManager) {
         this.timeManager = timeManager;
     }
-    
+
     /**
-     * Load a NetCDF file with multiple variables
+     * Load all available standard climate variables from a NetCDF file.
+     * Detects which variables exist and loads them.
      */
-    public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
-        for (String varName : variableNames) {
-            SimulationLogger.info("Loading variable: " + varName);
-            InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
-            layer.loadFromNetCDF(filePath, varName);
-            layers.put(varName, layer);
-            SimulationLogger.info("Successfully loaded: " + varName);
-        }
-    }
-    
-    /**
-     * Load standard ERA5 climate variables
-     */
-    public void loadERA5Dataset(String filePath) throws IOException {
-        String[] standardVars = {
-            TEMPERATURE_2M,      // 2m temperature (K)
-            TOTAL_PRECIPITATION, // Total precipitation (m)
-            SURFACE_PRESSURE,    // Surface pressure (Pa)
-            U_WIND,              // 10m u-component of wind (m/s)
-            V_WIND,              // 10m v-component of wind (m/s)
-        };
-        
-        loadNetCDFDataset(filePath, standardVars);
-    }
-    
-    // smater loader to laod available variables
     public void loadAvailableVariables(String filePath) throws IOException {
-        try (ucar.nc2.NetcdfFile ncfile = ucar.nc2.NetcdfFiles.open(filePath)) {
-            SimulationLogger.info("Available variables in file:");
+        try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
+            SimulationLogger.info("Scanning NetCDF: %s", filePath);
             for (ucar.nc2.Variable var : ncfile.getVariables()) {
                 String varName = var.getShortName();
-                SimulationLogger.info("  - " + varName);
-                
-                // Load common climate variables
-                if (varName.equals("t2m") || varName.equals("tp") || 
-                    varName.equals("sp") || varName.equals("u10") || 
-                    varName.equals("v10") || varName.equals("r") || 
-                    varName.equals("d2m")) {
-                    
-                    SimulationLogger.info("    Loading " + varName + "...");
+                // Load only climate‑relevant variables
+                if (isClimateVariable(varName)) {
+                    SimulationLogger.info("Loading variable: %s", varName);
                     InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
                     layer.loadFromNetCDF(filePath, varName);
                     layers.put(varName, layer);
@@ -4813,87 +4620,108 @@ public class ClimateDatasetManager {
             }
         }
     }
-    
-    // get world bounds
-    public Rectangle2D getBounds() {
-        if (layers.isEmpty()) {
-            return null;
-        }
 
-        InterpolatedRasterLayer firstLayer = layers.values().iterator().next();
+    private boolean isClimateVariable(String name) {
+        return name.equals(TEMPERATURE_2M) || name.equals(TOTAL_PRECIPITATION) ||
+               name.equals(SURFACE_PRESSURE) || name.equals(U_WIND) || name.equals(V_WIND);
+    }
+
+    /**
+     * Load a specific set of variables (useful for non‑standard files).
+     */
+    public void loadNetCDFDataset(String filePath, String... variableNames) throws IOException {
+        for (String varName : variableNames) {
+            SimulationLogger.info("Loading variable: %s", varName);
+            InterpolatedRasterLayer layer = new InterpolatedRasterLayer(varName, timeManager);
+            layer.loadFromNetCDF(filePath, varName);
+            layers.put(varName, layer);
+        }
+    }
+
+    /**
+     * Convenience: load the full ERA5 standard dataset.
+     */
+    public void loadERA5Dataset(String filePath) throws IOException {
+        String[] vars = {TEMPERATURE_2M, TOTAL_PRECIPITATION, SURFACE_PRESSURE, U_WIND, V_WIND};
+        loadNetCDFDataset(filePath, vars);
+    }
+
+    /**
+     * Get the combined geographic bounds of the first loaded layer.
+     */
+    public Rectangle2D getBounds() {
+        if (layers.isEmpty()) return null;
+        InterpolatedRasterLayer first = layers.values().iterator().next();
         return new Rectangle2D.Double(
-            firstLayer.getMinLon(),
-            firstLayer.getMinLat(),
-            firstLayer.getMaxLon() - firstLayer.getMinLon(),
-            firstLayer.getMaxLat() - firstLayer.getMinLat()
+            first.getMinLon(), first.getMinLat(),
+            first.getMaxLon() - first.getMinLon(),
+            first.getMaxLat() - first.getMinLat()
         );
     }
-    
+
     /**
-     * Get value for a specific variable at location
+     * Get raw value for a variable at given coordinates (interpolated in time).
      */
     public double getValue(String variableName, double lon, double lat) {
         InterpolatedRasterLayer layer = layers.get(variableName);
         if (layer == null) {
-            throw new IllegalArgumentException("Variable not loaded: " + variableName);
+            SimulationLogger.warning("Variable not loaded: %s", variableName);
+            return Double.NaN;
         }
         return layer.getValueAt(lon, lat);
     }
-    
+
     /**
-     * Get temperature in Celsius (converts from Kelvin)
+     * Get temperature in Celsius (converts from Kelvin).
      */
     public double getTemperatureCelsius(double lon, double lat) {
-        double tempK = getValue(TEMPERATURE_2M, lon, lat);
-        return tempK - 273.15; // Convert Kelvin to Celsius
+        double kelvin = getValue(TEMPERATURE_2M, lon, lat);
+        return kelvin - 273.15;
     }
-    
+
     /**
-     * Get precipitation in mm/hour (converts from m)
+     * Get precipitation in mm per hour (converts from metres per time step).
      */
     public double getPrecipitationMmHour(double lon, double lat) {
         double precipM = getValue(TOTAL_PRECIPITATION, lon, lat);
-        return precipM * 1000; // Convert m to mm
+        return precipM * 1000.0;
     }
-    
+
     /**
-     * Get wind speed (m/s) from u and v components
+     * Get wind speed (m/s) from u and v components.
      */
     public double getWindSpeed(double lon, double lat) {
         double u = getValue(U_WIND, lon, lat);
         double v = getValue(V_WIND, lon, lat);
-        return Math.sqrt(u * u + v * v);
+        return Math.sqrt(u*u + v*v);
     }
-    
+
     /**
-     * Get wind direction (degrees from north)
+     * Get wind direction in degrees from north.
      */
     public double getWindDirection(double lon, double lat) {
         double u = getValue(U_WIND, lon, lat);
         double v = getValue(V_WIND, lon, lat);
-        
-        double direction = Math.toDegrees(Math.atan2(u, v));
-        if (direction < 0) direction += 360;
-        return direction;
+        double dir = Math.toDegrees(Math.atan2(u, v));
+        if (dir < 0) dir += 360;
+        return dir;
     }
-    
+
     public InterpolatedRasterLayer getLayer(String variableName) {
         return layers.get(variableName);
     }
-    
+
     public Map<String, InterpolatedRasterLayer> getLayers() {
         return new HashMap<>(layers);
     }
-    
+
     public void printStatistics() {
         SimulationLogger.info("=== Climate Dataset Statistics ===");
-        for (Map.Entry<String, InterpolatedRasterLayer> entry : layers.entrySet()) {
-            SimulationLogger.info(entry.getKey() + ":");
-            entry.getValue().printStatistics();
+        for (Map.Entry<String, InterpolatedRasterLayer> e : layers.entrySet()) {
+            e.getValue().printStatistics();
         }
     }
-}
-package com.monadvsim.app.models.config;
+}package com.monadvsim.app.models.config;
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.util.List;
@@ -5875,45 +5703,48 @@ public abstract class Layer implements Serializable {
     }
 }
 package com.monadvsim.app.models.entities;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
+import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.Serializable;
 
-
 /**
  * Static Raster Data
- *
- * Stores grid-based environmental data (elevation, population, buildings)
- *
- * Supports multi-frame temporal data
- *
- * Provides coordinate-to-grid value lookup
- *
- * Basic spatial interpolation
- * 
- * 
- * @author void
+ * Stores grid-based environmental data (elevation, population, buildings).
+ * Supports multi-frame temporal data.
+ * Provides coordinate-to-grid value lookup with basic spatial interpolation.
  */
-
-
 public class RasterLayer extends Layer implements Serializable {
-    
-    private double[][][] dataGrid; // [frame][x][y]
+
+    private double[][][] dataGrid;   // [frame][x][y]
     private int width, height, frames;
     private int activeFrame = 0;
     private double minLon, maxLon, minLat, maxLat;
 
-    
-    public RasterLayer(String name, int width, int height, int frames) {
+    /**
+     * Constructor that does NOT allocate the dataGrid.
+     * Used by subclasses that manage their own storage (e.g., memory‑mapped).
+     */
+    protected RasterLayer(String name) {
         super(name);
-        this.width = width;
-        this.height = height;
-        this.frames = frames;
-        this.dataGrid = new double[frames][width][height];
+        this.width = 0;
+        this.height = 0;
+        this.frames = 0;
+        this.dataGrid = null;
     }
-    
-    
+
+    /**
+     * Standard constructor – allocates the full 3D array on the heap.
+     */
+    public RasterLayer(String name, int width, int height, int frames) {
+        this(name);
+        initialize(width, height, frames);
+    }
+
+    /**
+     * Initialises or re‑initialises the raster with the given dimensions.
+     * Allocates a new dataGrid.
+     */
     public void initialize(int width, int height, int frames) {
         this.width = width;
         this.height = height;
@@ -5921,7 +5752,6 @@ public class RasterLayer extends Layer implements Serializable {
         this.dataGrid = new double[frames][width][height];
     }
 
-    
     public void setBounds(double minLon, double maxLon, double minLat, double maxLat) {
         this.minLon = minLon;
         this.maxLon = maxLon;
@@ -5929,206 +5759,195 @@ public class RasterLayer extends Layer implements Serializable {
         this.maxLat = maxLat;
     }
 
-    
+//    @Override
+//    public double getValueAt(double lon, double lat) {
+//        if (dataGrid == null) return Double.NaN;
+//        if (maxLon == minLon || maxLat == minLat) return 0.0;
+//
+//        double xFrac = (lon - minLon) / (maxLon - minLon);
+//        double yFrac = (lat - minLat) / (maxLat - minLat);
+//
+//        int x = (int) (xFrac * (width - 1));
+//        int y = (int) (yFrac * (height - 1));
+//
+//        if (x < 0 || x >= width || y < 0 || y >= height) return 0.0;
+//        return dataGrid[activeFrame][x][y];
+//    }
     @Override
     public double getValueAt(double lon, double lat) {
+        if (dataGrid == null) return 0.0; // treat missing grid as zero
         if (maxLon == minLon || maxLat == minLat) return 0.0;
 
-        // Transform Lon/Lat to 0.0 - 1.0 range
         double xFrac = (lon - minLon) / (maxLon - minLon);
         double yFrac = (lat - minLat) / (maxLat - minLat);
 
-        // Map to array indices
         int x = (int) (xFrac * (width - 1));
         int y = (int) (yFrac * (height - 1));
 
-        // Boundary safety
         if (x < 0 || x >= width || y < 0 || y >= height) return 0.0;
-        
-        return dataGrid[activeFrame][x][y];
+        double value = dataGrid[activeFrame][x][y];
+        // Treat NaN as 0.0
+        return Double.isNaN(value) ? 0.0 : value;
     }
 
-    
     @Override
     public void update(Project project) {
-        
+        // Nothing to update by default
     }
-    
-    
+
     public void setData(int frame, int x, int y, double value) {
+        if (dataGrid == null) return;
         if (frame < frames && x < width && y < height) {
             dataGrid[frame][x][y] = value;
         }
     }
 
-    
     public void setActiveFrame(int index) {
         this.activeFrame = Math.min(index, frames - 1);
     }
-    
-    
-    public int getActiveFrame(){
-        return this.activeFrame;
+
+    public int getActiveFrame() {
+        return activeFrame;
     }
-    
 
     public double[][][] getDataGrid() {
         return dataGrid;
     }
 
-    
     public void setDataGrid(double[][][] dataGrid) {
         this.dataGrid = dataGrid;
     }
 
-    
     public int getWidth() {
         return width;
     }
 
-    
     public void setWidth(int width) {
         this.width = width;
     }
 
-    
     public int getHeight() {
         return height;
     }
 
-    
     public void setHeight(int height) {
         this.height = height;
     }
 
-    
     public int getFrames() {
         return frames;
     }
 
-    
     public void setFrames(int frames) {
         this.frames = frames;
     }
 
-    
     public double getMinLon() {
         return minLon;
     }
 
-    
     public void setMinLon(double minLon) {
         this.minLon = minLon;
     }
 
-    
     public double getMaxLon() {
         return maxLon;
     }
 
-    
     public void setMaxLon(double maxLon) {
         this.maxLon = maxLon;
     }
 
-    
     public double getMinLat() {
         return minLat;
     }
 
-    
     public void setMinLat(double minLat) {
         this.minLat = minLat;
     }
 
-    
     public double getMaxLat() {
         return maxLat;
     }
 
-    
     public void setMaxLat(double maxLat) {
         this.maxLat = maxLat;
     }
-    
 }package com.monadvsim.app.models.entities;
-import com.monadvsim.app.models.utils.SimulationLogger;
+
 import com.monadvsim.app.models.engine.TimeManager;
+import com.monadvsim.app.models.utils.SimulationLogger;
 import ucar.ma2.Array;
 import ucar.ma2.Index;
-import ucar.nc2.NetcdfFile;
-import ucar.nc2.NetcdfFiles;
-import ucar.nc2.Variable;
-import ucar.nc2.Dimension;
-import ucar.nc2.Attribute;
+import ucar.nc2.*;
+
 import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
-import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
-import java.util.logging.Logger;
 
+/**
+ * Time‑interpolated raster layer for climate data (NetCDF).
+ * Supports temporal interpolation between time steps.
+ */
 public class InterpolatedRasterLayer extends Layer {
-    private static final Logger LOGGER = Logger.getLogger(InterpolatedRasterLayer.class.getName());
-    
-    private double[][][] dataGrid; // [time][lat][lon]
-    private double[] timeValues;   // Time values in seconds since reference
-    private double[] latValues;    // Latitude values (degrees north)
-    private double[] lonValues;    // Longitude values (degrees east)
-    
+
+    private double[][][] dataGrid;          // [time][lat][lon]
+    private double[] timeValues;             // seconds since reference
+    private double[] latValues;
+    private double[] lonValues;
     private int timeSize, latSize, lonSize;
+
     private final TimeManager timeManager;
     private final ReentrantReadWriteLock dataLock = new ReentrantReadWriteLock();
-    
-    private double[][] cachedGrid;      // will be allocated lazily
+
+    // Caching of the current interpolated 2D grid
+    private double[][] cachedGrid;
     private LocalDateTime lastCacheTime;
     private boolean cacheValid = false;
-    
-    private String timeUnits = "seconds since 1970-01-01";
-    private LocalDateTime timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
+
+    private LocalDateTime timeReference;     // reference date for timeValues
     private boolean dataLoaded = false;
-    
-    private long cacheHits = 0;
-    private long cacheMisses = 0;
-    private long interpolationsPerformed = 0;
-    
+
+    // Statistics
+    private long cacheHits = 0, cacheMisses = 0;
+
+    // Dimension names (may vary per NetCDF)
     private String timeDimName = "time";
     private String latDimName = "latitude";
     private String lonDimName = "longitude";
     private String stepDimName = "step";
-    
-    private final Duration tickDuration;
-    
+
     public InterpolatedRasterLayer(String name, TimeManager timeManager) {
         super(name);
         this.timeManager = timeManager;
-        this.tickDuration = Duration.ofMinutes(timeManager.getTickMinutes());
     }
-    
+
+    // ------------------------------------------------------------------------
+    // Public API
+    // ------------------------------------------------------------------------
     public void loadFromNetCDF(String filePath, String variableName) throws IOException {
         dataLock.writeLock().lock();
         try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
-            LOGGER.info("Loading NetCDF file: " + filePath);
+            SimulationLogger.info("Loading NetCDF: %s, variable: %s", filePath, variableName);
             detectDimensions(ncfile);
-            
+
             Variable var = ncfile.findVariable(variableName);
-            if (var == null) {
-                throw new IOException("Variable '" + variableName + "' not found.");
-            }
-            
+            if (var == null) throw new IOException("Variable not found: " + variableName);
+
             Dimension timeDim = ncfile.findDimension(timeDimName);
             Dimension latDim = ncfile.findDimension(latDimName);
             Dimension lonDim = ncfile.findDimension(lonDimName);
-            if (timeDim == null || latDim == null || lonDim == null) {
-                throw new IOException("Missing required dimensions.");
-            }
-            
+            if (timeDim == null || latDim == null || lonDim == null)
+                throw new IOException("Missing required dimensions");
+
             timeSize = timeDim.getLength();
             latSize = latDim.getLength();
             lonSize = lonDim.getLength();
-            
+
+            // Check for 'step' dimension (some ERA5 files have it)
             boolean hasStep = false;
             int stepSize = 1;
             for (Dimension d : var.getDimensions()) {
@@ -6138,33 +5957,31 @@ public class InterpolatedRasterLayer extends Layer {
                     break;
                 }
             }
-            
-            LOGGER.info(String.format("Dimensions: %s=%d, %s=%d, %s=%d%s",
-                timeDimName, timeSize, latDimName, latSize, lonDimName, lonSize,
-                hasStep ? ", step=" + stepSize : ""));
-            
+
             dataGrid = new double[timeSize][latSize][lonSize];
-            
+
             readCoordinateVariables(ncfile);
             readTimeMetadata(ncfile);
             readVariableData(var, ncfile, hasStep, stepSize);
-            
-            // Ensure latitude is increasing
+
+            // Ensure latitudes are increasing
             if (latValues.length > 1 && latValues[0] > latValues[1]) {
                 reverseLatitudeData();
             }
-            
-            // Temperature unit conversion if needed
+
+            // Auto‑convert temperature from Celsius to Kelvin if needed
             if (variableName.equalsIgnoreCase("t2m") || variableName.equalsIgnoreCase("temperature")) {
                 double sum = 0.0;
                 int count = 0;
-                for (int t = 0; t < Math.min(timeSize, 3); t++) {
+                outer:
+                for (int t = 0; t < Math.min(timeSize, 5); t++) {
                     for (int lat = 0; lat < Math.min(latSize, 5); lat++) {
                         for (int lon = 0; lon < Math.min(lonSize, 5); lon++) {
-                            double val = dataGrid[t][lat][lon];
-                            if (!Double.isNaN(val)) {
-                                sum += val;
+                            double v = dataGrid[t][lat][lon];
+                            if (!Double.isNaN(v)) {
+                                sum += v;
                                 count++;
+                                if (count >= 25) break outer;
                             }
                         }
                     }
@@ -6172,97 +5989,56 @@ public class InterpolatedRasterLayer extends Layer {
                 if (count > 0) {
                     double avg = sum / count;
                     if (avg < 200) {
-                        LOGGER.warning("Temperature average (" + avg + ") below 200 K – converting from Celsius to Kelvin.");
+                        SimulationLogger.info("Temperature variable appears to be in Celsius; converting to Kelvin.");
                         for (int t = 0; t < timeSize; t++) {
                             for (int lat = 0; lat < latSize; lat++) {
                                 for (int lon = 0; lon < lonSize; lon++) {
-                                    if (!Double.isNaN(dataGrid[t][lat][lon])) {
+                                    if (!Double.isNaN(dataGrid[t][lat][lon]))
                                         dataGrid[t][lat][lon] += 273.15;
-                                    }
                                 }
                             }
                         }
                     }
                 }
             }
-            
+
             dataLoaded = true;
             cacheValid = false;
-            // Allocate cached grid now to avoid null later
             cachedGrid = new double[latSize][lonSize];
-            
-            LOGGER.info(String.format("Successfully loaded %s: %d time steps", variableName, timeSize));
+            SimulationLogger.info("Loaded %s: %d time steps, %d x %d grid", variableName, timeSize, latSize, lonSize);
         } finally {
             dataLock.writeLock().unlock();
         }
     }
-    
-    private void readVariableData(Variable var, NetcdfFile ncfile, boolean hasStep, int stepSize) throws IOException {
-        Array dataArray = var.read();
-        Index index = dataArray.getIndex();
-        
-        List<Dimension> varDims = var.getDimensions();
-        int timeIdx = -1, latIdx = -1, lonIdx = -1, stepIdx = -1;
-        for (int i = 0; i < varDims.size(); i++) {
-            String d = varDims.get(i).getShortName();
-            if (d.equals(timeDimName)) timeIdx = i;
-            else if (d.equals(latDimName)) latIdx = i;
-            else if (d.equals(lonDimName)) lonIdx = i;
-            else if (d.equals(stepDimName)) stepIdx = i;
+
+    @Override
+    public double getValueAt(double lon, double lat) {
+        if (!dataLoaded) return Double.NaN;
+        LocalDateTime now = timeManager.getCurrentDateTime();
+        if (lastCacheTime == null || !lastCacheTime.equals(now)) {
+            updateCache(now);
         }
-        if (timeIdx == -1 || latIdx == -1 || lonIdx == -1) {
-            throw new IOException("Cannot identify dimension order.");
-        }
-        
-        double scale = 1.0, offset = 0.0;
-        double fillValue = Double.NaN;
-        Attribute scaleAttr = var.findAttribute("scale_factor");
-        if (scaleAttr != null) scale = scaleAttr.getNumericValue().doubleValue();
-        Attribute offAttr = var.findAttribute("add_offset");
-        if (offAttr != null) offset = offAttr.getNumericValue().doubleValue();
-        Attribute fillAttr = var.findAttribute("_FillValue");
-        if (fillAttr != null) fillValue = fillAttr.getNumericValue().doubleValue();
-        
-        for (int t = 0; t < timeSize; t++) {
-            for (int lat = 0; lat < latSize; lat++) {
-                for (int lon = 0; lon < lonSize; lon++) {
-                    double sum = 0.0;
-                    int count = 0;
-                    for (int step = 0; step < stepSize; step++) {
-                        double raw;
-                        if (!hasStep) {
-                            if (timeIdx == 0 && latIdx == 1 && lonIdx == 2) {
-                                raw = dataArray.getDouble(index.set(t, lat, lon));
-                            } else if (timeIdx == 0 && lonIdx == 1 && latIdx == 2) {
-                                raw = dataArray.getDouble(index.set(t, lon, lat));
-                            } else {
-                                raw = dataArray.getDouble(index.set(t, lat, lon));
-                            }
-                        } else {
-                            if (timeIdx == 0 && stepIdx == 1 && latIdx == 2 && lonIdx == 3) {
-                                raw = dataArray.getDouble(index.set(t, step, lat, lon));
-                            } else if (timeIdx == 0 && stepIdx == 1 && lonIdx == 2 && latIdx == 3) {
-                                raw = dataArray.getDouble(index.set(t, step, lon, lat));
-                            } else {
-                                raw = dataArray.getDouble(index.set(t, step, lat, lon));
-                            }
-                        }
-                        double val = raw * scale + offset;
-                        if (!Double.isNaN(fillValue) && Math.abs(raw - fillValue) < 1e-6) {
-                            val = Double.NaN;
-                        }
-                        if (!Double.isNaN(val)) {
-                            sum += val;
-                            count++;
-                        }
-                    }
-                    dataGrid[t][lat][lon] = (count > 0) ? sum : Double.NaN;
-                }
-            }
-        }
-        if (hasStep) LOGGER.info("Reduced step dimension by summing across " + stepSize + " steps.");
+        return getCachedValue(lon, lat);
     }
-    
+
+    @Override
+    public void update(Project project) {
+        // Nothing needed – caching is handled in getValueAt
+    }
+
+    // ------------------------------------------------------------------------
+    // Private helpers
+    // ------------------------------------------------------------------------
+    private void detectDimensions(NetcdfFile ncfile) {
+        for (Dimension dim : ncfile.getDimensions()) {
+            String name = dim.getShortName();
+            if (name.equals("time") || name.equals("valid_time") || name.equals("Time")) timeDimName = name;
+            if (name.equals("lat") || name.equals("latitude") || name.equals("Lat")) latDimName = name;
+            if (name.equals("lon") || name.equals("longitude") || name.equals("Lon")) lonDimName = name;
+            if (name.equals("step")) stepDimName = name;
+        }
+    }
+
     private void readCoordinateVariables(NetcdfFile ncfile) throws IOException {
         Variable latVar = ncfile.findVariable(latDimName);
         if (latVar == null) latVar = ncfile.findVariable("lat");
@@ -6273,7 +6049,7 @@ public class InterpolatedRasterLayer extends Layer {
         } else {
             throw new IOException("Latitude variable not found");
         }
-        
+
         Variable lonVar = ncfile.findVariable(lonDimName);
         if (lonVar == null) lonVar = ncfile.findVariable("lon");
         if (lonVar != null) {
@@ -6284,95 +6060,160 @@ public class InterpolatedRasterLayer extends Layer {
             throw new IOException("Longitude variable not found");
         }
     }
-    
+
     private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
         Variable timeVar = ncfile.findVariable(timeDimName);
         if (timeVar == null) {
-            LOGGER.warning("Time variable not found, using simulation time directly");
+            SimulationLogger.warning("No time variable found; using step index.");
             timeValues = new double[timeSize];
-            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600;
+            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1‑hour steps
+            timeReference = timeManager.getStartDateTime();
             return;
         }
+
         Attribute unitsAttr = timeVar.findAttribute("units");
-        if (unitsAttr != null) {
-            timeUnits = unitsAttr.getStringValue();
-            parseTimeUnits(timeUnits);
-        }
+        String units = (unitsAttr != null) ? unitsAttr.getStringValue() : "";
+        parseTimeUnits(units);
+
         Array timeArray = timeVar.read();
+        final double scale;  // will be effectively final
+        if (units.contains("days")) scale = 86400.0;
+        else if (units.contains("hours")) scale = 3600.0;
+        else if (units.contains("minutes")) scale = 60.0;
+        else scale = 1.0;
+
         timeValues = new double[timeSize];
         for (int i = 0; i < timeSize; i++) {
             double raw = timeArray.getDouble(i);
-            if (timeUnits.startsWith("days")) {
-                timeValues[i] = raw * 24 * 3600;
-            } else {
-                timeValues[i] = raw;
-            }
+            timeValues[i] = raw * scale;
         }
+        SimulationLogger.info("Time range: %.2f to %.2f seconds since reference", timeValues[0], timeValues[timeSize-1]);
     }
-    
+
     private void parseTimeUnits(String units) {
-        try {
-            String[] parts = units.split("since");
-            if (parts.length == 2) {
-                String dateStr = parts[1].trim();
+        // Default reference: 1970-01-01
+        timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
+        if (units == null || units.isEmpty()) return;
+        String[] parts = units.split("since");
+        if (parts.length == 2) {
+            String dateStr = parts[1].trim();
+            try {
                 if (dateStr.contains(" ")) {
                     timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                 } else {
                     timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
                 }
-                LOGGER.info("Time reference: " + timeReference);
+                SimulationLogger.info("Time reference: %s", timeReference);
+            } catch (Exception e) {
+                SimulationLogger.warning("Could not parse time units: %s", units);
             }
-        } catch (Exception e) {
-            LOGGER.warning("Could not parse time units, using 1970-01-01");
-            timeReference = LocalDateTime.of(1970, 1, 1, 0, 0);
         }
     }
-    
+
+    private void readVariableData(Variable var, NetcdfFile ncfile, boolean hasStep, int stepSize) throws IOException {
+        Array dataArray = var.read();
+        Index index = dataArray.getIndex();
+
+        // Determine dimension order
+        List<Dimension> dims = var.getDimensions();
+        int timeIdx = -1, latIdx = -1, lonIdx = -1, stepIdx = -1;
+        for (int i = 0; i < dims.size(); i++) {
+            String d = dims.get(i).getShortName();
+            if (d.equals(timeDimName)) timeIdx = i;
+            else if (d.equals(latDimName)) latIdx = i;
+            else if (d.equals(lonDimName)) lonIdx = i;
+            else if (d.equals(stepDimName)) stepIdx = i;
+        }
+        if (timeIdx == -1 || latIdx == -1 || lonIdx == -1)
+            throw new IOException("Cannot identify dimension order for variable " + var.getShortName());
+
+        // Read scale/offset (these are effectively final after assignment)
+        final double scale;
+        final double offset;
+        final double fillValue;
+
+        Attribute scaleAttr = var.findAttribute("scale_factor");
+        if (scaleAttr != null) scale = scaleAttr.getNumericValue().doubleValue();
+        else scale = 1.0;
+
+        Attribute offAttr = var.findAttribute("add_offset");
+        if (offAttr != null) offset = offAttr.getNumericValue().doubleValue();
+        else offset = 0.0;
+
+        Attribute fillAttr = var.findAttribute("_FillValue");
+        if (fillAttr != null) fillValue = fillAttr.getNumericValue().doubleValue();
+        else fillValue = Double.NaN;
+
+        for (int t = 0; t < timeSize; t++) {
+            for (int lat = 0; lat < latSize; lat++) {
+                for (int lon = 0; lon < lonSize; lon++) {
+                    double sum = 0.0;
+                    int count = 0;
+                    if (!hasStep) {
+                        int[] pos = new int[dims.size()];
+                        pos[timeIdx] = t;
+                        pos[latIdx] = lat;
+                        pos[lonIdx] = lon;
+                        double raw = dataArray.getDouble(index.set(pos));
+                        double val = raw * scale + offset;
+                        if (!Double.isNaN(fillValue) && Math.abs(raw - fillValue) < 1e-6) val = Double.NaN;
+                        if (!Double.isNaN(val)) {
+                            sum = val;
+                            count = 1;
+                        }
+                    } else {
+                        for (int step = 0; step < stepSize; step++) {
+                            int[] pos = new int[dims.size()];
+                            pos[timeIdx] = t;
+                            pos[stepIdx] = step;
+                            pos[latIdx] = lat;
+                            pos[lonIdx] = lon;
+                            double raw = dataArray.getDouble(index.set(pos));
+                            double val = raw * scale + offset;
+                            if (!Double.isNaN(fillValue) && Math.abs(raw - fillValue) < 1e-6) val = Double.NaN;
+                            if (!Double.isNaN(val)) {
+                                sum += val;
+                                count++;
+                            }
+                        }
+                    }
+                    dataGrid[t][lat][lon] = (count > 0) ? sum / count : Double.NaN;
+                }
+            }
+        }
+        if (hasStep) SimulationLogger.info("Reduced step dimension (averaged over %d steps)", stepSize);
+    }
+
     private void reverseLatitudeData() {
         double[] revLat = new double[latSize];
         for (int i = 0; i < latSize; i++) revLat[i] = latValues[latSize - 1 - i];
         latValues = revLat;
         double[][][] revData = new double[timeSize][latSize][lonSize];
-        for (int t = 0; t < timeSize; t++)
-            for (int lat = 0; lat < latSize; lat++)
+        for (int t = 0; t < timeSize; t++) {
+            for (int lat = 0; lat < latSize; lat++) {
                 System.arraycopy(dataGrid[t][latSize - 1 - lat], 0, revData[t][lat], 0, lonSize);
+            }
+        }
         dataGrid = revData;
     }
-    
-    @Override
-    public double getValueAt(double lon, double lat) {
-        if (!dataLoaded) return Double.NaN;
-        LocalDateTime currentTime = timeManager.getCurrentDateTime();
-        if (!cacheValid || !currentTime.equals(lastCacheTime)) {
-            updateCache(currentTime);
-        }
-        return getCachedValue(lon, lat);
-    }
-    
+
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
-            // Ensure cachedGrid is allocated
-            if (cachedGrid == null) {
-                cachedGrid = new double[latSize][lonSize];
-            }
-            
-            long secondsElapsed = Duration.between(timeReference, currentTime).getSeconds();
+            long secondsSinceRef = Duration.between(timeReference, currentTime).getSeconds();
+            // Find surrounding time indices
             int lowerIdx = -1, upperIdx = -1;
             double alpha = 0.0;
-            
-            // Find surrounding time indices
             for (int i = 0; i < timeValues.length - 1; i++) {
-                if (secondsElapsed >= timeValues[i] && secondsElapsed <= timeValues[i+1]) {
+                if (secondsSinceRef >= timeValues[i] && secondsSinceRef <= timeValues[i+1]) {
                     lowerIdx = i;
                     upperIdx = i + 1;
-                    alpha = (secondsElapsed - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
+                    alpha = (secondsSinceRef - timeValues[i]) / (timeValues[i+1] - timeValues[i]);
                     break;
                 }
             }
-            
             if (lowerIdx == -1) {
-                if (secondsElapsed <= timeValues[0]) {
+                if (secondsSinceRef <= timeValues[0]) {
                     lowerIdx = upperIdx = 0;
                     alpha = 0.0;
                 } else {
@@ -6380,127 +6221,71 @@ public class InterpolatedRasterLayer extends Layer {
                     alpha = 0.0;
                 }
             }
-            
+
             // Interpolate in time
+            if (cachedGrid == null) cachedGrid = new double[latSize][lonSize];
             for (int lat = 0; lat < latSize; lat++) {
                 for (int lon = 0; lon < lonSize; lon++) {
                     if (lowerIdx == upperIdx || alpha == 0.0) {
                         cachedGrid[lat][lon] = dataGrid[lowerIdx][lat][lon];
                     } else {
-                        double valLow = dataGrid[lowerIdx][lat][lon];
-                        double valHigh = dataGrid[upperIdx][lat][lon];
-                        cachedGrid[lat][lon] = valLow + alpha * (valHigh - valLow);
+                        double vLow = dataGrid[lowerIdx][lat][lon];
+                        double vHigh = dataGrid[upperIdx][lat][lon];
+                        cachedGrid[lat][lon] = vLow + alpha * (vHigh - vLow);
                     }
                 }
             }
             lastCacheTime = currentTime;
             cacheValid = true;
+            cacheMisses++;
         } finally {
             dataLock.readLock().unlock();
         }
     }
-    
+
     private double getCachedValue(double lon, double lat) {
         int latIdx = findNearestIndex(latValues, lat);
         int lonIdx = findNearestIndex(lonValues, lon);
-        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize)
+        if (latIdx >= 0 && latIdx < latSize && lonIdx >= 0 && lonIdx < lonSize) {
+            cacheHits++;
             return cachedGrid[latIdx][lonIdx];
+        }
         return Double.NaN;
     }
-    
+
     private int findNearestIndex(double[] array, double value) {
         if (array == null || array.length == 0) return -1;
-        int low = 0, high = array.length - 1;
-        while (low <= high) {
-            int mid = (low + high) / 2;
+        int lo = 0, hi = array.length - 1;
+        while (lo <= hi) {
+            int mid = (lo + hi) / 2;
             if (array[mid] == value) return mid;
-            else if (array[mid] < value) low = mid + 1;
-            else high = mid - 1;
+            else if (array[mid] < value) lo = mid + 1;
+            else hi = mid - 1;
         }
-        if (low >= array.length) return array.length - 1;
-        if (high < 0) return 0;
-        return Math.abs(array[low] - value) < Math.abs(array[high] - value) ? low : high;
+        if (lo >= array.length) return array.length - 1;
+        if (hi < 0) return 0;
+        return (Math.abs(array[lo] - value) < Math.abs(array[hi] - value)) ? lo : hi;
     }
-    
-    private void detectDimensions(NetcdfFile ncfile) {
-        for (Dimension dim : ncfile.getDimensions()) {
-            String name = dim.getShortName();
-            if (name.equals("time") || name.equals("valid_time") || name.equals("Time")) timeDimName = name;
-            if (name.equals("lat") || name.equals("latitude") || name.equals("Lat")) latDimName = name;
-            if (name.equals("lon") || name.equals("longitude") || name.equals("Lon")) lonDimName = name;
-            if (name.equals("step")) stepDimName = name;
-        }
-    }
-    
+
+    // ------------------------------------------------------------------------
+    // Utility methods for external use
+    // ------------------------------------------------------------------------
     public boolean isDataLoaded() { return dataLoaded; }
     public int getTimeSize() { return timeSize; }
     public int getLatSize() { return latSize; }
     public int getLonSize() { return lonSize; }
-    public double getMinLat() { return latValues != null && latValues.length > 0 ? latValues[0] : Double.NaN; }
+    public double getMinLat() { return latValues != null ? latValues[0] : Double.NaN; }
     public double getMaxLat() { return latValues != null ? latValues[latValues.length-1] : Double.NaN; }
-    public double getMinLon() { return lonValues != null && lonValues.length > 0 ? lonValues[0] : Double.NaN; }
+    public double getMinLon() { return lonValues != null ? lonValues[0] : Double.NaN; }
     public double getMaxLon() { return lonValues != null ? lonValues[lonValues.length-1] : Double.NaN; }
-    
-    @Override
-    public void update(Project project) {
-        LocalDateTime current = timeManager.getCurrentDateTime();
-        if (lastCacheTime == null || !lastCacheTime.equals(current)) cacheValid = false;
-    }
-    
+
     public void printStatistics() {
-        SimulationLogger.info(getStatistics().toString());
-    }
-
-    public ClimateLayerStats getStatistics() {
-        return new ClimateLayerStats(
-            getName(), 
-            dataLoaded, 
-            timeSize, 
-            latSize, 
-            lonSize,
-            cacheHits, 
-            cacheMisses, 
-            interpolationsPerformed, 
-            getCacheHitRatio()
-        );
-    }
-
-    private double getCacheHitRatio() {
-        long total = cacheHits + cacheMisses;
-        return total > 0 ? (double) cacheHits / total : 0.0;
-    }
-
-    // Inner class for statistics
-    public static class ClimateLayerStats {
-        private final String layerName;
-        private final boolean dataLoaded;
-        private final int timeSteps, latPoints, lonPoints;
-        private final long cacheHits, cacheMisses, totalInterpolations;
-        private final double cacheHitRatio;
-
-        public ClimateLayerStats(String name, boolean loaded, int t, int lat, int lon,
-                                 long hits, long misses, long interp, double ratio) {
-            this.layerName = name;
-            this.dataLoaded = loaded;
-            this.timeSteps = t;
-            this.latPoints = lat;
-            this.lonPoints = lon;
-            this.cacheHits = hits;
-            this.cacheMisses = misses;
-            this.totalInterpolations = interp;
-            this.cacheHitRatio = ratio;
-        }
-
-        @Override
-        public String toString() {
-            return String.format(
-                "Climate Layer '%s':\n  Loaded: %b\n  Dims: %d x %d x %d\n  Cache: %d hits, %d misses (%.1f%%)\n  Interpolations: %d",
-                layerName, dataLoaded, timeSteps, latPoints, lonPoints, 
-                cacheHits, cacheMisses, cacheHitRatio * 100, totalInterpolations
-            );
-        }
+        SimulationLogger.info("Climate layer %s: time steps=%d, grid=%dx%d, loaded=%b", getName(), timeSize, latSize, lonSize, dataLoaded);
+        double hitRatio = (cacheHits + cacheMisses) == 0 ? 0 : (double) cacheHits / (cacheHits + cacheMisses);
+        SimulationLogger.info("Cache hits=%d, misses=%d, hit ratio=%.2f", cacheHits, cacheMisses, hitRatio);
     }
 }package com.monadvsim.app.models.entities;
+
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
@@ -6513,259 +6298,216 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-
 /**
- * Large DataSet Handler
- *
- * Uses memory-mapped files for large raster dataSets
- *
- * Reduces memory footprint for high-resolution data
- *
- * Implements automatic memory management
- *
- * Falls back to in-memory storage for small dataSets
- * 
- * 
- * @author void
+ * Large Raster Handler using memory‑mapped files.
+ * Avoids heap allocation; fails fast if mapping is impossible.
  */
-
-
 public class MemoryMappedRasterLayer extends RasterLayer {
+
     private static final int DOUBLE_BYTES = Double.BYTES;
-    
+    private static final long MEMORY_THRESHOLD = 100 * 1024 * 1024;        // 100 MB
+    private static final long MAX_MAPPABLE_BYTES = 8L * 1024 * 1024 * 1024; // 8 GB
+
     private File dataFile;
     private MappedByteBuffer[] frameBuffers;
     private FileChannel fileChannel;
     private boolean memoryMapped = false;
     private final ReentrantReadWriteLock fileLock = new ReentrantReadWriteLock();
-    
-    // Memory thresholds (adjust based on available RAM)
-    private static final long MEMORY_THRESHOLD = 100 * 1024 * 1024; // 100MB
-    private static final long MAX_MEMORY_DATA = 500 * 1024 * 1024; // 500MB
-    
+
+    private int localWidth, localHeight, localFrames;
+
     public MemoryMappedRasterLayer(String name, int width, int height, int frames) {
-        super(name, width, height, frames);
-        
-        // Check if we should use memory mapping
+        super(name);
+        this.localWidth = width;
+        this.localHeight = height;
+        this.localFrames = frames;
+
+        setWidth(width);
+        setHeight(height);
+        setFrames(frames);
+
         long estimatedSize = (long) width * height * frames * DOUBLE_BYTES;
         if (estimatedSize > MEMORY_THRESHOLD) {
             enableMemoryMapping();
+        } else {
+            // Small raster – safe to use heap
+            super.initialize(width, height, frames);
+            memoryMapped = false;
         }
     }
-    
+
     private void enableMemoryMapping() {
         try {
-            // Create temporary file
+            long fileSize = (long) localWidth * localHeight * localFrames * DOUBLE_BYTES;
+            if (fileSize > MAX_MAPPABLE_BYTES) {
+                throw new IOException(String.format(
+                    "Raster %s is too large to memory‑map (%.1f GB). Maximum allowed is %.1f GB.",
+                    getName(), fileSize / (1024.0 * 1024.0 * 1024.0),
+                    MAX_MAPPABLE_BYTES / (1024.0 * 1024.0 * 1024.0)));
+            }
+
             dataFile = File.createTempFile("raster_" + getName(), ".dat");
             dataFile.deleteOnExit();
-            
-            long fileSize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
-            
-            // Open file channel
-            fileChannel = FileChannel.open(
-                dataFile.toPath(),
-                StandardOpenOption.READ,
-                StandardOpenOption.WRITE,
-                StandardOpenOption.CREATE
-            );
-            
-            // Map file to memory
-            frameBuffers = new MappedByteBuffer[getFrames()];
-            long frameSize = (long) getWidth() * getHeight() * DOUBLE_BYTES;
-            
-            for (int i = 0; i < getFrames(); i++) {
+
+            fileChannel = FileChannel.open(dataFile.toPath(),
+                    StandardOpenOption.READ, StandardOpenOption.WRITE, StandardOpenOption.CREATE);
+
+            frameBuffers = new MappedByteBuffer[localFrames];
+            long frameSize = (long) localWidth * localHeight * DOUBLE_BYTES;
+
+            for (int i = 0; i < localFrames; i++) {
                 long position = i * frameSize;
-                frameBuffers[i] = fileChannel.map(
-                    FileChannel.MapMode.READ_WRITE,
-                    position,
-                    frameSize
-                );
+                frameBuffers[i] = fileChannel.map(FileChannel.MapMode.READ_WRITE, position, frameSize);
             }
-            
+
             memoryMapped = true;
-            SimulationLogger.info("✓ Memory-mapped raster: %s [%d MB]%n", 
-                getName(), fileSize / (1024 * 1024));
-            
+            SimulationLogger.info("✓ Memory‑mapped raster: %s [%d MB]",
+                    getName(), fileSize / (1024 * 1024));
         } catch (IOException e) {
-            System.err.printf("Failed to enable memory mapping for %s: %s%n", 
-                getName(), e.getMessage());
-            memoryMapped = false;
-            // Fall back to in-memory storage
-            super.initialize(getWidth(), getHeight(), getFrames());
+            SimulationLogger.severe("Failed to memory‑map %s: %s", getName(), e.getMessage());
+            SimulationLogger.severe("Consider downscaling the raster further or increasing MAX_MAPPABLE_BYTES.");
+            // Do NOT fall back to heap allocation – that will cause OOM.
+            throw new RuntimeException("Cannot load raster " + getName() + " – memory mapping failed.", e);
         }
     }
-    
+
+//    @Override
+//    public double getValueAt(double lon, double lat) {
+//        if (!memoryMapped) return super.getValueAt(lon, lat);
+//        if (getMaxLon() == getMinLon() || getMaxLat() == getMinLat()) return 0.0;
+//
+//        double xFrac = (lon - getMinLon()) / (getMaxLon() - getMinLon());
+//        double yFrac = (lat - getMinLat()) / (getMaxLat() - getMinLat());
+//
+//        int x = (int) (xFrac * (localWidth - 1));
+//        int y = (int) (yFrac * (localHeight - 1));
+//
+//        if (x < 0 || x >= localWidth || y < 0 || y >= localHeight) return 0.0;
+//
+//        fileLock.readLock().lock();
+//        try {
+//            int index = y * localWidth + x;
+//            return frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+//        } finally {
+//            fileLock.readLock().unlock();
+//        }
+//    }
     @Override
     public double getValueAt(double lon, double lat) {
-        if (!memoryMapped) {
-            return super.getValueAt(lon, lat);
-        }
-        
-        // Calculate pixel coordinates
-        if (getMaxLon() == getMinLon() || getMaxLat() == getMinLat()) {
-            return 0.0;
-        }
-        
+        if (!memoryMapped) return super.getValueAt(lon, lat);
+
+        if (getMaxLon() == getMinLon() || getMaxLat() == getMinLat()) return 0.0;
+
         double xFrac = (lon - getMinLon()) / (getMaxLon() - getMinLon());
         double yFrac = (lat - getMinLat()) / (getMaxLat() - getMinLat());
-        
-        int x = (int) (xFrac * (getWidth() - 1));
-        int y = (int) (yFrac * (getHeight() - 1));
-        
-        if (x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) {
-            return 0.0;
-        }
-        
-        // Read from memory-mapped buffer
+
+        int x = (int) (xFrac * (localWidth - 1));
+        int y = (int) (yFrac * (localHeight - 1));
+
+        if (x < 0 || x >= localWidth || y < 0 || y >= localHeight) return 0.0;
+
         fileLock.readLock().lock();
         try {
-            int index = y * getWidth() + x;
-            return frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+            int index = y * localWidth + x;
+            double value = frameBuffers[getActiveFrame()].getDouble(index * DOUBLE_BYTES);
+            // Treat NaN as 0.0
+            return Double.isNaN(value) ? 0.0 : value;
         } finally {
             fileLock.readLock().unlock();
         }
     }
-    
+
     @Override
     public void setData(int frame, int x, int y, double value) {
         if (!memoryMapped) {
             super.setData(frame, x, y, value);
             return;
         }
-        
-        if (frame < 0 || frame >= getFrames() || 
-            x < 0 || x >= getWidth() || y < 0 || y >= getHeight()) {
+        if (frame < 0 || frame >= localFrames || x < 0 || x >= localWidth || y < 0 || y >= localHeight)
             return;
-        }
-        
+
         fileLock.writeLock().lock();
         try {
-            int index = y * getWidth() + x;
+            int index = y * localWidth + x;
             frameBuffers[frame].putDouble(index * DOUBLE_BYTES, value);
         } finally {
             fileLock.writeLock().unlock();
         }
     }
-    
+
     @Override
     public void setActiveFrame(int index) {
-        if (memoryMapped) {
-            // Ensure frame buffer is loaded
-            if (index >= 0 && index < getFrames()) {
-                // Force buffer load by accessing it
-                if (frameBuffers[index] != null) {
-                    frameBuffers[index].load();
-                }
-            }
+        if (memoryMapped && index >= 0 && index < localFrames && frameBuffers[index] != null) {
+            frameBuffers[index].load();
         }
         super.setActiveFrame(index);
     }
-    
+
     @Override
     public void initialize(int width, int height, int frames) {
-        // Dispose existing resources
-        dispose();
-        
-        // Call parent initialization
-        super.initialize(width, height, frames);
-        
-        // Re-evaluate memory mapping
-        long estimatedSize = (long) width * height * frames * DOUBLE_BYTES;
-        if (estimatedSize > MEMORY_THRESHOLD) {
-            enableMemoryMapping();
+        // Not used for memory‑mapped case; kept for heap fallback (never called).
+        if (!memoryMapped) {
+            super.initialize(width, height, frames);
         }
     }
-    
-    /**
-     * Dispose of resources
-     */
+
     public void dispose() {
         fileLock.writeLock().lock();
         try {
             if (memoryMapped && frameBuffers != null) {
-                // Unmap buffers
-                for (MappedByteBuffer buffer : frameBuffers) {
-                    if (buffer != null) {
-                        // Java doesn't have direct unmap, but we can clear the reference
-                        // The cleaner will handle it
-//                        buffer.clear();
-                        clean(buffer);
-                    }
+                for (MappedByteBuffer buf : frameBuffers) {
+                    if (buf != null) clean(buf);
                 }
                 frameBuffers = null;
             }
-            
-            // Close file channel
             if (fileChannel != null && fileChannel.isOpen()) {
-                try {
-                    fileChannel.close();
-                } catch (IOException e) {
-                    SimulationLogger.severe("Error closing file channel: " + e.getMessage());
-                }
+                fileChannel.close();
             }
-            
-            // Delete temporary file
             if (dataFile != null && dataFile.exists()) {
-                try {
-                    Files.deleteIfExists(dataFile.toPath());
-                } catch (IOException e) {
-                    SimulationLogger.severe("Error deleting temp file: " + e.getMessage());
-                }
+                Files.deleteIfExists(dataFile.toPath());
             }
-            
             memoryMapped = false;
-            
+        } catch (IOException e) {
+            SimulationLogger.severe("Error disposing memory‑mapped raster: " + e.getMessage());
         } finally {
             fileLock.writeLock().unlock();
         }
     }
-    
-    @Override
-    protected void finalize() throws Throwable {
+
+    private void clean(MappedByteBuffer buffer) {
         try {
-            dispose();
-        } finally {
-            super.finalize();
+            Method cleaner = buffer.getClass().getMethod("cleaner");
+            cleaner.setAccessible(true);
+            Object cleanerObj = cleaner.invoke(buffer);
+            Method clean = cleanerObj.getClass().getMethod("clean");
+            clean.invoke(cleanerObj);
+        } catch (Exception e) {
+            SimulationLogger.warning("Could not unmap buffer: " + e.getMessage());
         }
     }
-    
-    /**
-     * Get memory usage statistics
-     */
+
+    @Override
+    protected void finalize() throws Throwable {
+        try { dispose(); } finally { super.finalize(); }
+    }
+
     public Map<String, Object> getMemoryStats() {
         Map<String, Object> stats = new HashMap<>();
-        
         if (memoryMapped) {
-            long fileSize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
-            stats.put("storage", "memory-mapped");
+            long fileSize = (long) localWidth * localHeight * localFrames * DOUBLE_BYTES;
+            stats.put("storage", "memory‑mapped");
             stats.put("fileSizeMB", fileSize / (1024.0 * 1024.0));
             stats.put("framesMapped", frameBuffers != null ? frameBuffers.length : 0);
         } else {
-            stats.put("storage", "in-memory");
-            long memorySize = (long) getWidth() * getHeight() * getFrames() * DOUBLE_BYTES;
-            stats.put("memorySizeMB", memorySize / (1024.0 * 1024.0));
+            stats.put("storage", "in‑memory");
+            long memSize = (long) localWidth * localHeight * localFrames * DOUBLE_BYTES;
+            stats.put("memorySizeMB", memSize / (1024.0 * 1024.0));
         }
-        
-        stats.put("width", getWidth());
-        stats.put("height", getHeight());
-        stats.put("frames", getFrames());
+        stats.put("width", localWidth);
+        stats.put("height", localHeight);
+        stats.put("frames", localFrames);
         stats.put("activeFrame", getActiveFrame());
-        
         return stats;
-    }
-    
-    
-    private void clean(MappedByteBuffer buffer) {
-        try {
-            Method cleanerMethod = buffer.getClass().getMethod("cleaner");
-            cleanerMethod.setAccessible(true);
-            Object cleaner = cleanerMethod.invoke(buffer);
-            Method cleanMethod = cleaner.getClass().getMethod("clean");
-            cleanMethod.invoke(cleaner);
-        } catch (Exception e) {
-            // Log but don't crash
-            SimulationLogger.warning("Could not unmap buffer: " + e.getMessage());
-        }
     }
 }package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;

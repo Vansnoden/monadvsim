@@ -73,6 +73,7 @@ public class SimulationConfig {
         public double tankPopulationThreshold;
         public double mosquitoBuildingThreshold;
         public double mosquitoPopulationThreshold;
+        public boolean seedAcrossFullStudySite = false;
     }
 
     public static class ProjectDefaults {

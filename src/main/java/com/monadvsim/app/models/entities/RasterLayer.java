@@ -55,9 +55,23 @@ public class RasterLayer extends Layer implements Serializable {
         this.maxLat = maxLat;
     }
 
+//    @Override
+//    public double getValueAt(double lon, double lat) {
+//        if (dataGrid == null) return Double.NaN;
+//        if (maxLon == minLon || maxLat == minLat) return 0.0;
+//
+//        double xFrac = (lon - minLon) / (maxLon - minLon);
+//        double yFrac = (lat - minLat) / (maxLat - minLat);
+//
+//        int x = (int) (xFrac * (width - 1));
+//        int y = (int) (yFrac * (height - 1));
+//
+//        if (x < 0 || x >= width || y < 0 || y >= height) return 0.0;
+//        return dataGrid[activeFrame][x][y];
+//    }
     @Override
     public double getValueAt(double lon, double lat) {
-        if (dataGrid == null) return Double.NaN;
+        if (dataGrid == null) return 0.0; // treat missing grid as zero
         if (maxLon == minLon || maxLat == minLat) return 0.0;
 
         double xFrac = (lon - minLon) / (maxLon - minLon);
@@ -67,7 +81,9 @@ public class RasterLayer extends Layer implements Serializable {
         int y = (int) (yFrac * (height - 1));
 
         if (x < 0 || x >= width || y < 0 || y >= height) return 0.0;
-        return dataGrid[activeFrame][x][y];
+        double value = dataGrid[activeFrame][x][y];
+        // Treat NaN as 0.0
+        return Double.isNaN(value) ? 0.0 : value;
     }
 
     @Override
