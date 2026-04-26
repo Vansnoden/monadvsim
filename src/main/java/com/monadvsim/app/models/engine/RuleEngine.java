@@ -13,19 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * JavaScript Rule Evaluator
- *
- * Evaluates agent behavior rules using GraalVM JavaScript engine.
- * Supports dynamic rule evaluation with environmental context access.
- * Implements thread-local contexts for concurrent rule evaluation.
- * Executes predefined actions (die, lay_eggs, move_random, etc.).
- * Includes caching for rule conditions and results.
- *
- * <p><b>Note:</b> Actions like {@code pupate}, {@code emerge}, and {@code hatch}
- * are now handled automatically by the {@link AgentLayer} using the
- * {@link LifecycleModel}. They are kept for compatibility but are deprecated.
- *
- * @author void
+ * JavaScript Rule Evaluator – Fixed version with proper context management.
  */
 public class RuleEngine {
 
@@ -34,7 +22,9 @@ public class RuleEngine {
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
+            // Allow full access to host objects and classes for simplicity
             return Context.newBuilder("js")
+                    .allowAllAccess(true)           // Grants full access (host, IO, etc.)
                     .allowHostAccess(HostAccess.ALL)
                     .allowHostClassLookup(s -> true)
                     .option("js.ecmascript-version", "2022")
@@ -49,15 +39,18 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        try {
-            String cacheKey = condition + "|" + agent.getId();
-            Boolean cached = evaluationCache.get(cacheKey);
-            if (cached != null) {
-                return cached;
-            }
-            Context context = threadLocalContext.get();
-            Value bindings = context.getBindings("js");
+        // Use a cache key that includes agent ID to avoid stale results
+        String cacheKey = condition + "|" + agent.getId();
+        Boolean cached = evaluationCache.get(cacheKey);
+        if (cached != null) {
+            return cached;
+        }
 
+        Context context = threadLocalContext.get();
+        // IMPORTANT: Enter the context before using bindings or evaluating
+        context.enter();
+        try {
+            Value bindings = context.getBindings("js");
             populateBindings(bindings, agent, project);
 
             Source source = scriptCache.computeIfAbsent(condition, c ->
@@ -65,12 +58,14 @@ public class RuleEngine {
             );
 
             Value result = context.eval(source);
-            evaluationCache.put(cacheKey, result.isBoolean() && result.asBoolean());
-            return result.isBoolean() && result.asBoolean();
-
+            boolean boolResult = result.isBoolean() && result.asBoolean();
+            evaluationCache.put(cacheKey, boolResult);
+            return boolResult;
         } catch (Exception e) {
             SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.getMessage());
             return false;
+        } finally {
+            context.leave();  // Always leave the context
         }
     }
 
@@ -95,14 +90,21 @@ public class RuleEngine {
             bindings.putMember("capacity", ia.getCapacity());
         }
 
-        // Bind layer values
-        for (int i = 0; i < project.getLayerNames().size(); i++) {
-            String token = project.getTokens().get(i);
-            double value = getValueAt(project, project.getLayerNames().get(i), agent.getX(), agent.getY());
-            bindings.putMember(token, value);
+        // Bind environmental layers safely (skip if missing)
+        List<String> layerNames = project.getLayerNames();
+        List<String> tokens = project.getTokens();
+        if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
+            for (int i = 0; i < layerNames.size(); i++) {
+                String token = tokens.get(i);
+                double value = getValueAt(project, layerNames.get(i), agent.getX(), agent.getY());
+                bindings.putMember(token, value);
+            }
+        } else {
+            SimulationLogger.warning("Layer names or tokens missing or mismatched; skipping environmental bindings.");
         }
     }
 
+    // -------------------- Actions (unchanged, but keep as is) --------------------
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
         switch (action.toLowerCase()) {
             case "die" -> executeDie(agent, layer);
@@ -122,29 +124,24 @@ public class RuleEngine {
     }
 
     // ------------------------------------------------------------------------
-    // Behavioural actions
+    // Behavioural actions (unchanged)
     // ------------------------------------------------------------------------
-
     private void executeRest(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(true);
             la.setEnergy(Math.min(1.0, la.getEnergy() + 0.01));
             la.resetTimeWithoutRest();
-//            SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " is resting. Energy: " + la.getEnergy());
         }
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(false);
-//            SimulationLogger.info("[STOP RESTING] Mosquito " + agent.getId() + " stopped resting");
         }
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
-//            SimulationLogger.info("[DIE] Mosquito " + agent.getId() + " died from exhaustion after " +
-//                    la.getTimeWithoutRest() + " ticks without rest");
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
         }
@@ -159,8 +156,6 @@ public class RuleEngine {
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.02));
                     la.resetTimeWithoutRest();
-//                     SimulationLogger.info("[RESTING] Mosquito " + agent.getId() + " resting in building. " +
-//                            "Building density: " + buildingDensity + ", Energy: " + la.getEnergy());
                 } else {
                     executeFindBuildingToRest(agent, project, layer);
                 }
@@ -193,47 +188,36 @@ public class RuleEngine {
                     la.setY(bestY);
                     la.setResting(true);
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.015));
-//                     SimulationLogger.info("[FIND BUILDING] Mosquito " + agent.getId() + " moved to better resting spot. " +
-//                            "Building density: " + bestDensity);
                     layer.updateAgentPositionImmediately(la);
                 }
             }
         }
     }
 
-    
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
-        // SimulationLogger.info("[FEEDING] Evaluating");
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
             if (populationLayer != null) {
                 double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-                // Feed if any population exists (even low density)
                 if (popDensity > 0.01) {
                     la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
-                    // Optional debug
-//                     SimulationLogger.info("[FEEDING] Adult " + agent.getId() + " fed, energy: " + la.getEnergy());
                 }
             } else {
-                // Fallback: always feed a little
                 la.setEnergy(Math.min(1.0, la.getEnergy() + 0.1));
             }
         }
     }
 
     private void executeMoveRandom(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[EVALUATING] Evaluating");
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
             la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
                     (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
-//            SimulationLogger.info("[MOVING] Adult " + agent.getId() + " moving, energy: " + la.getEnergy());
         }
     }
 
     private void executeReproduce(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[REPRODUCING] Evaluating");
         if (agent instanceof LivingAgent la && la.isGravid()) {
             List<Agent> nearby = project.getSpatialRegistry()
                     .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
@@ -248,18 +232,13 @@ public class RuleEngine {
                     break;
                 }
             }
-//            SimulationLogger.info("[REPRODUCING] Adult " + agent.getId() + " reproducing, energy: " + la.getEnergy());
         }
     }
 
-    
     // ------------------------------------------------------------------------
     // Other lifecycle / environmental actions
     // ------------------------------------------------------------------------
-
-    
     private void executeDie(Agent agent, AgentLayer layer) {
-//        SimulationLogger.info("[DIE] Evaluating");
         if (agent instanceof LivingAgent la) {
             la.setAlive(false);
             layer.killAgentImmediately(agent.getId());
@@ -270,109 +249,57 @@ public class RuleEngine {
 
     private void executeDryOut(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
-            int eggsKilled = ia.getEggCount();
-            int larvaeKilled = ia.getLarvalCount();
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(0);
-//            SimulationLogger.info("[DRY-OUT] Tank %s dried out! Killed %d eggs and %d larvae%n",
-//                    agent.getId(), eggsKilled, larvaeKilled);
             layer.updateAgentPositionImmediately(agent);
         }
     }
 
     private void executeFreeze(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
-//            int eggsKilled = ia.getEggCount();
-//            int larvaeKilled = ia.getLarvalCount();
             ia.setEggCount(0);
             ia.setLarvalCount(0);
             ia.setWaterVolume(Math.max(0, ia.getWaterVolume() - 10));
-//            SimulationLogger.info("[FROZEN] Tank %s frozen! Killed %d eggs and %d larvae. Water reduced to %.1f%%%n",
-//                    agent.getId(), eggsKilled, larvaeKilled, ia.getWaterVolume());
             layer.updateAgentPositionImmediately(agent);
         }
     }
 
     private void executeGetGravid(Agent agent) {
-        //SimulationLogger.info("[GRAVID] Evaluating");
         if (agent instanceof LivingAgent la) {
             la.setGravid(true);
-//            SimulationLogger.info("[GRAVID] Adult %s became gravid", la.getId());
         }
     }
 
-    /**
-     * Temperature‑ and host‑dependent egg laying using the LifecycleModel.
-     */
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[LAY_EGGS] Evaluating");
-
-        if (!(agent instanceof LivingAgent la)) {
-            //SimulationLogger.info("[LAY_EGGS] Not a LivingAgent");
+        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) {
             return;
         }
-
-        // Log the actual stage
-        // SimulationLogger.info("[LAY_EGGS] Agent stage = " + la.getStage());
-
-        if (la.getStage() != LifecycleStage.ADULT) {
-            // SimulationLogger.info("[LAY_EGGS] Not adult, returning");
-            return;
-        }
-
         double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
         double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
         if (livestock <= 0) {
             livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
         }
 
-        //SimulationLogger.info("[LAY_EGGS] Temperature = %.2f K, livestock = %.4f", temperature, livestock);
-
         LifecycleModel model = project.getLifecycleModel();
-        if (model == null) {
-            //SimulationLogger.info("[LAY_EGGS] LifecycleModel is NULL");
-            return;
-        }
+        if (model == null) return;
 
         int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
-        //SimulationLogger.info("[DEBUG] eggsToLay = " + eggsToLay);
-
-        if (eggsToLay <= 0) {
-            //SimulationLogger.info("[LAY_EGGS] eggsToLay <= 0, returning");
-            return;
-        }
+        if (eggsToLay <= 0) return;
 
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
-
-        int tankCount = 0;
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent) tankCount++;
-        }
-//        SimulationLogger.info("[LAY_EGGS] Adult %s at (%.4f,%.4f) – eggsToLay=%d, nearby tanks=%d",
-//                la.getId(), la.getX(), la.getY(), eggsToLay, tankCount);
-
-//        boolean laid = false;
         for (Agent n : nearby) {
             if (n instanceof InertAgent tank) {
                 tank.addEggs(eggsToLay);
                 la.setGravid(false);
                 la.setEnergy(la.getEnergy() - 0.2);
-                //SimulationLogger.info("[LAY_EGGS] SUCCESS: Adult %s laid %d eggs into tank %s",
-                //        la.getId(), eggsToLay, tank.getId());
-//                laid = true;
                 break;
             }
         }
-//        if (!laid) {
-//            SimulationLogger.info("[LAY_EGGS] FAILED: No suitable water tank found near adult %s", la.getId());
-//        }
     }
 
-    
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
-        //SimulationLogger.info("[EVAPORATE] Evaluating");
         if (agent instanceof InertAgent ia) {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
@@ -391,7 +318,6 @@ public class RuleEngine {
     // ------------------------------------------------------------------------
     // Utilities
     // ------------------------------------------------------------------------
-
     private double getValueAt(Project p, String layerName, double x, double y) {
         Layer layer = p.getLayerByName(layerName);
         return (layer != null) ? layer.getValueAt(x, y) : 0.0;
