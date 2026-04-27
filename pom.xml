@@ -220,6 +220,7 @@
                         <jvmArg>-XX:+UseStringDeduplication</jvmArg>
                         <jvmArg>-Djava.awt.headless=true</jvmArg>
                         <!-- Required for GraalVM and GeoTools -->
+                        <jvmArg>-ea</jvmArg>
                         <jvmArg>--add-opens=java.base/java.lang=ALL-UNNAMED</jvmArg>
                         <jvmArg>--add-opens=java.base/java.math=ALL-UNNAMED</jvmArg>
                         <jvmArg>--add-opens=java.base/java.util=ALL-UNNAMED</jvmArg>

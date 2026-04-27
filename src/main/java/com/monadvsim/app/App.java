@@ -422,6 +422,7 @@ public class App {
         }
         SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
 
+        assert tanksPlaced > 0 : "Sorry no tank seeded";
         // Seed mosquitoes (weighted)
         SimulationLogger.info("Seeding mosquitoes (weighted)...");
         int mosquitoesPlaced = 0;
@@ -830,9 +831,11 @@ public class App {
                     double b = Math.max(0, buildings.getValueAt(x, y));
                     double p = Math.max(0, population.getValueAt(x, y));
                     double suit;
-                    if (b > 0.2 && p > 0.1) {
+                    if (b > config.seeding.tankBuildingThreshold 
+                            && p > config.seeding.tankPopulationThreshold) {
                         suit = b * 0.6 + (Math.min(p, 100) / 100.0) * 0.4;
-                    } else if (b > 0.1 || p > 0.05) {
+                    } else if (b > config.seeding.tankBuildingThreshold 
+                            || p > config.seeding.tankPopulationThreshold) {
                         suit = (b * 0.3 + (Math.min(p, 50) / 50.0) * 0.2) * 0.5;
                     } else {
                         suit = 0.01;

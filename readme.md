@@ -387,6 +387,7 @@ If you use this framework in a publication, cite:
     --variables=2t,tp \
     --rename-t2m \
     --verbose
+
 ```
 
 
@@ -417,4 +418,21 @@ gdal_translate -outsize 10% 10% /mnt/monadworld/projects/phd/article_manuscripts
   echo "========================================="
   gdalinfo -stats "/mnt/monadworld/projects/phd/article_manuscripts/a_cdm_for_vector_of_vbds/data/datasets/gee_exports/Somali_EO_Export_10m-20260425T143410Z-3-001/Somali_EO_Export_10m/small_somali_population.tif"
 } | xclip -selection clipboard
+```
+
+
+#### Merge many geotiff into one
+
+```
+# Merge Building Density
+gdalbuildvrt Somali_Building_Density_10m.vrt Somali_Building_Density_10m-*.tif
+gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_NEEDED Somali_Building_Density_10m.vrt Somali_Building_Density_10m.tif
+
+# Merge Elevation
+gdalbuildvrt Somali_Elevation_10m.vrt Somali_Elevation_10m-*.tif
+gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_SAFER Somali_Elevation_10m.vrt Somali_Elevation_10m.tif
+
+# Merge Population
+gdalbuildvrt Somali_Population_10m.vrt Somali_Population_10m-*.tif
+gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_SAFER Somali_Population_10m.vrt Somali_Population_10m.tif
 ```
