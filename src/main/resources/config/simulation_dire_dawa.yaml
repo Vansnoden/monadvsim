@@ -1,0 +1,159 @@
+# ======================================================================
+# Simulation configuration for Anopheles stephensi in Dire Dawa
+# 3‑MONTH SIMULATION (April – June 2020) – realistic population dynamics
+# ======================================================================
+
+time:
+  startDateTime: "2020-04-01T00:00:00"
+  totalTicks: 5760        # 2 months (60 days * 96 ticks/day)
+  tickMinutes: 15
+
+files:
+  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
+  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
+  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
+  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
+  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
+
+gridCellSizeDegrees: 0.001
+
+# ======================================================================
+# Species parameters – tuned for Anopheles stephensi
+# ======================================================================
+species:
+  # Fecundity (eggs/female/day) – unchanged, realistic
+  fecundity_a: 0.378
+  fecundity_b: 0.173
+  fecundity_Tmax: 40.0
+  fecundity_c: 2.97
+
+  # Egg development rate (1/day) – unchanged (~2‑3 days at 25°C)
+  egg_dev_a: -0.0009
+  egg_dev_b: 0.048
+  egg_dev_c: -0.345
+
+  # Larva development rate – slightly slowed for ~7‑9 days
+  larva_dev_a: -0.0006
+  larva_dev_b: 0.034
+  larva_dev_c: -0.28
+
+  # Pupa development rate – increased to ~2‑3 days
+  pupa_dev_a: -0.0008
+  pupa_dev_b: 0.045
+  pupa_dev_c: -0.38
+
+  # Egg survival – peak near 25°C, maximum 0.92
+  egg_survival_amp: 0.92
+  egg_survival_mean: 25.0
+  egg_survival_sigma: 5.0
+
+  # Larva survival – peak 0.85 at 25°C (realistic for An. stephensi)
+  larva_survival_amp: 0.85
+  larva_survival_mean: 25.0
+  larva_survival_sigma: 5.0
+
+  # Pupa survival – peak 0.90 at 25°C
+  pupa_survival_amp: 0.90
+  pupa_survival_mean: 25.0
+  pupa_survival_sigma: 5.0
+
+  # Adult mortality (1/day) – quadratic giving ~0.04 at 25°C, increasing with temperature
+  adult_mort_a: 0.00015
+  adult_mort_b: -0.0025
+  adult_mort_c: 0.10
+
+# ======================================================================
+# Tokens – only environmental layers (agent properties are auto‑bound)
+# ======================================================================
+tokens:
+  - token: "temperature"
+    layer: "t2m"
+  - token: "precipitation"
+    layer: "tp"
+  - token: "population"
+    layer: "Population"
+  - token: "building_density"
+    layer: "Buildings"
+  - token: "elevation"
+    layer: "Elevation"
+
+# ======================================================================
+# Agent rules – life‑cycle transitions now handled by LifecycleModel,
+# so the legacy rules are kept as fallback with very high age thresholds.
+# ======================================================================
+agentLayers:
+  - name: "Mosquitoes"
+    rules:
+      # ----- FALLBACK LIFE‑CYCLE (should rarely trigger) -----
+      - condition: "stage == 'LARVA' && age > 960"          # >10 days (emergency)
+        action: "pupate"
+        priority: 10
+      - condition: "stage == 'PUPA' && age > 384"           # >4 days (emergency)
+        action: "emerge"
+        priority: 10
+
+      # ----- BEHAVIOURAL RULES -----
+      - condition: "stage == 'ADULT' && energy < 0.7"
+        action: "feed"
+        priority: 5
+      - condition: "stage == 'ADULT' && energy > 0.2"
+        action: "get_gravid"
+        priority: 7
+      - condition: "gravid == true && temperature > 285.15"
+        action: "lay_eggs"
+        priority: 6
+      - condition: "temperature < 283.15 || temperature > 313.15"
+        action: "die"
+        priority: 9
+      - condition: "stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !resting"
+        action: "rest_in_building"
+        priority: 4
+      - condition: "stage == 'ADULT' && energy < 0.8"
+        action: "feed"
+        priority: 3
+
+      # ----- MOVEMENT -----
+      - condition: "stage == 'ADULT' && !resting"
+        action: "move_random"
+        priority: 2
+
+      # ----- FALLBACK -----
+      - condition: "true"
+        action: "rest"
+        priority: 1
+
+  - name: "WaterTanks"
+    rules:
+      - condition: "waterVolume <= 5 && waterVolume > 0"
+        action: "dry_out"
+        priority: 3
+      - condition: "temperature < 273.15 && waterVolume > 0"
+        action: "freeze"
+        priority: 2
+      - condition: "temperature > 303.15 && precipitation < 0.001"
+        action: "evaporate"
+        priority: 5
+      - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
+        action: "die"
+        priority: 4
+
+# ======================================================================
+# Seeding – with realistic thresholds to place agents in suitable areas
+# ======================================================================
+seeding:
+  tanksToSeed: 10000
+  mosquitoesToSeed: 50000
+  habitatGridSizeX: 50
+  habitatGridSizeY: 50
+  tankBuildingThreshold: 0.15
+  tankPopulationThreshold: 0.05
+  mosquitoBuildingThreshold: 0.05
+  mosquitoPopulationThreshold: 0.02
+
+# ======================================================================
+# Project defaults
+# ======================================================================
+project:
+  defaultAgentSearchRadius: 0.0005    # ~55 m
+  defaultAgentStep: 0.00005           # ~5.5 m per tick
+  defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day

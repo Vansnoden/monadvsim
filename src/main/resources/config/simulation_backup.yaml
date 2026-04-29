@@ -1,0 +1,111 @@
+# Simulation configuration for Anopheles stephensi in Dire Dawa
+
+time:
+  startDateTime: "2020-01-01T00:00:00"
+  totalTicks: 34560      # 12 * 30 days * 24 * 4 (15‑min ticks) # 5760 --
+  tickMinutes: 15
+
+files:
+  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – the bounding box will be read from this file
+  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
+  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
+  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
+  climateNetCDF: "prepared_data/dire_dawa/2020_data/2020_data_Dire_Dawa_ETDD.nc"
+
+# Spatial registry grid cell size (degrees)
+gridCellSizeDegrees: 0.001
+
+species:
+  fecundity_a: 0.378
+  fecundity_b: 0.173
+  fecundity_Tmax: 40.0
+  fecundity_c: 2.97
+  egg_dev_a: -0.0009
+  egg_dev_b: 0.048
+  egg_dev_c: -0.345
+  larva_dev_a: -0.0007
+  larva_dev_b: 0.039
+  larva_dev_c: -0.32
+  pupa_dev_a: -0.0005
+  pupa_dev_b: 0.026
+  pupa_dev_c: -0.2
+  egg_survival_amp: 1.01
+  egg_survival_mean: 24.5
+  egg_survival_sigma: 4.8
+  larva_survival_amp: 0.95
+  larva_survival_mean: 27.0
+  larva_survival_sigma: 3.5
+  pupa_survival_amp: 0.93
+  pupa_survival_mean: 26.8
+  pupa_survival_sigma: 3.8
+  adult_mort_a: -0.00065
+  adult_mort_b: 0.0364
+  adult_mort_c: -0.4882
+
+# Tokens for rule engine: each maps a token (used in rules) to a layer name
+tokens:
+  - token: "temperature"
+    layer: "t2m"
+  - token: "precipitation"
+    layer: "tp"
+  - token: "population"
+    layer: "Population"
+  - token: "building_density"
+    layer: "Buildings"
+  - token: "elevation"
+    layer: "Elevation"
+  - token: "age"
+    layer: "Mosquitoes"
+  - token: "stage"
+    layer: "Mosquitoes"
+  - token: "gravid"
+    layer: "Mosquitoes"
+
+agentLayers:
+  - name: "Mosquitoes"
+    rules:
+      - condition: "agent.stage == 'ADULT' && agent.energy < 0.5"
+        action: "feed"
+        priority: 5
+      - condition: "agent.stage == 'ADULT' && agent.energy > 0.3"
+        action: "get_gravid"
+        priority: 4
+      - condition: "agent.gravid == true && temperature > 293.15 && building_density > 0.1 && population > 0.05"
+        action: "lay_eggs"
+        priority: 6
+      - condition: "temperature < 283.15 || temperature > 313.15"
+        action: "die"
+        priority: 10
+      - condition: "agent.stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !agent.resting"
+        action: "rest_in_building"
+        priority: 4
+      # ... add all other behavioural rules here ...
+  - name: "WaterTanks"
+    rules:
+      - condition: "agent.waterVolume <= 5 && agent.waterVolume > 0"
+        action: "dry_out"
+        priority: 3
+      - condition: "temperature < 273.15 && agent.waterVolume > 0"
+        action: "freeze"
+        priority: 2
+      - condition: "temperature > 303.15 && precipitation < 0.001"
+        action: "evaporate"
+        priority: 5
+      - condition: "agent.waterVolume == 0 && agent.eggCount == 0 && agent.larvalCount == 0"
+        action: "die"
+        priority: 4
+
+seeding:
+  tanksToSeed: 10000
+  mosquitoesToSeed: 250000
+  habitatGridSizeX: 50
+  habitatGridSizeY: 50
+  tankBuildingThreshold: 0.15
+  tankPopulationThreshold: 0.05
+  mosquitoBuildingThreshold: 0.05
+  mosquitoPopulationThreshold: 0.02
+
+project:
+  defaultAgentSearchRadius: 0.0005    # ~55 m
+  defaultAgentStep: 0.00005           # ~5.5 m per tick
+  defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day
