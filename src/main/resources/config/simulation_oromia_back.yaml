@@ -10,11 +10,11 @@ time:
   tickMinutes: 15
   
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
-  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
-  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
-  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
-  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
+  studySite: "prepared_data/oromia/oromia.shp"
+  elevation: "prepared_data/oromia/Small_Oromia_Elevation_10m.tif"
+  buildings: "prepared_data/oromia/Small_Oromia_Building_Density_10m.tif"
+  population: "prepared_data/oromia/Small_Oromia_Population_10m.tif"
+  climateNetCDF: "prepared_data/oromia/climate_t2m_tp_2020.nc"
 
 gridCellSizeDegrees: 0.001
 

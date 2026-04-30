@@ -1,17 +1,25 @@
 package com.monadvsim.app.models.engine;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.io.Serializable;
 
 /**
  * Holds all species‑specific parameters for the temperature‑dependent
  * life‑cycle model (Metzler matrix) for Anopheles stephensi.
  * Defaults are based on Mordecai et al. 2013 and related literature.
+ * 
+ * Mortality rates for immature stages are derived from Gaussian survival
+ * functions and development rates, following the ODE formulation:
+ *   μ(T) = -ln(S(T)) * r(T)
+ * where r(T) is development rate (1/day) and S(T) is stage survival.
  */
-public class SpeciesParameters {
+public class SpeciesParameters implements Serializable {
+
+    private static final long serialVersionUID = 20250430L;
 
     // Fecundity: F(T) = a * exp(b*T) - exp(b*Tmax - ((Tmax - T)/c)^2)
     @JsonProperty("fecundity_a")
-    public double fecundityA = -0.0099;      // Corrected for realistic peak
+    public double fecundityA = -0.0099;
     @JsonProperty("fecundity_b")
     public double fecundityB = 0.567;
     @JsonProperty("fecundity_Tmax")

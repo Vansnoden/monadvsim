@@ -12,8 +12,8 @@ files:
   studySite: "prepared_data/somali/somali.shp"
   elevation: "prepared_data/somali/Small_Somali_Elevation_10m.tif"
   buildings: "prepared_data/somali/Small_Somali_Building_Density_10m.tif"
-  population: "prepared_data/somali/Small_Somali_Population_10m.tif"
-  climateNetCDF: "prepared_data/somali/climate_t2m_tp_2020.nc"
+  population: "prepared_data/somali/population_2020_1km.tif"
+  climateNetCDF: "prepared_data/somali/climate_t2m_tp_2020.nc
 
 gridCellSizeDegrees: 0.001
 
