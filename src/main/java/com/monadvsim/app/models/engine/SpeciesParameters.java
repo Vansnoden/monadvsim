@@ -4,85 +4,93 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 
 /**
- * Holds all species‑specific parameters for the temperature‑dependent
- * life‑cycle model (Metzler matrix) for Anopheles stephensi.
- * Defaults are based on Mordecai et al. 2013 and related literature.
- * 
- * Mortality rates for immature stages are derived from Gaussian survival
- * functions and development rates, following the ODE formulation:
- *   μ(T) = -ln(S(T)) * r(T)
- * where r(T) is development rate (1/day) and S(T) is stage survival.
+ * Species‑specific parameters for the temperature‑dependent
+ * life‑cycle model (Komi et al. 2025 ODE formulation).
+ * All rates are per day, temperature in Celsius.
  */
 public class SpeciesParameters implements Serializable {
 
-    private static final long serialVersionUID = 20250430L;
+    private static final long serialVersionUID = 20250501L;
 
-    // Fecundity: F(T) = a * exp(b*T) - exp(b*Tmax - ((Tmax - T)/c)^2)
-    @JsonProperty("fecundity_a")
-    public double fecundityA = -0.0099;
-    @JsonProperty("fecundity_b")
-    public double fecundityB = 0.567;
-    @JsonProperty("fecundity_Tmax")
-    public double fecundityTmax = 32.0;
-    @JsonProperty("fecundity_c")
-    public double fecundityC = 2.97;
+    // ---------- Egg development (exponential) ----------
+    @JsonProperty("egg_dev_rho")
+    public double eggDev_rho = 0.01107;
+    @JsonProperty("egg_dev_k")
+    public double eggDev_k = 41.54210;
+    @JsonProperty("egg_dev_Delta")
+    public double eggDev_Delta = 0.98086;
+    @JsonProperty("egg_dev_lambda")
+    public double eggDev_lambda = -1.14079;
 
-    // Egg development rate: dE(T) = a*T² + b*T + c
-    @JsonProperty("egg_dev_a")
-    public double eggDevA = -0.00098;
-    @JsonProperty("egg_dev_b")
-    public double eggDevB = 0.0502;
-    @JsonProperty("egg_dev_c")
-    public double eggDevC = -0.348;
-
-    // Larva development rate
+    // ---------- Larva development (Brière) ----------
     @JsonProperty("larva_dev_a")
-    public double larvaDevA = -0.00082;
-    @JsonProperty("larva_dev_b")
-    public double larvaDevB = 0.0425;
-    @JsonProperty("larva_dev_c")
-    public double larvaDevC = -0.305;
+    public double larvaDev_a = 3.285e-5;
+    @JsonProperty("larva_dev_Tmin")
+    public double larvaDev_Tmin = 17.32;
+    @JsonProperty("larva_dev_Tmax")
+    public double larvaDev_Tmax = 40.88;
+    @JsonProperty("larva_dev_m")
+    public double larvaDev_m = 2.169;
 
-    // Pupa development rate
-    @JsonProperty("pupa_dev_a")
-    public double pupaDevA = -0.00074;
-    @JsonProperty("pupa_dev_b")
-    public double pupaDevB = 0.0398;
-    @JsonProperty("pupa_dev_c")
-    public double pupaDevC = -0.291;
+    // ---------- Pupa development (exponential) ----------
+    @JsonProperty("pupa_dev_rho")
+    public double pupaDev_rho = 0.0096287;
+    @JsonProperty("pupa_dev_k")
+    public double pupaDev_k = 41.1843270;
+    @JsonProperty("pupa_dev_Delta")
+    public double pupaDev_Delta = 0.9295908;
+    @JsonProperty("pupa_dev_lambda")
+    public double pupaDev_lambda = -1.1507102;
 
-    // Egg survival: S_E(T) = amp * exp(-0.5 * ((T - mean)/sigma)^2)
-    @JsonProperty("egg_survival_amp")
-    public double eggSurvivalAmp = 0.94;
-    @JsonProperty("egg_survival_mean")
-    public double eggSurvivalMean = 26.2;
-    @JsonProperty("egg_survival_sigma")
-    public double eggSurvivalSigma = 3.5;
+    // ---------- Egg mortality (exp‑quadratic) ----------
+    @JsonProperty("egg_mort_b1")
+    public double eggMort_b1 = 3.572876;
+    @JsonProperty("egg_mort_b2")
+    public double eggMort_b2 = -0.323474;
+    @JsonProperty("egg_mort_b3")
+    public double eggMort_b3 = 0.004941;
 
-    // Larva survival
-    @JsonProperty("larva_survival_amp")
-    public double larvaSurvivalAmp = 0.88;
-    @JsonProperty("larva_survival_mean")
-    public double larvaSurvivalMean = 26.8;
-    @JsonProperty("larva_survival_sigma")
-    public double larvaSurvivalSigma = 3.8;
+    // ---------- Larva mortality (exp‑quadratic) ----------
+    @JsonProperty("larva_mort_b1")
+    public double larvaMort_b1 = 3.572876;
+    @JsonProperty("larva_mort_b2")
+    public double larvaMort_b2 = -0.323474;
+    @JsonProperty("larva_mort_b3")
+    public double larvaMort_b3 = 0.004941;
 
-    // Pupa survival
-    @JsonProperty("pupa_survival_amp")
-    public double pupaSurvivalAmp = 0.91;
-    @JsonProperty("pupa_survival_mean")
-    public double pupaSurvivalMean = 26.5;
-    @JsonProperty("pupa_survival_sigma")
-    public double pupaSurvivalSigma = 3.6;
+    // ---------- Pupa mortality (exp‑quadratic) ----------
+    @JsonProperty("pupa_mort_b1")
+    public double pupaMort_b1 = 5.882576;
+    @JsonProperty("pupa_mort_b2")
+    public double pupaMort_b2 = -0.578528;
+    @JsonProperty("pupa_mort_b3")
+    public double pupaMort_b3 = 0.009458;
 
-    // Adult mortality rate: mu_A(T) = a*T² + b*T + c (1/day)
-    @JsonProperty("adult_mort_a")
-    public double adultMortA = 0.00012;
-    @JsonProperty("adult_mort_b")
-    public double adultMortB = -0.0018;
-    @JsonProperty("adult_mort_c")
-    public double adultMortC = 0.055;
+    // ---------- Fecundity (eggs/female/day) ----------
+    @JsonProperty("fecundity_rmax")
+    public double fecundity_rmax = 1.571304;
+    @JsonProperty("fecundity_Topt")
+    public double fecundity_Topt = 32.908160;
+    @JsonProperty("fecundity_c")
+    public double fecundity_c = -0.007832;
 
-    // No‑arg constructor for Jackson deserialisation
+    // ---------- Adult mortality (constant 1/day) ----------
+    @JsonProperty("adult_mortality_per_day")
+    public double adultMortalityPerDay = 1.0 / 240.0;
+    // for temperature driven adult mortality
+    @JsonProperty("adult_mort_b1") public double adultMort_b1;
+    @JsonProperty("adult_mort_b2") public double adultMort_b2;
+    @JsonProperty("adult_mort_b3") public double adultMort_b3;
+
+    // ---------- Sex ratio (proportion females) ----------
+    @JsonProperty("sex_ratio")
+    public double sexRatio = 0.5;
+
+    // ---------- Host carrying capacity scaling (optional) ----------
+    @JsonProperty("host_carrying_capacity_base")
+    public double hostCarryingCapacityBase = 1.0;
+    
+
+
     public SpeciesParameters() {}
 }
