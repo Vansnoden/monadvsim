@@ -17,37 +17,37 @@ files:
   climateNetCDF: "prepared_data/oromia/climate_t2m_tp_2020.nc"
 
 gridCellSizeDegrees: 0.001
-
+  
 
 species:
-  egg_dev_rho: 0.006234459044864894
-  egg_dev_k: 41.26179643883513
-  egg_dev_Delta: 2.9999999999999987
-  egg_dev_lambda: -0.8794329915272626
-  larva_dev_a: 2.7058150174983273e-05
-  larva_dev_Tmin: 5.121461590485809
-  larva_dev_Tmax: 44.99999999953329
-  larva_dev_m: 1.6632750342996134
-  pupa_dev_rho: 0.006302910642984625
-  pupa_dev_k: 42.18873555727068
-  pupa_dev_Delta: 2.9999999999999996
-  pupa_dev_lambda: -0.9334960789853375
+  egg_dev_rho: 0.005000000000000001
+  egg_dev_k: 39.20841161317061
+  egg_dev_Delta: 1.9999999999999998
+  egg_dev_lambda: -0.854916887158478
+  larva_dev_a: 2.7054689312186438e-05
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
+  larva_dev_m: 1.663077023745059
+  pupa_dev_rho: 0.005115463305281753
+  pupa_dev_k: 39.940257466039114
+  pupa_dev_Delta: 1.9999999999999998
+  pupa_dev_lambda: -0.9081661833839708
   egg_mort_b1: 3.572876
   egg_mort_b2: -0.323474
   egg_mort_b3: 0.004941
-  larva_mort_b1: 5.8703181349156655
-  larva_mort_b2: -0.9999999999973062
-  larva_mort_b3: 0.021854467382141987
+  larva_mort_b1: 1.9999999999999998
+  larva_mort_b2: -0.7395036647759831
+  larva_mort_b3: 0.017491023810106067
   pupa_mort_b1: 5.882576
   pupa_mort_b2: -0.578528
   pupa_mort_b3: 0.009458
-  fecundity_rmax: 2.7008121269457477
-  fecundity_Topt: 30.634050003636357
-  fecundity_c: -0.00527235913851237
-  adult_mort_b1: -1.4775218167583994
-  adult_mort_b2: -0.1377100305461999
-  adult_mort_b3: 0.003908386353805093
-  adult_mortality_per_day: 0.11981052631578946
+  fecundity_rmax: 1.6021994175985133
+  fecundity_Topt: 30.634033187663604
+  fecundity_c: -0.0052723551194922445
+  adult_mort_b1: -1.4775
+  adult_mort_b2: -0.1377
+  adult_mort_b3: 0.003908
+  adult_mortality_per_day: 0.1198
   sex_ratio: 0.5
 
 
@@ -90,7 +90,7 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy > 0.7 && !gravid"
         action: "get_gravid"
         priority: 7
-      - condition: "gravid == true && temperature > 288.15"  # >15°C
+      - condition: "gravid == true && temperature > 288.15"
         action: "lay_eggs"
         priority: 6
       # Temperature extremes

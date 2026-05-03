@@ -24,4 +24,3 @@ species:
   adult_mort_a: 0.00012
   adult_mort_b: -0.0018
   adult_mort_c: 0.055
-  sex_ratio: 0.5
