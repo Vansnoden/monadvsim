@@ -4,8 +4,8 @@ species:
   egg_dev_Delta: 1.9999999999999998
   egg_dev_lambda: -0.854916887158478
   larva_dev_a: 2.7054689312186438e-05
-  larva_dev_T0: 5.123026541348266
-  larva_dev_Tm: 44.999999999835175
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
   larva_dev_m: 1.663077023745059
   pupa_dev_rho: 0.005115463305281753
   pupa_dev_k: 39.940257466039114
