@@ -86,7 +86,7 @@ All temperatures in the equations are in **degrees Celsius**. The simulation aut
 |$\Delta$ | Temperature sensitivity | $^{\circ}\mathrm{C}$ | egg_dev_Delta, pupa_dev_Delta |
 |$\lambda$ | Baseline development offset | $\mathrm{day}^{-1}$ | egg_dev_lambda, pupa_dev_lambda |
 |Larva development (Brière) |
-|$a$ | Scaling factor | $\mathrm{day}^{-1} , ^{\circ}\mathrm{C}^{-(1+1/m)}$ | larva_dev_a |
+|$a$ | Scaling factor | $\mathrm{day}^{-1} \, ^{\circ}\mathrm{C}^{-(1+1/m)}$ | larva_dev_a |
 |$T_{\min}$ | Minimum temperature | $^{\circ}\mathrm{C}$ | larva_dev_Tmin |
 |$T_{\max}$ | Maximum temperature | $^{\circ}\mathrm{C}$ | larva_dev_Tmax |
 |$m$ | Shape exponent | --- | larva_dev_m | \addlinespace
@@ -103,7 +103,13 @@ All temperatures in the equations are in **degrees Celsius**. The simulation aut
 |$b$ | Exponential coefficient | $^{\circ}\mathrm{C}^{-1}$ | fecundity_c |
 |$T_{\max}$ | Temp. of max fecundity | $^{\circ}\mathrm{C}$ | fecundity_Topt |
 |$c$ | Quadratic decay parameter | $^{\circ}\mathrm{C}^{-2}$ | fecundity_c | 
-___
+
+**Notes:**
+
+- Development rates (`dE`, `dL`, `dP`) are in **1/day**. The probability of completing a stage in one tick is `1 – exp(–rate · dt)`, where `dt` is the tick duration in days (e.g., 0.25/24 = 0.0104167 days for a 15‑minute tick).
+- Survival probabilities (`S_E`, `S_L`, `S_P`) are applied **once** when the stage is completed (i.e., a larva that finishes development survives with probability `S_L`).
+- Adult mortality is applied every tick as a daily rate converted to a per‑tick probability: `p_die = 1 – exp(–μ_A · dt)`.
+- Fecundity `F(T)` is in **eggs per female per day**. The actual number of eggs laid per tick is:
 
 
 ### Preparing Input Data
@@ -257,4 +263,8 @@ A Jupyter notebook (accessible at <a href="analyze_sim_data.ipynb">/analyze_sim_
 3. Add its token to the `tokens` and `layerNames` lists in `App` (or externalise those to YAML as well).  
 4. Use the token in JavaScript rule conditions.
 
+---
 
+## License
+
+MIT

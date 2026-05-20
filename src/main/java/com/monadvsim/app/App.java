@@ -485,7 +485,7 @@ public class App {
     
     
     // ------------------------------------------------------------------------
-    // The rest of the helper methods (unchanged)
+    // The rest of the helper methods
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {

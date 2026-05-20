@@ -53,7 +53,7 @@ public class LivingAgent extends Agent {
         this.volatileY = y;
     }
 
-    // Thread-safe getters and setters (same as before)
+    // Thread-safe getters and setters
     public boolean isAlive() { return alive.get(); }
     public boolean setAlive(boolean newAlive) { return alive.compareAndSet(!newAlive, newAlive); }
     public boolean isGravid() { return gravid.get(); }
