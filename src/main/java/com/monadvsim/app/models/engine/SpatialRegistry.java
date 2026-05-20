@@ -338,7 +338,7 @@ public class SpatialRegistry {
     }
 
     // ------------------------------------------------------------------------
-    // Inner classes (unchanged)
+    // Inner classes
     // ------------------------------------------------------------------------
     private static class AgentRecord {
         final Agent agent; final GridCell cell; final long timestamp;

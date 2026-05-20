@@ -7,101 +7,98 @@ import com.monadvsim.app.models.utils.SimulationLogger;
 import java.util.concurrent.ThreadLocalRandom;
 
 /**
- * Temperature‑dependent life‑cycle rates and transition probabilities
- * for Anopheles stephensi, based on Mordecai et al. 2013 and related literature.
- * All temperature‑sensitive functions accept Kelvin and convert to Celsius.
+ * Temperature‑dependent life‑cycle model for Anopheles stephensi
+ * following the ODE differential equations of Komi et al. 2025.
+ * 
+ * Development rates: egg/pupa exponential, larva Brière.
+ * Mortality rates: exp‑quadratic (egg, larva, pupa), constant (adult).
+ * Fecundity: Gaussian‑on‑log.
+ * 
+ * All rates are per‑day; per‑tick probabilities via Poisson.
  */
 public class LifecycleModel {
 
-    private final SpeciesParameters params;
+    private final SpeciesParameters p;
     private final double dtDays;          // tick duration in days
     private final ThreadLocalRandom rng = ThreadLocalRandom.current();
 
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
-        this.params = params;
+        this.p = params;
         this.dtDays = tickMinutes / (24.0 * 60.0);
         SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)", dtDays, tickMinutes);
     }
 
     // ------------------------------------------------------------------------
-    // Development rates (1/day) – quadratic: a*T² + b*T + c, T in °C
+    // Temperature conversion
     // ------------------------------------------------------------------------
-    private double celsius(double kelvin) {
-        return kelvin - 273.15;
-    }
+    private double celsius(double kelvin) { return kelvin - 273.15; }
 
+    // ------------------------------------------------------------------------
+    // Development rates (1/day)
+    // ------------------------------------------------------------------------
     public double eggDevelopmentRate(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double val = params.eggDevA * t * t + params.eggDevB * t + params.eggDevC;
-        return Math.max(0, val);
+        double T = celsius(tempKelvin);
+        double expPart = Math.exp(p.eggDev_rho * T
+                - Math.exp(p.eggDev_rho * p.eggDev_k - (p.eggDev_k - T) / p.eggDev_Delta));
+        return Math.max(0, expPart + p.eggDev_lambda);
     }
 
     public double larvaDevelopmentRate(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double val = params.larvaDevA * t * t + params.larvaDevB * t + params.larvaDevC;
-        val = Math.max(0, val);
-        if (val > 1.0) {
-            SimulationLogger.warning("[Lifecycle] High larval development rate %.3f at t=%.2f°C", val, t);
-        }
-        return val;
+        double T = celsius(tempKelvin);
+        if (T <= p.larvaDev_Tmin || T >= p.larvaDev_Tmax) return 0.0;
+        double val = p.larvaDev_a * T * (T - p.larvaDev_Tmin)
+                * Math.pow(p.larvaDev_Tmax - T, 1.0 / p.larvaDev_m);
+        return Math.max(0, val);
     }
 
     public double pupaDevelopmentRate(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double val = params.pupaDevA * t * t + params.pupaDevB * t + params.pupaDevC;
-        return Math.max(0, val);
+        double T = celsius(tempKelvin);
+        double expPart = Math.exp(p.pupaDev_rho * T
+                - Math.exp(p.pupaDev_rho * p.pupaDev_k - (p.pupaDev_k - T) / p.pupaDev_Delta));
+        return Math.max(0, expPart + p.pupaDev_lambda);
     }
 
     // ------------------------------------------------------------------------
-    // Survival probabilities over the entire stage (0..1) – Gaussian
+    // Mortality rates (1/day)
     // ------------------------------------------------------------------------
-    public double eggSurvival(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double exponent = -0.5 * Math.pow((t - params.eggSurvivalMean) / params.eggSurvivalSigma, 2);
-        return params.eggSurvivalAmp * Math.exp(exponent);
+    public double eggMortalityRate(double tempKelvin) {
+        double T = celsius(tempKelvin);
+        return Math.exp(p.eggMort_b1 + p.eggMort_b2 * T + p.eggMort_b3 * T * T);
     }
 
-    public double larvaSurvival(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double exponent = -0.5 * Math.pow((t - params.larvaSurvivalMean) / params.larvaSurvivalSigma, 2);
-        return params.larvaSurvivalAmp * Math.exp(exponent);
+    public double larvaMortalityRate(double tempKelvin) {
+        double T = celsius(tempKelvin);
+        return Math.exp(p.larvaMort_b1 + p.larvaMort_b2 * T + p.larvaMort_b3 * T * T);
     }
 
-    public double pupaSurvival(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double exponent = -0.5 * Math.pow((t - params.pupaSurvivalMean) / params.pupaSurvivalSigma, 2);
-        return params.pupaSurvivalAmp * Math.exp(exponent);
+    public double pupaMortalityRate(double tempKelvin) {
+        double T = celsius(tempKelvin);
+        return Math.exp(p.pupaMort_b1 + p.pupaMort_b2 * T + p.pupaMort_b3 * T * T);
     }
 
-    // ------------------------------------------------------------------------
-    // Adult mortality (1/day) – quadratic: a*T² + b*T + c
-    // ------------------------------------------------------------------------
+//    public double adultMortalityRate(double tempKelvin) {
+//        return p.adultMortalityPerDay;   // constant
+//    }
     public double adultMortalityRate(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double val = params.adultMortA * t * t + params.adultMortB * t + params.adultMortC;
-        return Math.max(0, val);
+        double T = celsius(tempKelvin);
+        return Math.exp(p.adultMort_b1 + p.adultMort_b2 * T + p.adultMort_b3 * T * T);
     }
 
     // ------------------------------------------------------------------------
-    // Fecundity (eggs/female/day) – temperature‑peaked asymmetric function
-    // F(T) = a*exp(b*T) - exp(b*Tmax - ((Tmax - T)/c)²)
+    // Fecundity (eggs/female/day) including sex ratio
     // ------------------------------------------------------------------------
     public double fecundityRate(double tempKelvin) {
-        double t = celsius(tempKelvin);
-        double term1 = params.fecundityA * Math.exp(params.fecundityB * t);
-        double exponent = Math.pow((params.fecundityTmax - t) / params.fecundityC, 2);
-        double term2 = Math.exp(params.fecundityB * params.fecundityTmax - exponent);
-        return Math.max(0, term1 - term2);
+        double T = celsius(tempKelvin);
+        double val = Math.exp(p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2));
+        return Math.max(0, val * p.sexRatio);
     }
 
-    // ------------------------------------------------------------------------
-    // Host carrying capacity: K = 1 + log(1 + L), where L is livestock density.
-    // ------------------------------------------------------------------------
+    // Host carrying capacity scaling
     public double hostCarryingCapacity(double livestockDensity) {
         return 1.0 + Math.log1p(livestockDensity);
     }
 
-    // Effective fecundity (eggs/female/tick) scaled by host availability
+    // Effective fecundity (eggs/female/tick)
     public double effectiveFecundity(double tempKelvin, double livestockDensity) {
         double F = fecundityRate(tempKelvin);
         double K = hostCarryingCapacity(livestockDensity);
@@ -109,89 +106,109 @@ public class LifecycleModel {
     }
 
     // ------------------------------------------------------------------------
-    // Probabilities per tick (exact Poisson process)
+    // Per‑tick probabilities (Poisson)
     // ------------------------------------------------------------------------
     public double transitionProb(double ratePerDay) {
-        // Probability of completing the stage in one tick = 1 - exp(-rate * dt)
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-    public double adultMortalityProb(double tempKelvin) {
-        double mu = adultMortalityRate(tempKelvin);
-        return 1.0 - Math.exp(-mu * dtDays);
+    public double mortalityProb(double ratePerDay) {
+        return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
     // ------------------------------------------------------------------------
-    // Stage transition logic for LivingAgent (stochastic)
+    // Stage transitions (mortality + development each tick)
     // ------------------------------------------------------------------------
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double dL = larvaDevelopmentRate(tempKelvin);
-        double pAdvance = transitionProb(dL);
+        double mL = larvaMortalityRate(tempKelvin);
+        double pAdv = transitionProb(dL);
+        double pDie = mortalityProb(mL);
 
-        if (pAdvance > 0.1) {
-            SimulationLogger.info("[Lifecycle] High larval advancement: dL=%.4f, p=%.4f, dtDays=%.6f, temp=%.2fK",
-                                  dL, pAdvance, dtDays, tempKelvin);
+        // mortality first
+        if (rng.nextDouble() < pDie) {
+            agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+                    agent.getId(), agent.getAge(), tempKelvin);
+            return;
         }
-
-        if (rng.nextDouble() < pAdvance) {
-            double survival = larvaSurvival(tempKelvin);
-            if (rng.nextDouble() < survival) {
-                agent.setStage(LifecycleStage.PUPA);
-                agent.setEnergy(0.6);
-                SimulationLogger.info("[SUCCESS] %s → PUPA at age %d, temp=%.2fK, pAdv=%.6f, survival=%.3f",
-                                      agent.getId(), agent.getAge(), tempKelvin, pAdvance, survival);
-            } else {
-                agent.setAlive(false);
-                SimulationLogger.info("[DEATH] %s died during pupation at age %d", agent.getId(), agent.getAge());
-            }
+        // then development
+        if (rng.nextDouble() < pAdv) {
+            agent.setStage(LifecycleStage.PUPA);
+            agent.setEnergy(0.6);
+            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+                    agent.getId(), agent.getAge(), tempKelvin);
         }
     }
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double dP = pupaDevelopmentRate(tempKelvin);
-        double pAdvance = transitionProb(dP);
+        double mP = pupaMortalityRate(tempKelvin);
+        double pAdv = transitionProb(dP);
+        double pDie = mortalityProb(mP);
 
-        if (pAdvance > 0.1) {
-            SimulationLogger.info("[Lifecycle] High pupal advancement: dP=%.4f, p=%.4f, dtDays=%.6f, temp=%.2fK",
-                                  dP, pAdvance, dtDays, tempKelvin);
+        if (rng.nextDouble() < pDie) {
+            agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
+                    agent.getId(), agent.getAge(), tempKelvin);
+            return;
         }
-
-        if (rng.nextDouble() < pAdvance) {
-            double survival = pupaSurvival(tempKelvin);
-            if (rng.nextDouble() < survival) {
-                agent.setStage(LifecycleStage.ADULT);
-                agent.setEnergy(0.9);
-                SimulationLogger.info("[SUCCESS] %s → ADULT at age %d, temp=%.2fK, pAdv=%.6f, survival=%.3f",
-                                      agent.getId(), agent.getAge(), tempKelvin, pAdvance, survival);
-            } else {
-                agent.setAlive(false);
-                SimulationLogger.info("[DEATH] %s died during emergence at age %d", agent.getId(), agent.getAge());
-            }
+        if (rng.nextDouble() < pAdv) {
+            agent.setStage(LifecycleStage.ADULT);
+            agent.setEnergy(0.9);
+            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
+                    agent.getId(), agent.getAge(), tempKelvin);
         }
-    }
-
-    /**
-     * Stochastic egg laying for an adult female.
-     * Returns the number of eggs to deposit into a nearby water tank.
-     */
-    public int eggsToLay(double tempKelvin, double hostDensity, ThreadLocalRandom rng) {
-        double dailyFecundity = fecundityRate(tempKelvin);
-        double K = hostCarryingCapacity(hostDensity);
-        double expectedEggsPerTick = dailyFecundity * K * dtDays;
-
-        int eggs = (int) expectedEggsPerTick;
-        double remainder = expectedEggsPerTick - eggs;
-        if (rng.nextDouble() < remainder) eggs++;
-
-        // Cap at a biologically plausible maximum (e.g., 50 eggs per tick)
-        eggs = Math.min(eggs, 50);
-        return eggs;
     }
 
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
-        double pDie = adultMortalityProb(tempKelvin);
+        double mA = adultMortalityRate(tempKelvin);
+        double pDie = mortalityProb(mA);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as ADULT at age %d, temp=%.2fK",
+                    agent.getId(), agent.getAge(), tempKelvin);
         }
+    }
+
+    // ------------------------------------------------------------------------
+    // Egg hatching (for InertAgent)
+    // ------------------------------------------------------------------------
+    public int tryHatchEggs(int currentEggs, double tempKelvin, ThreadLocalRandom rng) {
+        if (currentEggs == 0) return 0;
+        double de = eggDevelopmentRate(tempKelvin);
+        double me = eggMortalityRate(tempKelvin);
+        double pAdv = transitionProb(de);
+        double pDie = mortalityProb(me);
+
+        // Deaths
+        int deaths;
+        if (currentEggs < 100) {
+            deaths = 0;
+            for (int i = 0; i < currentEggs; i++) if (rng.nextDouble() < pDie) deaths++;
+        } else {
+            deaths = (int) Math.round(currentEggs * pDie);
+        }
+        int survivors = currentEggs - deaths;
+
+        // Hatch
+        int hatched;
+        if (survivors < 100) {
+            hatched = 0;
+            for (int i = 0; i < survivors; i++) if (rng.nextDouble() < pAdv) hatched++;
+        } else {
+            hatched = (int) Math.round(survivors * pAdv);
+        }
+        return hatched;
+    }
+
+    // ------------------------------------------------------------------------
+    // Stochastic egg laying
+    // ------------------------------------------------------------------------
+    public int eggsToLay(double tempKelvin, double hostDensity, ThreadLocalRandom rng) {
+        double expected = effectiveFecundity(tempKelvin, hostDensity);
+        int eggs = (int) expected;
+        if (rng.nextDouble() < (expected - eggs)) eggs++;
+        return Math.min(eggs, 50);
     }
 }

@@ -10,49 +10,63 @@ time:
   tickMinutes: 15
   
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
-  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
-  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
-  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
-  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
+  studySite: "prepared_data/oromia/oromia.shp"
+  elevation: "prepared_data/oromia/Small_Oromia_Elevation_10m.tif"
+  buildings: "prepared_data/oromia/Small_Oromia_Building_Density_10m.tif"
+  population: "prepared_data/oromia/Small_Oromia_Population_10m.tif"
+  climateNetCDF: "prepared_data/oromia/climate_t2m_tp_2020.nc"
 
 gridCellSizeDegrees: 0.001
-  
-
-species:
-  egg_dev_rho: 0.005000000000000001
-  egg_dev_k: 39.20841161317061
-  egg_dev_Delta: 1.9999999999999998
-  egg_dev_lambda: -0.854916887158478
-  larva_dev_a: 2.7054689312186438e-05
-  larva_dev_Tmin: 5.123026541348266
-  larva_dev_Tmax: 44.999999999835175
-  larva_dev_m: 1.663077023745059
-  pupa_dev_rho: 0.005115463305281753
-  pupa_dev_k: 39.940257466039114
-  pupa_dev_Delta: 1.9999999999999998
-  pupa_dev_lambda: -0.9081661833839708
-  egg_mort_b1: 3.572876
-  egg_mort_b2: -0.323474
-  egg_mort_b3: 0.004941
-  larva_mort_b1: 1.9999999999999998
-  larva_mort_b2: -0.7395036647759831
-  larva_mort_b3: 0.017491023810106067
-  pupa_mort_b1: 5.882576
-  pupa_mort_b2: -0.578528
-  pupa_mort_b3: 0.009458
-  fecundity_rmax: 1.6021994175985133
-  fecundity_Topt: 30.634033187663604
-  fecundity_c: -0.0052723551194922445
-  adult_mort_b1: -1.4775
-  adult_mort_b2: -0.1377
-  adult_mort_b3: 0.003908
-  adult_mortality_per_day: 0.1198
-  sex_ratio: 0.5
-
 
 # ======================================================================
-# Tokens – environmental layers
+# Species parameters – Anopheles stephensi (temperature-dependent)
+# Quadratic functions: rate = a*T^2 + b*T + c (T in Celsius)
+# From Mordecai et al. 2013 (supplement)
+# ======================================================================
+species:
+  # Fecundity: eggs/female/day (temperature-dependent, peaked at ~28°C)
+  fecundity_a: -0.0099
+  fecundity_b: 0.567
+  fecundity_Tmax: 32.0
+  fecundity_c: 2.97
+
+  # Egg development rate (1/days)
+  egg_dev_a: -0.00098
+  egg_dev_b: 0.0502
+  egg_dev_c: -0.348
+
+  # Larva development rate (1/days) – corrected shape
+  larva_dev_a: -0.00082
+  larva_dev_b: 0.0425
+  larva_dev_c: -0.305
+
+  # Pupa development rate (1/days)
+  pupa_dev_a: -0.00074
+  pupa_dev_b: 0.0398
+  pupa_dev_c: -0.291
+
+  # Egg survival (Gaussian)
+  egg_survival_amp: 0.94
+  egg_survival_mean: 26.2      # Optimal temperature for egg survival
+  egg_survival_sigma: 3.5
+
+  # Larva survival (Gaussian)
+  larva_survival_amp: 0.88
+  larva_survival_mean: 26.8    # Larvae tolerate slightly higher optima
+  larva_survival_sigma: 3.8
+
+  # Pupa survival (Gaussian)
+  pupa_survival_amp: 0.91
+  pupa_survival_mean: 26.5
+  pupa_survival_sigma: 3.6
+
+  # Adult mortality (1/day) – quadratic increasing with temperature
+  adult_mort_a: 0.00012
+  adult_mort_b: -0.0018
+  adult_mort_c: 0.055
+
+# ======================================================================
+# Tokens – environmental layers (unchanged)
 # ======================================================================
 tokens:
   - token: "temperature"
@@ -90,7 +104,7 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy > 0.7 && !gravid"
         action: "get_gravid"
         priority: 7
-      - condition: "gravid == true && temperature > 288.15"
+      - condition: "gravid == true && temperature > 288.15"  # >15°C
         action: "lay_eggs"
         priority: 6
       # Temperature extremes

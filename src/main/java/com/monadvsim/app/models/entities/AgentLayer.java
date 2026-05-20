@@ -262,10 +262,30 @@ public class AgentLayer extends Layer {
                     }
 
                     // Temperature‑dependent development (larva→pupa, pupa→adult) and adult mortality
-                    applyLifecycleTransitions(la, project);
-                    if (!la.isAlive()) {
-                        lifecycleManager.scheduleDeath(agent.getId());
-                        deathsThisTick.incrementAndGet();
+//                    applyLifecycleTransitions(la, project);
+//                    if (!la.isAlive()) {
+//                        lifecycleManager.scheduleDeath(agent.getId());
+//                        deathsThisTick.incrementAndGet();
+//                    }
+                    if (la.isAlive()) {
+                        double temperature = getTemperatureAt(project, la.getX(), la.getY());
+                        LifecycleStage stage = la.getStage();
+                        switch (stage) {
+                            case LARVA:
+                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
+                                break;
+                            case PUPA:
+                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
+                                break;
+                            case ADULT:
+                                lifecycleModel.applyAdultMortality(la, temperature);
+                                break;
+                            default: break;
+                        }
+                        if (!la.isAlive()) {
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                        }
                     }
                 }
             } catch (Exception e) {

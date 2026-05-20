@@ -52,7 +52,7 @@ species:
 
 
 # ======================================================================
-# Tokens – environmental layers
+# Tokens – environmental layers (unchanged)
 # ======================================================================
 tokens:
   - token: "temperature"

@@ -38,21 +38,40 @@ public class SimulationConfig {
         public String climateNetCDF;
     }
 
+    
     public static class SpeciesParameters {
-        // Fecundity
-        public double fecundity_a, fecundity_b, fecundity_Tmax, fecundity_c;
-        // Development rates
-        public double egg_dev_a, egg_dev_b, egg_dev_c;
-        public double larva_dev_a, larva_dev_b, larva_dev_c;
-        public double pupa_dev_a, pupa_dev_b, pupa_dev_c;
-        // Survival
-        public double egg_survival_amp, egg_survival_mean, egg_survival_sigma;
-        public double larva_survival_amp, larva_survival_mean, larva_survival_sigma;
-        public double pupa_survival_amp, pupa_survival_mean, pupa_survival_sigma;
-        // Adult mortality
-        public double adult_mort_a, adult_mort_b, adult_mort_c;
+        // Egg development (exponential form)
+        public double egg_dev_rho, egg_dev_k, egg_dev_Delta, egg_dev_lambda;
+
+        // Larva development (Brière)
+        public double larva_dev_a, larva_dev_Tmin, larva_dev_Tmax, larva_dev_m;
+
+        // Pupa development (exponential form)
+        public double pupa_dev_rho, pupa_dev_k, pupa_dev_Delta, pupa_dev_lambda;
+
+        // Egg mortality (exp‑quadratic)
+        public double egg_mort_b1, egg_mort_b2, egg_mort_b3;
+
+        // Larva mortality (exp‑quadratic)
+        public double larva_mort_b1, larva_mort_b2, larva_mort_b3;
+
+        // Pupa mortality (exp‑quadratic)
+        public double pupa_mort_b1, pupa_mort_b2, pupa_mort_b3;
+
+        // Fecundity (Gaussian‑on‑log)
+        public double fecundity_rmax, fecundity_Topt, fecundity_c;
+
+        // Adult mortality (constant per day)
+        public double adult_mortality_per_day;
+        public double adult_mort_b1;
+        public double adult_mort_b2;
+        public double adult_mort_b3;
+
+        // Sex ratio (proportion females)
+        public double sex_ratio;
     }
 
+    
     public static class AgentLayerConfig {
         public String name;
         public List<RuleConfig> rules;

@@ -25,3 +25,4 @@ buildNumber.properties
 *.tif.aux.xml
 results/
 logs/
+.Rproj.user

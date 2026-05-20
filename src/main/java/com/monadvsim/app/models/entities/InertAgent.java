@@ -121,52 +121,64 @@ public class InertAgent extends Agent {
      * @param model       LifecycleModel providing egg development rate and survival
      * @return Number of eggs successfully hatched (after accounting for mortality)
      */
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int currentEggs = eggCount.get();
+//        if (currentEggs == 0) return 0;
+//
+//        // 1. Egg development probability per tick
+//        double dE = model.eggDevelopmentRate(temperature);
+//        double SE = model.eggSurvival(temperature);
+//        double pHatch = model.transitionProb(dE) * SE;
+//
+//        // 2. Binomial sampling (efficient)
+//        ThreadLocalRandom rng = ThreadLocalRandom.current();
+//        int eggsHatched;
+//        if (currentEggs > 100) {
+//            double mean = currentEggs * pHatch;
+//            double var = mean * (1 - pHatch);
+//            int sample = (int) Math.round(mean + Math.sqrt(var) * rng.nextGaussian());
+//            eggsHatched = Math.max(0, Math.min(currentEggs, sample));
+//        } else {
+//            eggsHatched = 0;
+//            for (int i = 0; i < currentEggs; i++) {
+//                if (rng.nextDouble() < pHatch) eggsHatched++;
+//            }
+//        }
+//
+//        if (eggsHatched == 0) return 0;
+//
+//        // 3. Atomically update counts
+//        eggCount.addAndGet(-eggsHatched);
+//        int newLarvae = larvalCount.addAndGet(eggsHatched);
+//
+//        // 4. Density-dependent mortality if capacity exceeded
+//        double cap = capacity.get();
+//        if (cap > 0 && newLarvae > cap) {
+//            int excess = newLarvae - (int) cap;
+//            int toKill = rng.nextInt(excess + 1);
+//            if (toKill > 0) {
+//                larvalCount.addAndGet(-toKill);
+//                eggsHatched -= toKill;
+//                SimulationLogger.info("[TANK] Density-dependent mortality: killed %d larvae, capacity=%.1f",
+//                                      toKill, cap);
+//            }
+//        }
+//
+//        return eggsHatched;
+//    }
+
     public int hatchEggs(double temperature, LifecycleModel model) {
-        int currentEggs = eggCount.get();
-        if (currentEggs == 0) return 0;
-
-        // 1. Egg development probability per tick
-        double dE = model.eggDevelopmentRate(temperature);
-        double SE = model.eggSurvival(temperature);
-        double pHatch = model.transitionProb(dE) * SE;
-
-        // 2. Binomial sampling (efficient)
-        ThreadLocalRandom rng = ThreadLocalRandom.current();
-        int eggsHatched;
-        if (currentEggs > 100) {
-            double mean = currentEggs * pHatch;
-            double var = mean * (1 - pHatch);
-            int sample = (int) Math.round(mean + Math.sqrt(var) * rng.nextGaussian());
-            eggsHatched = Math.max(0, Math.min(currentEggs, sample));
-        } else {
-            eggsHatched = 0;
-            for (int i = 0; i < currentEggs; i++) {
-                if (rng.nextDouble() < pHatch) eggsHatched++;
-            }
+        int current = eggCount.get();
+        if (current == 0) return 0;
+        int hatched = model.tryHatchEggs(current, temperature, ThreadLocalRandom.current());
+        if (hatched > 0) {
+            eggCount.addAndGet(-hatched);
+            larvalCount.addAndGet(hatched);
+            updateCapacityFromVolume();
         }
-
-        if (eggsHatched == 0) return 0;
-
-        // 3. Atomically update counts
-        eggCount.addAndGet(-eggsHatched);
-        int newLarvae = larvalCount.addAndGet(eggsHatched);
-
-        // 4. Density-dependent mortality if capacity exceeded
-        double cap = capacity.get();
-        if (cap > 0 && newLarvae > cap) {
-            int excess = newLarvae - (int) cap;
-            int toKill = rng.nextInt(excess + 1);
-            if (toKill > 0) {
-                larvalCount.addAndGet(-toKill);
-                eggsHatched -= toKill;
-                SimulationLogger.info("[TANK] Density-dependent mortality: killed %d larvae, capacity=%.1f",
-                                      toKill, cap);
-            }
-        }
-
-        return eggsHatched;
+        return hatched;
     }
-
+    
     /**
      * Update larval capacity based on current water volume.
      * Called after water volume changes (evaporation, rain, etc.).

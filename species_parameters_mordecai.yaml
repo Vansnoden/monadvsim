@@ -1,0 +1,26 @@
+species:
+  egg_dev_a: -0.00098
+  egg_dev_b: 0.0502
+  egg_dev_c: -0.348
+  larva_dev_a: -0.00012094382928888458
+  larva_dev_b: 0.01057266344181874
+  larva_dev_c: -0.10638711142450773
+  pupa_dev_a: -0.00074
+  pupa_dev_b: 0.0398
+  pupa_dev_c: -0.291
+  egg_survival_amp: 0.94
+  egg_survival_mean: 26.2
+  egg_survival_sigma: 3.5
+  larva_survival_amp: 0.9463951768636617
+  larva_survival_mean: 25.225462259121745
+  larva_survival_sigma: 11.524440404316007
+  pupa_survival_amp: 0.91
+  pupa_survival_mean: 26.5
+  pupa_survival_sigma: 3.6
+  fecundity_a: -0.01
+  fecundity_b: 0.5
+  fecundity_Tmax: 32.0
+  fecundity_c: 3.0
+  adult_mort_a: 0.00012
+  adult_mort_b: -0.0018
+  adult_mort_c: 0.055

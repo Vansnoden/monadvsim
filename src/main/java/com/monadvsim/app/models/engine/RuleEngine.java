@@ -153,7 +153,6 @@ public class RuleEngine {
         }
     }
 
-    // Implement the actions as before (keep them exactly as in your code)
     private void executeRest(Agent agent, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             la.setResting(true);

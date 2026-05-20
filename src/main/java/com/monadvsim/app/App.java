@@ -255,31 +255,44 @@ public class App {
     // ------------------------------------------------------------------------
 
     private static void copySpeciesParams(SpeciesParameters target, SimulationConfig.SpeciesParameters source) {
-        target.fecundityA = source.fecundity_a;
-        target.fecundityB = source.fecundity_b;
-        target.fecundityTmax = source.fecundity_Tmax;
-        target.fecundityC = source.fecundity_c;
-        target.eggDevA = source.egg_dev_a;
-        target.eggDevB = source.egg_dev_b;
-        target.eggDevC = source.egg_dev_c;
-        target.larvaDevA = source.larva_dev_a;
-        target.larvaDevB = source.larva_dev_b;
-        target.larvaDevC = source.larva_dev_c;
-        target.pupaDevA = source.pupa_dev_a;
-        target.pupaDevB = source.pupa_dev_b;
-        target.pupaDevC = source.pupa_dev_c;
-        target.eggSurvivalAmp = source.egg_survival_amp;
-        target.eggSurvivalMean = source.egg_survival_mean;
-        target.eggSurvivalSigma = source.egg_survival_sigma;
-        target.larvaSurvivalAmp = source.larva_survival_amp;
-        target.larvaSurvivalMean = source.larva_survival_mean;
-        target.larvaSurvivalSigma = source.larva_survival_sigma;
-        target.pupaSurvivalAmp = source.pupa_survival_amp;
-        target.pupaSurvivalMean = source.pupa_survival_mean;
-        target.pupaSurvivalSigma = source.pupa_survival_sigma;
-        target.adultMortA = source.adult_mort_a;
-        target.adultMortB = source.adult_mort_b;
-        target.adultMortC = source.adult_mort_c;
+    // Egg development
+        target.eggDev_rho = source.egg_dev_rho;
+        target.eggDev_k = source.egg_dev_k;
+        target.eggDev_Delta = source.egg_dev_Delta;
+        target.eggDev_lambda = source.egg_dev_lambda;
+        // Larva development
+        target.larvaDev_a = source.larva_dev_a;
+        target.larvaDev_Tmin = source.larva_dev_Tmin;
+        target.larvaDev_Tmax = source.larva_dev_Tmax;
+        target.larvaDev_m = source.larva_dev_m;
+        // Pupa development
+        target.pupaDev_rho = source.pupa_dev_rho;
+        target.pupaDev_k = source.pupa_dev_k;
+        target.pupaDev_Delta = source.pupa_dev_Delta;
+        target.pupaDev_lambda = source.pupa_dev_lambda;
+        // Egg mortality
+        target.eggMort_b1 = source.egg_mort_b1;
+        target.eggMort_b2 = source.egg_mort_b2;
+        target.eggMort_b3 = source.egg_mort_b3;
+        // Larva mortality
+        target.larvaMort_b1 = source.larva_mort_b1;
+        target.larvaMort_b2 = source.larva_mort_b2;
+        target.larvaMort_b3 = source.larva_mort_b3;
+        // Pupa mortality
+        target.pupaMort_b1 = source.pupa_mort_b1;
+        target.pupaMort_b2 = source.pupa_mort_b2;
+        target.pupaMort_b3 = source.pupa_mort_b3;
+        // Fecundity
+        target.fecundity_rmax = source.fecundity_rmax;
+        target.fecundity_Topt = source.fecundity_Topt;
+        target.fecundity_c = source.fecundity_c;
+        // Adult mortality
+        target.adultMortalityPerDay = source.adult_mortality_per_day;
+        target.adultMort_b1 = source.adult_mort_b1;
+        target.adultMort_b2 = source.adult_mort_b2;
+        target.adultMort_b3 = source.adult_mort_b3;
+        // Sex ratio
+        target.sexRatio = source.sex_ratio;
     }
 
     
@@ -472,7 +485,7 @@ public class App {
     
     
     // ------------------------------------------------------------------------
-    // The rest of the helper methods (unchanged)
+    // The rest of the helper methods
     // ------------------------------------------------------------------------
 
     private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
