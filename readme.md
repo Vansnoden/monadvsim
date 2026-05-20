@@ -73,8 +73,6 @@ All simulation settings are stored in a single YAML file located at
 
 ### Specie's specification details
 
-# Species Parameters in `simulation.yaml`
-
 The `species` section defines temperature‑dependent coefficients for the Metzler matrix life‑cycle model.  
 All temperatures in the equations are in **degrees Celsius**. The simulation automatically converts Kelvin (from climate data) to Celsius before applying these formulas.
 
