@@ -1,10 +1,12 @@
 package com.monadvsim.app;
+
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.config.SimulationConfig;
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ConfigLoader;
+import com.monadvsim.app.models.utils.SeedManager;
 import com.monadvsim.app.models.utils.SnapshotMerger;
 import com.monadvsim.app.models.utils.VectorBoundsLoader;
 
@@ -28,7 +30,12 @@ import org.locationtech.jts.geom.Coordinate;
  * Main Application Entry Point
  *
  * Configures project settings, loads data (rasters, climate NetCDF) and seeds initial agent populations.
- * All configuration is read from a single YAML file (config/simulation.yaml).
+ * All configuration is read from a single YAML file.
+ *
+ * Command line arguments:
+ *   args[0] - seed (optional, default: current time)
+ *   args[1] - output directory (optional, default: "results")
+ *   args[2] - config file path (optional, default: "config/simulation.yaml")
  *
  * @author void
  */
@@ -42,28 +49,111 @@ public class App {
     private static TimeManager timeManager;
     private static Rectangle2D worldBounds;
     private static SimulationConfig config;
+    private static String outputDir;
+
+    // Default configuration path (classpath resource)
+    private static final String DEFAULT_CONFIG_PATH = "config/simulation.yaml";
+    private static final String DEFAULT_OUTPUT_DIR = "results";
 
     public static void main(String[] args) {
         SimulationLogger.info("Starting Multi-Agent Simulation System");
 
         try {
-            // 1. Load configuration from YAML
-            config = ConfigLoader.loadFromYaml("/config/simulation.yaml");
-            SimulationLogger.info("Configuration loaded from /config/simulation.yaml");
+            // ======================================================================
+            // 1. PARSE COMMAND LINE ARGUMENTS
+            // ======================================================================
+            long seed = System.currentTimeMillis();
+            String outputDir = DEFAULT_OUTPUT_DIR;
+            String configPath = DEFAULT_CONFIG_PATH;
+            
+            if (args.length > 0) {
+                // First argument: seed (optional)
+                try {
+                    seed = Long.parseLong(args[0]);
+                    SimulationLogger.info("Seed from command line: %d", seed);
+                } catch (NumberFormatException e) {
+                    // If first arg is not a number, treat it as config path
+                    configPath = args[0];
+                    SimulationLogger.info("Config path from command line: %s", configPath);
+                }
+            }
+            
+            if (args.length > 1) {
+                // Second argument: output directory
+                outputDir = args[1];
+                SimulationLogger.info("Output directory from command line: %s", outputDir);
+            }
+            
+            if (args.length > 2) {
+                // Third argument: config path (overrides previous)
+                configPath = args[2];
+                SimulationLogger.info("Config path from command line (arg 3): %s", configPath);
+            }
+            
+            // Ensure config path works for both classpath and file system
+            // Don't force leading "/" - let ConfigLoader handle it
+            if (configPath.startsWith("/")) {
+                // Classpath resource
+                configPath = configPath;
+            } else if (!configPath.startsWith("file:") && !configPath.startsWith("http")) {
+                // Default: try classpath first, then file system
+                // We'll let loadConfig handle the resolution
+            }
+            
+            // ======================================================================
+            // 2. SETUP OUTPUT DIRECTORY AND LOGGING
+            // ======================================================================
+            
+            File resultsDir = new File(outputDir);
+            if (!resultsDir.exists()) {
+                if (!resultsDir.mkdirs()) {
+                    SimulationLogger.severe("Could not create results directory: " + outputDir);
+                    return;
+                }
+            }
+            
+            // Initialize logger with output directory
+            String logDir = resultsDir.getAbsolutePath() + "/logs";
+            SimulationLogger.initialize(logDir);
+            SimulationLogger.info("Log directory: %s", logDir);
+            
+            App.outputDir = resultsDir.getAbsolutePath();
+            
+            // Set seed
+            SeedManager.setSeed(seed);
+            SimulationLogger.info("Using seed: %d", seed);
+            SimulationLogger.info("Output directory: %s", resultsDir.getAbsolutePath());
+            SimulationLogger.info("Config file: %s", configPath);
 
-            // 2. Create results directory
-            File resultsDir = new File("results");
-            if (!resultsDir.exists()) resultsDir.mkdirs();
+            // ======================================================================
+            // 3. LOAD CONFIGURATION FROM YAML
+            // ======================================================================
+            
+            config = loadConfig(configPath);
+            if (config == null) {
+                SimulationLogger.severe("Failed to load configuration from: %s", configPath);
+                SimulationLogger.info("Using default configuration values...");
+                config = createDefaultConfig();
+            }
 
-            // 3. Setup time manager from config
+            // ======================================================================
+            // 4. SETUP TIME MANAGER
+            // ======================================================================
+            
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
-            // 4. World bounds from study site file (shapefile)
+            // ======================================================================
+            // 5. WORLD BOUNDS FROM STUDY SITE
+            // ======================================================================
+            
             worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
             SimulationLogger.info("World bounds from study site: " + worldBounds);
 
-            // 5. Load study area geometry for seeding constraints
+            // ======================================================================
+            // 6. LOAD STUDY AREA GEOMETRY FOR SEEDING
+            // ======================================================================
+            
             Geometry studyAreaGeometry = null;
             try {
                 studyAreaGeometry = VectorBoundsLoader.getStudyAreaGeometry(config.files.studySite);
@@ -73,40 +163,269 @@ public class App {
                 SimulationLogger.severe("Seeding will use rectangular bounds only.");
             }
 
-            // 6. Spatial registry with grid cell size from config
+            // ======================================================================
+            // 7. SPATIAL REGISTRY
+            // ======================================================================
+            
             spatialRegistry = new SpatialRegistry(worldBounds, config.gridCellSizeDegrees);
 
-            // 7. Create project and configure (pass geometry)
+            // ======================================================================
+            // 8. CREATE AND CONFIGURE PROJECT
+            // ======================================================================
+            
             project = new Project("Mosquito Simulation");
             configureSimulation(project, spatialRegistry, timeManager, worldBounds, config, studyAreaGeometry);
 
-            // 8. Start simulation
-            createAndStartSimulation(project, timeManager, spatialRegistry);
+            // ======================================================================
+            // 9. START SIMULATION
+            // ======================================================================
+            
+            createAndStartSimulation(project, timeManager, spatialRegistry, resultsDir.getAbsolutePath());
 
-            // 9. Shutdown hook
+            // ======================================================================
+            // 10. SHUTDOWN HOOK
+            // ======================================================================
+            
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 SimulationLogger.info("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
-            // 10. Wait for completion
+            // ======================================================================
+            // 11. WAIT FOR COMPLETION
+            // ======================================================================
+            
             if (simulationThread != null && simulationThread.isAlive()) simulationThread.join();
 
-            // 11. Final statistics and merge
-            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
-            SnapshotMerger.mergeAfterSimulation();
+            // ======================================================================
+            // 12. FINAL STATISTICS AND MERGE
+            // ======================================================================
+            
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine, resultsDir.getAbsolutePath());
+
+            SnapshotMerger.mergeSnapshotsAndCleanup(resultsDir.getAbsolutePath(), 
+                String.format("merged_snapshots_%s.csv", 
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))));
 
             SimulationLogger.info("Simulation completed successfully!");
 
         } catch (InterruptedException e) {
             SimulationLogger.severe("Error in simulation: " + e.getMessage());
-            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine, outputDir);
         } catch (Exception e) {
             SimulationLogger.severe("Unexpected error: " + e.getMessage());
             e.printStackTrace();
-            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine);
+            saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine, outputDir);
         }
     }
+
+    // ======================================================================
+    // CONFIGURATION LOADING
+    // ======================================================================
+    
+    /**
+     * Load configuration from the specified path.
+     * Supports classpath resources and file system paths.
+     */
+    private static SimulationConfig loadConfig(String configPath) {
+        SimulationConfig loadedConfig = null;
+        
+        // Try loading from classpath first (default behavior)
+        try {
+            String classpathPath = configPath;
+            if (!classpathPath.startsWith("/")) {
+                classpathPath = "/" + classpathPath;
+            }
+            loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+            SimulationLogger.info("Configuration loaded from classpath: %s", classpathPath);
+            return loadedConfig;
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from classpath: %s", e.getMessage());
+        }
+        
+        // Try loading from file system
+        try {
+            File configFile = new File(configPath);
+            if (configFile.exists()) {
+                loadedConfig = ConfigLoader.loadFromFile(configPath);
+                SimulationLogger.info("Configuration loaded from file: %s", configPath);
+                return loadedConfig;
+            }
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from file: %s", e.getMessage());
+        }
+        
+        // Try with "config/" prefix for file system
+        try {
+            String prefixedPath = "config/" + configPath;
+            File configFile = new File(prefixedPath);
+            if (configFile.exists()) {
+                loadedConfig = ConfigLoader.loadFromFile(prefixedPath);
+                SimulationLogger.info("Configuration loaded from file: %s", prefixedPath);
+                return loadedConfig;
+            }
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from config/ path: %s", e.getMessage());
+        }
+        
+        // Try with leading slash for classpath (if not already)
+        if (!configPath.startsWith("/")) {
+            try {
+                String classpathPath = "/" + configPath;
+                loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+                SimulationLogger.info("Configuration loaded from classpath (with /): %s", classpathPath);
+                return loadedConfig;
+            } catch (Exception e) {
+                SimulationLogger.fine("Could not load from classpath with /: %s", e.getMessage());
+            }
+        }
+        
+        // Try with "config/" and leading slash for classpath
+        if (!configPath.startsWith("/")) {
+            try {
+                String classpathPath = "/config/" + configPath;
+                loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+                SimulationLogger.info("Configuration loaded from classpath: %s", classpathPath);
+                return loadedConfig;
+            } catch (Exception e) {
+                SimulationLogger.fine("Could not load from classpath config/: %s", e.getMessage());
+            }
+        }
+        
+        SimulationLogger.severe("Could not load configuration from any location: %s", configPath);
+        return null;
+    }
+    
+    /**
+     * Create a default configuration with hard-coded values.
+     * Used as a fallback when config file cannot be loaded.
+     */
+    private static SimulationConfig createDefaultConfig() {
+        SimulationLogger.info("Creating default configuration...");
+        
+        SimulationConfig defaultConfig = new SimulationConfig();
+        
+        // Time settings
+        defaultConfig.time = new SimulationConfig.SimulationTime();
+        defaultConfig.time.startDateTime = "2020-04-01T00:00:00";
+        defaultConfig.time.totalTicks = 17280;
+        defaultConfig.time.tickMinutes = 15;
+        
+        // File paths
+        defaultConfig.files = new SimulationConfig.FilePaths();
+        defaultConfig.files.studySite = "prepared_data/somali/somali.shp";
+        defaultConfig.files.elevation = "prepared_data/somali/Small_Somali_Elevation_10m.tif";
+        defaultConfig.files.buildings = "prepared_data/somali/Small_Somali_Building_Density_10m.tif";
+        defaultConfig.files.population = "prepared_data/somali/population_2020_1km.tif";
+        defaultConfig.files.climateNetCDF = "prepared_data/somali/climate_t2m_tp_2020.nc";
+        
+        // Grid size
+        defaultConfig.gridCellSizeDegrees = 0.001;
+        
+        // Species parameters (default values from your config)
+        defaultConfig.species = new SimulationConfig.SpeciesParameters();
+        // Egg development
+        defaultConfig.species.egg_dev_rho = 0.005000000000000001;
+        defaultConfig.species.egg_dev_k = 39.20841161317061;
+        defaultConfig.species.egg_dev_Delta = 1.9999999999999998;
+        defaultConfig.species.egg_dev_lambda = -0.854916887158478;
+        // Larva development
+        defaultConfig.species.larva_dev_a = 2.7054689312186438e-05;
+        defaultConfig.species.larva_dev_Tmin = 5.123026541348266;
+        defaultConfig.species.larva_dev_Tmax = 44.999999999835175;
+        defaultConfig.species.larva_dev_m = 1.663077023745059;
+        // Pupa development
+        defaultConfig.species.pupa_dev_rho = 0.005115463305281753;
+        defaultConfig.species.pupa_dev_k = 39.940257466039114;
+        defaultConfig.species.pupa_dev_Delta = 1.9999999999999998;
+        defaultConfig.species.pupa_dev_lambda = -0.9081661833839708;
+        // Mortality
+        defaultConfig.species.egg_mort_b1 = 3.572876;
+        defaultConfig.species.egg_mort_b2 = -0.323474;
+        defaultConfig.species.egg_mort_b3 = 0.004941;
+        defaultConfig.species.larva_mort_b1 = 1.9999999999999998;
+        defaultConfig.species.larva_mort_b2 = -0.7395036647759831;
+        defaultConfig.species.larva_mort_b3 = 0.017491023810106067;
+        defaultConfig.species.pupa_mort_b1 = 5.882576;
+        defaultConfig.species.pupa_mort_b2 = -0.578528;
+        defaultConfig.species.pupa_mort_b3 = 0.009458;
+        // Fecundity
+        defaultConfig.species.fecundity_rmax = 1.6021994175985133;
+        defaultConfig.species.fecundity_Topt = 30.634033187663604;
+        defaultConfig.species.fecundity_c = -0.0052723551194922445;
+        // Adult mortality
+        defaultConfig.species.adult_mort_b1 = -1.4775;
+        defaultConfig.species.adult_mort_b2 = -0.1377;
+        defaultConfig.species.adult_mort_b3 = 0.003908;
+        defaultConfig.species.adult_mortality_per_day = 0.1198;
+        defaultConfig.species.sex_ratio = 0.5;
+        
+        // Project defaults
+        defaultConfig.project = new SimulationConfig.ProjectDefaults();
+        defaultConfig.project.defaultAgentSearchRadius = 0.005;
+        defaultConfig.project.defaultAgentStep = 0.00005;
+        defaultConfig.project.defaultMaxAgentAge = 2880;
+        
+        // Seeding
+        defaultConfig.seeding = new SimulationConfig.SeedingConfig();
+        defaultConfig.seeding.seedAcrossFullStudySite = false;
+        defaultConfig.seeding.tanksToSeed = 5000;
+        defaultConfig.seeding.mosquitoesToSeed = 10000;
+        defaultConfig.seeding.habitatGridSizeX = 100;
+        defaultConfig.seeding.habitatGridSizeY = 100;
+        defaultConfig.seeding.tankBuildingThreshold = 0.0001;
+        defaultConfig.seeding.tankPopulationThreshold = 0.0001;
+        defaultConfig.seeding.mosquitoBuildingThreshold = 0.0001;
+        defaultConfig.seeding.mosquitoPopulationThreshold = 0.0001;
+        
+        // Tokens
+        defaultConfig.tokens = new ArrayList<>();
+        SimulationConfig.TokenMapping tempToken = new SimulationConfig.TokenMapping();
+        tempToken.token = "temperature";
+        tempToken.layer = "t2m";
+        defaultConfig.tokens.add(tempToken);
+        
+        SimulationConfig.TokenMapping precipToken = new SimulationConfig.TokenMapping();
+        precipToken.token = "precipitation";
+        precipToken.layer = "tp";
+        defaultConfig.tokens.add(precipToken);
+        
+        SimulationConfig.TokenMapping popToken = new SimulationConfig.TokenMapping();
+        popToken.token = "population";
+        popToken.layer = "Population";
+        defaultConfig.tokens.add(popToken);
+        
+        SimulationConfig.TokenMapping buildToken = new SimulationConfig.TokenMapping();
+        buildToken.token = "building_density";
+        buildToken.layer = "Buildings";
+        defaultConfig.tokens.add(buildToken);
+        
+        SimulationConfig.TokenMapping elevToken = new SimulationConfig.TokenMapping();
+        elevToken.token = "elevation";
+        elevToken.layer = "Elevation";
+        defaultConfig.tokens.add(elevToken);
+        
+        // Agent layers (simplified)
+        defaultConfig.agentLayers = new ArrayList<>();
+        
+        // Mosquitoes layer
+        SimulationConfig.AgentLayerConfig mosquitoLayer = new SimulationConfig.AgentLayerConfig();
+        mosquitoLayer.name = "Mosquitoes";
+        mosquitoLayer.rules = new ArrayList<>();
+        defaultConfig.agentLayers.add(mosquitoLayer);
+        
+        // WaterTanks layer
+        SimulationConfig.AgentLayerConfig waterLayer = new SimulationConfig.AgentLayerConfig();
+        waterLayer.name = "WaterTanks";
+        waterLayer.rules = new ArrayList<>();
+        defaultConfig.agentLayers.add(waterLayer);
+        
+        return defaultConfig;
+    }
+
+    // ======================================================================
+    // HELPER METHODS (unchanged from your original)
+    // ======================================================================
 
     /**
      * Reads the bounding box from a shapefile or QGIS project.
@@ -145,7 +464,7 @@ public class App {
                                             TimeManager timeManager,
                                             Rectangle2D worldBounds,
                                             SimulationConfig config,
-                                            Geometry studyAreaGeometry) {  // NEW: added geometry parameter
+                                            Geometry studyAreaGeometry) {
         SimulationLogger.info("Configuring project from YAML");
         try {
             // ---- Project defaults from config ----
@@ -207,7 +526,7 @@ public class App {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }
                 project.addLayer(layer);
-                SimulationLogger.info("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
+                SimulationLogger.info("Added agent layer '%s' with %d rules", layerConfig.name, layerConfig.rules.size());
             }
 
             // ---- Tokens for rule engine (loaded from YAML) ----
@@ -219,7 +538,7 @@ public class App {
             }
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
-            SimulationLogger.info("Loaded %d tokens from YAML%n", tokens.size());
+            SimulationLogger.info("Loaded %d tokens from YAML", tokens.size());
 
             // ---- Standardise geographic bounds for all raster layers ----
             double minLon = worldBounds.getMinX();
@@ -242,7 +561,7 @@ public class App {
             int totalMosquitoes = project.getAgentLayers().stream()
                     .filter(l -> l.getName().equals("Mosquitoes"))
                     .findFirst().map(l -> l.getAgents().size()).orElse(0);
-            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
+            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes", totalTanks, totalMosquitoes);
 
         } catch (Exception e) {
             SimulationLogger.severe("Error: " + e.getMessage());
@@ -255,7 +574,7 @@ public class App {
     // ------------------------------------------------------------------------
 
     private static void copySpeciesParams(SpeciesParameters target, SimulationConfig.SpeciesParameters source) {
-    // Egg development
+        // Egg development
         target.eggDev_rho = source.egg_dev_rho;
         target.eggDev_k = source.egg_dev_k;
         target.eggDev_Delta = source.egg_dev_Delta;
@@ -295,7 +614,6 @@ public class App {
         target.sexRatio = source.sex_ratio;
     }
 
-    
     private static void seedInitialPopulation(Project project,
                                           SimulationConfig.SeedingConfig seeding,
                                           RasterLayer buildings,
@@ -303,7 +621,7 @@ public class App {
                                           SpatialRegistry spatialRegistry,
                                           Rectangle2D worldBounds,
                                           Geometry studyAreaGeometry) {
-        Random rand = new Random();
+        Random rand = SeedManager.getRandom();
 
         AgentLayer habitatLayer = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("WaterTanks")).findFirst().orElse(null);
@@ -481,16 +799,17 @@ public class App {
         SimulationLogger.info("Water tanks: %d (target: %d)", tanksPlaced, seeding.tanksToSeed);
         SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, seeding.mosquitoesToSeed);
     }
-    
-    
-    
+
     // ------------------------------------------------------------------------
     // The rest of the helper methods
     // ------------------------------------------------------------------------
 
-    private static void createAndStartSimulation(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
+    private static void createAndStartSimulation(Project project, 
+            TimeManager timeManager, 
+            SpatialRegistry spatialRegistry,
+            String outputDir) {
         SimulationLogger.info("Creating simulation engine...");
-        simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry);
+        simulationEngine = new SimulationEngine(project, timeManager, spatialRegistry, outputDir);
         simulationThread = new Thread(() -> {
             try {
                 simulationEngine.run();
@@ -503,7 +822,7 @@ public class App {
         simulationThread.setName("Simulation-Thread");
         simulationThread.setDaemon(false);
         simulationThread.start();
-        startWatchdog(simulationEngine, simulationThread, project, spatialRegistry);
+        startWatchdog(simulationEngine, simulationThread, project, spatialRegistry, outputDir);
         SimulationLogger.info("Simulation started! Press Ctrl+C to stop.");
         monitorSimulation(simulationEngine, project);
     }
@@ -573,14 +892,14 @@ public class App {
 
                 int totalAgents = (Integer) state.getOrDefault("totalAgents", 0);
                 double avgTickTime = (Double) state.getOrDefault("avgTickTime", 0.0);
-                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
+                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms",
                         tick, totalAgents, avgTickTime);
 
                 if (tick % 100 == 0) {
                     SimulationLogger.info("--- Detailed Status ---");
                     for (AgentLayer layer : project.getAgentLayers()) {
                         Map<String, Object> layerStats = layer.getStatistics();
-                        SimulationLogger.info("  %s: %d agents, %d rules evaluated%n",
+                        SimulationLogger.info("  %s: %d agents, %d rules evaluated",
                                 layer.getName(), layerStats.get("agentCount"), layerStats.get("rulesEvaluated"));
                     }
                     SimulationLogger.info("----------------------");
@@ -609,7 +928,8 @@ public class App {
     }
 
     private static void startWatchdog(SimulationEngine engine, Thread simulationThread,
-                                      Project project, SpatialRegistry spatialRegistry) {
+                                      Project project, SpatialRegistry spatialRegistry,
+                                      String outputDir) {
         Thread watchdog = new Thread(() -> {
             try {
                 int stuckCount = 0;
@@ -628,7 +948,7 @@ public class App {
                                     " (stuck for " + stuckSeconds + " seconds, count: " + stuckCount + ")");
                             if (stuckCount > 3) {
                                 SimulationLogger.severe("CRITICAL: Simulation appears stuck for over 30 seconds, forcing shutdown");
-                                saveFinalStatisticsToFile(project, spatialRegistry, engine);
+                                saveFinalStatisticsToFile(project, spatialRegistry, engine, outputDir);
                                 SnapshotMerger.mergeAfterSimulation();
                                 engine.stop();
                                 simulationThread.interrupt();
@@ -648,7 +968,7 @@ public class App {
                         SimulationLogger.severe("Error in watchdog while checking state: " + e.getMessage());
                         if (stuckCount++ > 5) {
                             SimulationLogger.severe("CRITICAL: Cannot retrieve simulation state, forcing shutdown");
-                            saveFinalStatisticsToFile(project, spatialRegistry, engine);
+                            saveFinalStatisticsToFile(project, spatialRegistry, engine, outputDir);
                             simulationThread.interrupt();
                             break;
                         }
@@ -667,15 +987,21 @@ public class App {
         SimulationLogger.info("Watchdog thread started");
     }
 
-    private static void saveFinalStatisticsToFile(Project project, SpatialRegistry spatialRegistry, SimulationEngine engine) {
+    private static void saveFinalStatisticsToFile(Project project, 
+            SpatialRegistry spatialRegistry, SimulationEngine engine,
+            String outputDir) {
         if (project == null || spatialRegistry == null) return;
         try {
-            File resultsDir = new File("results");
-            if (!resultsDir.exists()) resultsDir.mkdirs();
+            
+            File resultsDir = new File(outputDir);
+            if (!resultsDir.exists()) {
+                resultsDir.mkdirs();
+            }
+
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
             String safeName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
-            String filename = String.format("results/%s_final_statistics_%s.txt", safeName, timestamp);
-
+            String filename = String.format("%s/%s_final_statistics_%s.txt", outputDir, safeName, timestamp);
+           
             try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
                 writer.println("=".repeat(80));
                 writer.println("FINAL SIMULATION STATISTICS");
@@ -800,7 +1126,7 @@ public class App {
         private final double cellSize;
         private final double minX, minY;
         private final int gridSizeX, gridSizeY;
-        private final Random random = new Random();
+        private final Random random = SeedManager.getRandom();
         private final Geometry studyArea;
 
         // Constructor without geometry (fallback to rectangular bounds)

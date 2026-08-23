@@ -2,6 +2,7 @@ package com.monadvsim.app.models.engine;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.utils.SeedManager;
 import org.graalvm.polyglot.Context;
 import org.graalvm.polyglot.HostAccess;
 import org.graalvm.polyglot.Source;
@@ -9,6 +10,7 @@ import org.graalvm.polyglot.Value;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ThreadLocalRandom;
 
@@ -236,8 +238,9 @@ public class RuleEngine {
     private void executeMoveRandom(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
-            la.move((ThreadLocalRandom.current().nextDouble() - 0.5) * step,
-                    (ThreadLocalRandom.current().nextDouble() - 0.5) * step);
+            Random rng = SeedManager.getRandom();
+            la.move((rng.nextDouble() - 0.5) * step,
+                    (rng.nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
         }
     }
@@ -304,7 +307,7 @@ public class RuleEngine {
         }
         LifecycleModel model = project.getLifecycleModel();
         if (model == null) return;
-        int eggsToLay = model.eggsToLay(temperature, livestock, ThreadLocalRandom.current());
+        int eggsToLay = model.eggsToLay(temperature, livestock);
         if (eggsToLay <= 0) return;
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());

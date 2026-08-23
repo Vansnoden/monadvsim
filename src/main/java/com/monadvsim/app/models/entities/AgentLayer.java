@@ -4,11 +4,13 @@ import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.engine.AgentLifeCycleManager;
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.RuleEngine;
+import com.monadvsim.app.models.utils.SeedManager;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -187,12 +189,13 @@ public class AgentLayer extends Layer {
                 if (agent instanceof InertAgent ia && lifecycleModel != null) {
                     double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
                     int hatched = ia.hatchEggs(temperature, lifecycleModel);
+                    Random rng = SeedManager.getRandom(); //
                     if (hatched > 0) {
                         AgentLayer mosquitoLayer = findMosquitoLayer(project);
                         if (mosquitoLayer != null) {
                             for (int i = 0; i < hatched; i++) {
-                                double x = ia.getX() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
-                                double y = ia.getY() + (ThreadLocalRandom.current().nextDouble() - 0.5) * 0.0001;
+                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
+                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
                                 LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
                                 larva.setStage(LifecycleStage.LARVA);
                                 larva.setAge(0);

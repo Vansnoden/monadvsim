@@ -2,11 +2,13 @@ package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.TimeManager;
+import com.monadvsim.app.models.utils.SeedManager;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+
 
 /**
  * Static Habitat Agent
@@ -170,7 +172,7 @@ public class InertAgent extends Agent {
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
         if (current == 0) return 0;
-        int hatched = model.tryHatchEggs(current, temperature, ThreadLocalRandom.current());
+        int hatched = model.tryHatchEggs(current, temperature);
         if (hatched > 0) {
             eggCount.addAndGet(-hatched);
             larvalCount.addAndGet(hatched);

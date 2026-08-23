@@ -46,16 +46,14 @@ import java.util.logging.Logger;
  *
  * Provides resource cleanup and monitoring
  * 
- * 
  * @author void
  */
-
-
 public class SimulationEngine implements Runnable {
     
     private final Project project;
     private final TimeManager timeManager;
     private final SpatialRegistry spatialRegistry;
+    private final String outputDir;
     private final AtomicBoolean running = new AtomicBoolean(false);
     private final AtomicBoolean paused = new AtomicBoolean(false);
     private final ReentrantLock simulationLock = new ReentrantLock();
@@ -77,9 +75,15 @@ public class SimulationEngine implements Runnable {
 
     
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
+        this(project, timeManager, spatialRegistry, "results");
+    }
+    
+    public SimulationEngine(Project project, TimeManager timeManager, 
+                           SpatialRegistry spatialRegistry, String outputDir) {
         this.project = project;
         this.timeManager = timeManager;
         this.spatialRegistry = spatialRegistry;
+        this.outputDir = outputDir != null ? outputDir : "results";
         this.project.setSpatialRegistry(spatialRegistry);
         
         // Create managed executor service
@@ -101,13 +105,26 @@ public class SimulationEngine implements Runnable {
         
         // Register shutdown hook
         this.simulationExecutor.addShutdownHook(this::cleanupResources);
+        
+        // Ensure output directory exists
+        ensureOutputDirectory();
     }
     
+    private void ensureOutputDirectory() {
+        File dir = new File(outputDir);
+        if (!dir.exists()) {
+            if (dir.mkdirs()) {
+                SimulationLogger.info("Created output directory: %s", outputDir);
+            } else {
+                SimulationLogger.warning("Could not create output directory: %s", outputDir);
+            }
+        }
+    }
     
     @Override
     public void run() {
         running.set(true); 
-        SimulationLogger.info("🚀Simulation Engine with Incremental Updates Started...");
+        SimulationLogger.info("🚀 Simulation Engine Started. Output directory: %s", outputDir);
 
         try {
             while (running.get()) {
@@ -256,7 +273,7 @@ public class SimulationEngine implements Runnable {
         SimulationLogger.info("[Export] Scheduling export for tick %d at %s%n", 
             currentTick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
-        ExportTask task = new ExportTask(project, currentTick);
+        ExportTask task = new ExportTask(project, currentTick, outputDir);
         exportQueue.offer(task);
 
         SimulationLogger.info("[Export] Queue size: %d%n", exportQueue.size());
@@ -280,7 +297,7 @@ public class SimulationEngine implements Runnable {
         long currentTick = timeManager.getTickCount();
 
         // Create a snapshot of project data for export (avoids concurrency issues)
-        ExportTask task = new ExportTask(project, currentTick);
+        ExportTask task = new ExportTask(project, currentTick, outputDir);
         exportQueue.offer(task);
 
         // Process export queue if not already processing
@@ -318,7 +335,7 @@ public class SimulationEngine implements Runnable {
         SimulationLogger.info("[Export] START processing tick %d at %s%n", 
             task.tick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
 
-        String filename = String.format("results/snapshot_tick_%d.csv", task.tick);
+        String filename = String.format("%s/snapshot_tick_%d.csv", task.outputDir, task.tick);
 
         // Use simplified export method
         ProjectPersistenceService persistenceService = new ProjectPersistenceService();
@@ -430,10 +447,12 @@ public class SimulationEngine implements Runnable {
     private static class ExportTask {
         final Project project;
         final long tick;
+        final String outputDir;
 
-        ExportTask(Project project, long tick) {
+        ExportTask(Project project, long tick, String outputDir) {
             this.project = project;
             this.tick = tick;
+            this.outputDir = outputDir;
         }
     }
     
@@ -467,13 +486,16 @@ public class SimulationEngine implements Runnable {
     private void exportFinalSnapshotNow() {
         long currentTick = timeManager.getTickCount();
         try {
-            String dirPath = "results";
+            String dirPath = outputDir;
             File dir = new File(dirPath);
             if (!dir.exists()) {
-                dir.mkdirs();
+                if (!dir.mkdirs()) {
+                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
+                    return;
+                }
             }
 
-            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
 
             // Get a safe copy of all agents
@@ -516,8 +538,10 @@ public class SimulationEngine implements Runnable {
     private void mergeSnapshots() {
         SimulationLogger.info("Merging snapshot files...");
         try {
-            // Use your SnapshotMerger utility
-            SnapshotMerger.mergeAfterSimulation();
+            // Use SnapshotMerger with output directory
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            String mergedFilename = String.format("merged_snapshots_%s.csv", timestamp);
+            SnapshotMerger.mergeSnapshotsAndCleanup(outputDir, mergedFilename);
         } catch (Exception e) {
             SimulationLogger.warning("Failed to merge snapshots: " + e.getMessage());
         }
@@ -527,13 +551,16 @@ public class SimulationEngine implements Runnable {
     private void exportFinalSnapshot() {
         long currentTick = timeManager.getTickCount();
         try {
-            String dirPath = "results";
+            String dirPath = outputDir;
             File dir = new File(dirPath);
             if (!dir.exists()) {
-                dir.mkdirs();
+                if (!dir.mkdirs()) {
+                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
+                    return;
+                }
             }
 
-            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
 
             // Get a safe copy of all agents
@@ -559,10 +586,13 @@ public class SimulationEngine implements Runnable {
         try {
             SimulationLogger.info("🔄 Merging all snapshots...");
 
-            // Create results directory if it doesn't exist
-            File resultsDir = new File("results");
+            // Create output directory if it doesn't exist
+            File resultsDir = new File(outputDir);
             if (!resultsDir.exists()) {
-                resultsDir.mkdirs();
+                if (!resultsDir.mkdirs()) {
+                    SimulationLogger.warning("Could not create output directory: " + outputDir);
+                    return;
+                }
                 SimulationLogger.info("No results directory found, nothing to merge");
                 return;
             }
@@ -591,7 +621,7 @@ public class SimulationEngine implements Runnable {
 
             // Create merged filename with timestamp
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String mergedFilename = String.format("results/merged_simulation_results_%s.csv", timestamp);
+            String mergedFilename = String.format("%s/merged_simulation_results_%s.csv", outputDir, timestamp);
 
             // Merge all files
             try (PrintWriter writer = new PrintWriter(new FileWriter(mergedFilename))) {
@@ -661,13 +691,16 @@ public class SimulationEngine implements Runnable {
     private void exportSnapshotSynchronously(Project project) {
         long currentTick = timeManager.getTickCount();
         try {
-            String dirPath = "results";
+            String dirPath = outputDir;
             File dir = new File(dirPath);
             if (!dir.exists()) {
-                dir.mkdirs();
+                if (!dir.mkdirs()) {
+                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
+                    return;
+                }
             }
 
-            String filename = String.format("results/snapshot_tick_%d.csv", currentTick);
+            String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
 
             // Get a safe copy of all agents
@@ -739,15 +772,18 @@ public class SimulationEngine implements Runnable {
     private void printFinalStatistics() {
         try {
             // Create results directory
-            File resultsDir = new File("results");
+            File resultsDir = new File(outputDir);
             if (!resultsDir.exists()) {
-                resultsDir.mkdirs();
+                if (!resultsDir.mkdirs()) {
+                    SimulationLogger.warning("Could not create output directory: " + outputDir);
+                    return;
+                }
             }
 
             // Generate filename
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
             String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
-            String filename = String.format("results/%s_final_stats_%s.txt", safeProjectName, timestamp);
+            String filename = String.format("%s/%s_final_stats_%s.txt", outputDir, safeProjectName, timestamp);
 
             try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
                 // Redirect console output to both console and file
@@ -969,24 +1005,6 @@ public class SimulationEngine implements Runnable {
     }
     
     
-//    private void reportProgress() {
-//        AgentLayer mosquitoLayer = project.getAgentLayers().stream()
-//            .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
-//            .findFirst().orElse(null);
-//
-//        long adults = (mosquitoLayer != null) ? mosquitoLayer.getAgents().size() : 0;
-//        
-//        long totalLarvae = project.getAgentLayers().stream()
-//            .flatMap(l -> l.getAgents().stream())
-//            .filter(a -> a instanceof InertAgent)
-//            .mapToLong(a -> ((InertAgent) a).getLarvalCount())
-//            .sum();
-//
-//        SimulationLogger.info(String.format("Tick: %d | Adults: %d | Larvae: %d | Memory: %.1f MB", 
-//            timeManager.getTickCount(), adults, totalLarvae,
-//            Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
-//    }
-    
     private void reportProgress() {
         // Find the Mosquitoes layer
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
@@ -1074,7 +1092,7 @@ public class SimulationEngine implements Runnable {
             exportExecutor != null && exportExecutor.isShutdown());
 
         // Check if results directory exists and is writable
-        File resultsDir = new File("results");
+        File resultsDir = new File(outputDir);
         SimulationLogger.info("[Export Status] Results dir exists: %b, writable: %b%n",
             resultsDir.exists(), resultsDir.canWrite());
 
@@ -1085,5 +1103,4 @@ public class SimulationEngine implements Runnable {
                 snapshotFiles != null ? snapshotFiles.length : 0);
         }
     }
-    
 }

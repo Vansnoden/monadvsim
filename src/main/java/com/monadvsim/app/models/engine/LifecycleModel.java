@@ -2,9 +2,9 @@ package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.LifecycleStage;
 import com.monadvsim.app.models.entities.LivingAgent;
+import com.monadvsim.app.models.utils.SeedManager;
 import com.monadvsim.app.models.utils.SimulationLogger;
-
-import java.util.concurrent.ThreadLocalRandom;
+import java.util.Random;
 
 /**
  * Temperature‑dependent life‑cycle model for Anopheles stephensi
@@ -20,11 +20,12 @@ public class LifecycleModel {
 
     private final SpeciesParameters p;
     private final double dtDays;          // tick duration in days
-    private final ThreadLocalRandom rng = ThreadLocalRandom.current();
+    private final Random rng;             // Now using SeedManager instead of ThreadLocalRandom
 
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
         this.p = params;
         this.dtDays = tickMinutes / (24.0 * 60.0);
+        this.rng = SeedManager.getRandom(); // Get seeded random from SeedManager
         SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)", dtDays, tickMinutes);
     }
 
@@ -76,9 +77,6 @@ public class LifecycleModel {
         return Math.exp(p.pupaMort_b1 + p.pupaMort_b2 * T + p.pupaMort_b3 * T * T);
     }
 
-//    public double adultMortalityRate(double tempKelvin) {
-//        return p.adultMortalityPerDay;   // constant
-//    }
     public double adultMortalityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
         return Math.exp(p.adultMort_b1 + p.adultMort_b2 * T + p.adultMort_b3 * T * T);
@@ -174,7 +172,7 @@ public class LifecycleModel {
     // ------------------------------------------------------------------------
     // Egg hatching (for InertAgent)
     // ------------------------------------------------------------------------
-    public int tryHatchEggs(int currentEggs, double tempKelvin, ThreadLocalRandom rng) {
+    public int tryHatchEggs(int currentEggs, double tempKelvin) {
         if (currentEggs == 0) return 0;
         double de = eggDevelopmentRate(tempKelvin);
         double me = eggMortalityRate(tempKelvin);
@@ -185,7 +183,9 @@ public class LifecycleModel {
         int deaths;
         if (currentEggs < 100) {
             deaths = 0;
-            for (int i = 0; i < currentEggs; i++) if (rng.nextDouble() < pDie) deaths++;
+            for (int i = 0; i < currentEggs; i++) {
+                if (rng.nextDouble() < pDie) deaths++;
+            }
         } else {
             deaths = (int) Math.round(currentEggs * pDie);
         }
@@ -195,7 +195,9 @@ public class LifecycleModel {
         int hatched;
         if (survivors < 100) {
             hatched = 0;
-            for (int i = 0; i < survivors; i++) if (rng.nextDouble() < pAdv) hatched++;
+            for (int i = 0; i < survivors; i++) {
+                if (rng.nextDouble() < pAdv) hatched++;
+            }
         } else {
             hatched = (int) Math.round(survivors * pAdv);
         }
@@ -205,7 +207,7 @@ public class LifecycleModel {
     // ------------------------------------------------------------------------
     // Stochastic egg laying
     // ------------------------------------------------------------------------
-    public int eggsToLay(double tempKelvin, double hostDensity, ThreadLocalRandom rng) {
+    public int eggsToLay(double tempKelvin, double hostDensity) {
         double expected = effectiveFecundity(tempKelvin, hostDensity);
         int eggs = (int) expected;
         if (rng.nextDouble() < (expected - eggs)) eggs++;
