@@ -19,15 +19,8 @@ layers:
     type: raster
   
   # Climate data - multiple years!
-  - name: Climate_2020
+  - name: Climate_2020_2023
     filePath: prepared_data/somali/climate_2020.nc
-    type: timeseries
-    variables:
-      - t2m
-      - tp
-  
-  - name: Climate_2023
-    filePath: prepared_data/somali/climate_2023.nc
     type: timeseries
     variables:
       - t2m
@@ -83,9 +76,9 @@ species:
 # ======================================================================
 tokens:
   - token: "temperature"
-    layer: "t2m"
+    layer: "Climate_2020_2023"
   - token: "precipitation"
-    layer: "tp"
+    layer: "Climate_2020_2023"
   - token: "population"
     layer: "Population"
   - token: "building_density"

@@ -1,99 +1,35 @@
 #!/bin/bash
 # =============================================================================
 # merge_netcdf.sh - Merge multiple NetCDF files with different time periods
-# 
-# Usage: ./merge_netcdf.sh [OPTIONS]
-# 
-# Options:
-#   -i, --input-dir DIR     Directory containing NetCDF files (default: ./nc_files)
-#   -o, --output FILE       Output NetCDF file (default: merged_climate.nc)
-#   -p, --pattern PATTERN   File pattern to match (default: "*.nc")
-#   -v, --variables LIST    Comma-separated list of variables to keep (optional)
-#   -t, --time-dim NAME     Time dimension name (default: "time")
-#   -c, --combine METHOD    Combine method: "time" or "record" (default: "time")
-#   -h, --help              Show this help message
-#
-# Examples:
-#   ./merge_netcdf.sh -i ./climate_data -o merged_2020_2023.nc -p "climate_*.nc"
-#   ./merge_netcdf.sh -i ./data -v "t2m,tp" -o merged.nc
-#   ./merge_netcdf.sh -i ./data -t valid_time -c record
 # =============================================================================
 
-set -e  # Exit on error
+set -e
 
 # -----------------------------------------------------------------------------
-# Default values
-# -----------------------------------------------------------------------------
-INPUT_DIR="./nc_files"
-OUTPUT_FILE="merged_climate.nc"
-FILE_PATTERN="*.nc"
-VARIABLES=""
-TIME_DIM="time"
-COMBINE_METHOD="time"  # "time" or "record"
-VERBOSE=false
-TEMPORARY_DIR=""
-
-# -----------------------------------------------------------------------------
-# Color codes for output
+# Color codes
 # -----------------------------------------------------------------------------
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+warning() { echo -e "${YELLOW}[WARNING]${NC} $1"; }
+error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # -----------------------------------------------------------------------------
-# Helper functions
+# Default values
 # -----------------------------------------------------------------------------
-info() {
-    echo -e "${GREEN}[INFO]${NC} $1"
-}
-
-warning() {
-    echo -e "${YELLOW}[WARNING]${NC} $1"
-}
-
-error() {
-    echo -e "${RED}[ERROR]${NC} $1"
-    exit 1
-}
-
-debug() {
-    if [ "$VERBOSE" = true ]; then
-        echo -e "${BLUE}[DEBUG]${NC} $1"
-    fi
-}
-
-print_help() {
-    cat << EOF
-merge_netcdf.sh - Merge multiple NetCDF files with different time periods
-
-Usage: $0 [OPTIONS]
-
-Options:
-  -i, --input-dir DIR     Directory containing NetCDF files (default: ./nc_files)
-  -o, --output FILE       Output NetCDF file (default: merged_climate.nc)
-  -p, --pattern PATTERN   File pattern to match (default: "*.nc")
-  -v, --variables LIST    Comma-separated list of variables to keep (optional)
-  -t, --time-dim NAME     Time dimension name (default: "time")
-  -c, --combine METHOD    Combine method: "time" or "record" (default: "time")
-  -V, --verbose           Enable verbose output
-  -h, --help              Show this help message
-
-Examples:
-  $0 -i ./climate_data -o merged_2020_2023.nc -p "climate_*.nc"
-  $0 -i ./data -v "t2m,tp" -o merged.nc
-  $0 -i ./data -t valid_time -c record
-
-Combine Methods:
-  time   - Standard time concatenation (files must have time dimension)
-  record - Record concatenation (treats each file as separate record)
-
-EOF
-}
+INPUT_DIR="."
+OUTPUT_FILE="merged_climate.nc"
+FILE_PATTERN="*.nc"
+VARIABLES=""
+TIME_DIM="time"
+VERBOSE=false
 
 # -----------------------------------------------------------------------------
-# Parse command line arguments
+# Parse arguments
 # -----------------------------------------------------------------------------
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -117,16 +53,27 @@ while [[ $# -gt 0 ]]; do
             TIME_DIM="$2"
             shift 2
             ;;
-        -c|--combine)
-            COMBINE_METHOD="$2"
-            shift 2
-            ;;
         -V|--verbose)
             VERBOSE=true
             shift
             ;;
         -h|--help)
-            print_help
+            cat << EOF
+Usage: $0 [OPTIONS]
+
+Options:
+  -i, --input-dir DIR     Input directory (default: .)
+  -o, --output FILE       Output file (default: merged_climate.nc)
+  -p, --pattern PATTERN   File pattern (default: *.nc)
+  -v, --variables LIST    Keep only these variables (comma-separated)
+  -t, --time-dim NAME     Time dimension name (default: time)
+  -V, --verbose           Verbose output
+  -h, --help              Show this help
+
+Examples:
+  $0 -i ./data -o merged.nc
+  $0 -i ./data -p "climate_*.nc" -v "t2m,tp"
+EOF
             exit 0
             ;;
         *)
@@ -138,14 +85,12 @@ done
 # -----------------------------------------------------------------------------
 # Check prerequisites
 # -----------------------------------------------------------------------------
-# Check if CDO is installed
 if ! command -v cdo &> /dev/null; then
-    error "CDO (Climate Data Operators) is not installed. Install with: apt-get install cdo (Ubuntu) or brew install cdo (Mac)"
+    error "CDO is not installed. Install with: sudo apt-get install cdo"
 fi
 
-# Check if NCO is installed (for additional features)
 if ! command -v ncks &> /dev/null; then
-    warning "NCO tools not found. Some features may not work. Install with: apt-get install nco (Ubuntu) or brew install nco (Mac)"
+    warning "NCO tools not found. Some features may not work. Install with: sudo apt-get install nco"
 fi
 
 # -----------------------------------------------------------------------------
@@ -155,268 +100,156 @@ if [ ! -d "$INPUT_DIR" ]; then
     error "Input directory does not exist: $INPUT_DIR"
 fi
 
+# -----------------------------------------------------------------------------
 # Find NetCDF files
+# -----------------------------------------------------------------------------
 cd "$INPUT_DIR"
 FILES=($(ls -1 $FILE_PATTERN 2>/dev/null | sort))
 cd - > /dev/null
 
 if [ ${#FILES[@]} -eq 0 ]; then
-    error "No NetCDF files found matching pattern '$FILE_PATTERN' in directory: $INPUT_DIR"
+    error "No NetCDF files found matching pattern '$FILE_PATTERN' in $INPUT_DIR"
 fi
 
 info "Found ${#FILES[@]} NetCDF files to merge"
-debug "Files: ${FILES[*]}"
+
+# Show file details
+for file in "${FILES[@]}"; do
+    FILE_SIZE=$(du -h "$INPUT_DIR/$file" 2>/dev/null | cut -f1)
+    TIME_STEPS=$(cdo -s ntime "$INPUT_DIR/$file" 2>/dev/null || echo "N/A")
+    echo "  - $file (size: $FILE_SIZE, time steps: $TIME_STEPS)"
+done
+echo ""
 
 # -----------------------------------------------------------------------------
 # Create temporary directory
 # -----------------------------------------------------------------------------
 TEMPORARY_DIR=$(mktemp -d -t netcdf_merge_XXXXXX)
-debug "Created temporary directory: $TEMPORARY_DIR"
-
-# Cleanup function
-cleanup() {
-    if [ -d "$TEMPORARY_DIR" ]; then
-        debug "Cleaning up temporary directory: $TEMPORARY_DIR"
-        rm -rf "$TEMPORARY_DIR"
-    fi
-}
-trap cleanup EXIT
+trap "rm -rf $TEMPORARY_DIR" EXIT
 
 # -----------------------------------------------------------------------------
-# Function: Check if file has time dimension
+# METHOD 1: Use CDO with individual file arguments (NOT a file list)
 # -----------------------------------------------------------------------------
-has_time_dimension() {
-    local file="$1"
-    local dim_name="$2"
-    cdo -s info "$file" 2>&1 | grep -q "$dim_name"
-    return $?
-}
+info "Merging ${#FILES[@]} files using CDO mergetime..."
 
-# -----------------------------------------------------------------------------
-# Function: Get time dimension size
-# -----------------------------------------------------------------------------
-get_time_size() {
-    local file="$1"
-    local dim_name="$2"
-    cdo -s ntime "$file" 2>/dev/null || echo "0"
-}
-
-# -----------------------------------------------------------------------------
-# Function: Sort files by time (if possible)
-# -----------------------------------------------------------------------------
-sort_files_by_time() {
-    local sorted_files=()
-    local temp_file="$TEMPORARY_DIR/sort_info.txt"
-    
-    for file in "${FILES[@]}"; do
-        local full_path="$INPUT_DIR/$file"
-        if has_time_dimension "$full_path" "$TIME_DIM"; then
-            # Try to get first time value
-            local time_val=$(cdo -s outputtime,1 "$full_path" 2>/dev/null | head -1)
-            if [ -n "$time_val" ]; then
-                echo "$time_val $file" >> "$temp_file"
-            else
-                echo "0000-01-01 $file" >> "$temp_file"  # Fallback
-            fi
-        else
-            echo "0000-01-01 $file" >> "$temp_file"  # No time dimension
-        fi
-    done
-    
-    # Sort by time
-    sort -k1,1 "$temp_file" | cut -d' ' -f2 > "$TEMPORARY_DIR/sorted_files.txt"
-    readarray -t sorted_files < "$TEMPORARY_DIR/sorted_files.txt"
-    
-    echo "${sorted_files[@]}"
-}
-
-# -----------------------------------------------------------------------------
-# Function: Merge files
-# -----------------------------------------------------------------------------
-merge_files() {
-    local merge_type="$1"
-    local merged_file="$2"
-    local file_list="$3"
-    
-    info "Merging ${#file_list[@]} files using method: $merge_type"
-    
-    # Create a list file for CDO
-    local list_file="$TEMPORARY_DIR/file_list.txt"
-    printf "%s\n" "${file_list[@]}" > "$list_file"
-    
-    case $merge_type in
-        "time")
-            # Standard time concatenation
-            debug "Using time concatenation"
-            cdo -O mergetime "$list_file" "$merged_file" 2>/dev/null
-            if [ $? -ne 0 ]; then
-                error "Failed to merge files using time concatenation. Try using --combine record"
-            fi
-            ;;
-        "record")
-            # Record concatenation
-            debug "Using record concatenation"
-            cdo -O cat "$list_file" "$merged_file" 2>/dev/null
-            if [ $? -ne 0 ]; then
-                error "Failed to merge files using record concatenation"
-            fi
-            ;;
-        *)
-            error "Unknown merge method: $merge_type"
-            ;;
-    esac
-    
-    if [ -f "$merged_file" ] && [ -s "$merged_file" ]; then
-        info "Successfully merged files to: $merged_file"
-    else
-        error "Merge produced empty or invalid file"
-    fi
-}
-
-# -----------------------------------------------------------------------------
-# Function: Filter variables
-# -----------------------------------------------------------------------------
-filter_variables() {
-    local input_file="$1"
-    local output_file="$2"
-    local var_list="$3"
-    
-    if [ -n "$var_list" ]; then
-        info "Filtering variables: $var_list"
-        # Split variables by comma
-        IFS=',' read -ra var_array <<< "$var_list"
-        local var_args=""
-        for var in "${var_array[@]}"; do
-            var_args="$var_args -v $var"
-        done
-        
-        # Use ncks to select variables
-        if command -v ncks &> /dev/null; then
-            ncks -O $var_args "$input_file" "$output_file"
-        else
-            # Use CDO as fallback
-            warning "NCO not available, trying CDO for variable selection"
-            cdo -O selvar,$var_list "$input_file" "$output_file"
-        fi
-        
-        if [ -f "$output_file" ] && [ -s "$output_file" ]; then
-            info "Filtered variables successfully"
-        else
-            warning "Variable filtering failed, using full file"
-            cp "$input_file" "$output_file"
-        fi
-    else
-        # No filtering, just copy
-        cp "$input_file" "$output_file"
-    fi
-}
-
-# -----------------------------------------------------------------------------
-# Function: Check and fix time dimension
-# -----------------------------------------------------------------------------
-fix_time_dimension() {
-    local input_file="$1"
-    local output_file="$2"
-    local dim_name="$3"
-    
-    # Check if the time dimension is valid
-    if ! has_time_dimension "$input_file" "$dim_name"; then
-        warning "File $input_file does not have time dimension '$dim_name'"
-        # Try to add a time dimension
-        if command -v ncap2 &> /dev/null; then
-            info "Attempting to add time dimension..."
-            ncap2 -O -s "defdim(\"$dim_name\",1);" "$input_file" "$output_file"
-        else
-            warning "Cannot fix time dimension - NCO tools not available"
-            cp "$input_file" "$output_file"
-        fi
-    else
-        cp "$input_file" "$output_file"
-    fi
-}
-
-# -----------------------------------------------------------------------------
-# Main merge logic
-# -----------------------------------------------------------------------------
-
-# Build full file paths
-full_files=()
+# Build the command with individual file paths
+CMD="cdo -O mergetime"
 for file in "${FILES[@]}"; do
-    full_files+=("$INPUT_DIR/$file")
+    CMD="$CMD $INPUT_DIR/$file"
 done
+CMD="$CMD $TEMPORARY_DIR/merged_temp1.nc"
 
-# Check if we should sort files
-if [ "$COMBINE_METHOD" = "time" ]; then
-    info "Sorting files by time..."
-    sorted_files=($(sort_files_by_time))
-    full_files=()
-    for file in "${sorted_files[@]}"; do
-        full_files+=("$INPUT_DIR/$file")
-    done
+if [ "$VERBOSE" = true ]; then
+    info "Running: $CMD"
+fi
+
+# Execute the command
+if eval $CMD 2>&1; then
+    info "Merge with mergetime succeeded"
 else
-    info "Using existing file order for record concatenation"
+    warning "Mergetime failed, trying concatenation..."
+    
+    # Try concatenation
+    CMD="cdo -O cat"
+    for file in "${FILES[@]}"; do
+        CMD="$CMD $INPUT_DIR/$file"
+    done
+    CMD="$CMD $TEMPORARY_DIR/merged_temp1.nc"
+    
+    if eval $CMD 2>&1; then
+        info "Concatenation succeeded"
+    else
+        error "Both mergetime and concatenation failed"
+    fi
 fi
-
-# Create temporary merged file
-temp_merged="$TEMPORARY_DIR/merged_temp.nc"
-
-# Merge files
-merge_files "$COMBINE_METHOD" "$temp_merged" "${full_files[@]}"
-
-# Filter variables if requested
-if [ -n "$VARIABLES" ]; then
-    temp_filtered="$TEMPORARY_DIR/merged_filtered.nc"
-    filter_variables "$temp_merged" "$temp_filtered" "$VARIABLES"
-    temp_merged="$temp_filtered"
-fi
-
-# Fix time dimension if needed
-temp_fixed="$TEMPORARY_DIR/merged_fixed.nc"
-fix_time_dimension "$temp_merged" "$temp_fixed" "$TIME_DIM"
-
-# Move to final output
-mv "$temp_fixed" "$OUTPUT_FILE"
 
 # -----------------------------------------------------------------------------
-# Final validation
+# METHOD 2: Alternative - Use NCO if available (more robust)
+# -----------------------------------------------------------------------------
+if command -v ncks &> /dev/null && [ ! -f "$TEMPORARY_DIR/merged_temp1.nc" ]; then
+    info "Trying NCO method..."
+    
+    # Use ncecat to concatenate
+    NCO_CMD="ncecat -O"
+    for file in "${FILES[@]}"; do
+        NCO_CMD="$NCO_CMD $INPUT_DIR/$file"
+    done
+    NCO_CMD="$NCO_CMD $TEMPORARY_DIR/merged_temp2.nc"
+    
+    if eval $NCO_CMD 2>&1; then
+        info "NCO concatenation succeeded"
+        mv "$TEMPORARY_DIR/merged_temp2.nc" "$TEMPORARY_DIR/merged_temp1.nc"
+    else
+        error "All merge methods failed"
+    fi
+fi
+
+# -----------------------------------------------------------------------------
+# Check if merge produced a valid file
+# -----------------------------------------------------------------------------
+if [ ! -f "$TEMPORARY_DIR/merged_temp1.nc" ] || [ ! -s "$TEMPORARY_DIR/merged_temp1.nc" ]; then
+    error "Merge failed - output file is empty or missing"
+fi
+
+info "Initial merge completed successfully"
+
+# -----------------------------------------------------------------------------
+# Filter variables if requested
+# -----------------------------------------------------------------------------
+TEMP_FILE="$TEMPORARY_DIR/merged_temp1.nc"
+
+if [ -n "$VARIABLES" ]; then
+    info "Filtering variables: $VARIABLES"
+    
+    if command -v ncks &> /dev/null; then
+        # Use NCO for variable filtering (more reliable)
+        ncks -O -v $VARIABLES "$TEMP_FILE" "$TEMPORARY_DIR/merged_filtered.nc" 2>/dev/null || {
+            warning "NCO filtering failed, trying CDO..."
+            cdo -O selvar,$VARIABLES "$TEMP_FILE" "$TEMPORARY_DIR/merged_filtered.nc" 2>/dev/null || {
+                warning "Variable filtering failed - using all variables"
+                cp "$TEMP_FILE" "$TEMPORARY_DIR/merged_filtered.nc"
+            }
+        }
+    else
+        # Use CDO
+        cdo -O selvar,$VARIABLES "$TEMP_FILE" "$TEMPORARY_DIR/merged_filtered.nc" 2>/dev/null || {
+            warning "Variable filtering failed - using all variables"
+            cp "$TEMP_FILE" "$TEMPORARY_DIR/merged_filtered.nc"
+        }
+    fi
+    TEMP_FILE="$TEMPORARY_DIR/merged_filtered.nc"
+fi
+
+# -----------------------------------------------------------------------------
+# Copy to final output
+# -----------------------------------------------------------------------------
+cp "$TEMP_FILE" "$OUTPUT_FILE"
+
+# -----------------------------------------------------------------------------
+# Verify output
 # -----------------------------------------------------------------------------
 if [ -f "$OUTPUT_FILE" ] && [ -s "$OUTPUT_FILE" ]; then
     info "✅ Merge completed successfully!"
     info "Output file: $OUTPUT_FILE"
     
-    # Print file information
-    info "File information:"
-    if command -v ncinfo &> /dev/null; then
-        ncinfo "$OUTPUT_FILE" | head -20
-    else
-        cdo -s sinfo "$OUTPUT_FILE" 2>/dev/null | head -20
-    fi
+    # Show file info
+    echo ""
+    info "Output file information:"
+    cdo -s sinfo "$OUTPUT_FILE" 2>/dev/null | head -15
     
-    # Print time range if available
-    if has_time_dimension "$OUTPUT_FILE" "$TIME_DIM"; then
-        info "Time range:"
-        cdo -s outputtime "$OUTPUT_FILE" 2>/dev/null | head -2 | tail -1
-        cdo -s outputtime "$OUTPUT_FILE" 2>/dev/null | tail -1
-    fi
+    # Show time range
+    echo ""
+    info "Time range:"
+    cdo -s outputtime "$OUTPUT_FILE" 2>/dev/null | head -1
+    cdo -s outputtime "$OUTPUT_FILE" 2>/dev/null | tail -1
     
-    # Print file size
+    echo ""
     FILE_SIZE=$(du -h "$OUTPUT_FILE" | cut -f1)
     info "File size: $FILE_SIZE"
+    
+    # Count time steps
+    TIME_STEPS=$(cdo -s ntime "$OUTPUT_FILE" 2>/dev/null || echo "N/A")
+    info "Total time steps: $TIME_STEPS"
 else
     error "Output file not created successfully"
 fi
-
-# -----------------------------------------------------------------------------
-# Optional: Add a merged NetCDF with time bounds
-# -----------------------------------------------------------------------------
-if command -v ncap2 &> /dev/null && [ "$COMBINE_METHOD" = "time" ]; then
-    info "Generating time bounds..."
-    temp_bounds="$TEMPORARY_DIR/with_bounds.nc"
-    ncap2 -O -s 'time_bounds[time,2]=array(time, 2, $time);' "$OUTPUT_FILE" "$temp_bounds" 2>/dev/null
-    if [ -f "$temp_bounds" ]; then
-        mv "$temp_bounds" "$OUTPUT_FILE"
-        info "Time bounds added successfully"
-    fi
-fi
-
-info "Done!"
