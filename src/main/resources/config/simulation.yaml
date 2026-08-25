@@ -1,20 +1,47 @@
-# ======================================================================
-# Simulation configuration for Anopheles stephensi – REALISTIC CALIBRATION
-# Based on meta-analyses of temperature-dependent traits.
-# Reference: Mordecai et al. (2013) Parasites & Vectors
-# ======================================================================
-
 time:
   startDateTime: "2020-04-01T00:00:00"
   totalTicks: 17280        
   tickMinutes: 15
+  
+ 
+layers:
+  # Static rasters
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+    
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+    
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+  
+  # Climate data - multiple years!
+  - name: Climate_2020
+    filePath: prepared_data/somali/climate_2020.nc
+    type: timeseries
+    variables:
+      - t2m
+      - tp
+  
+  - name: Climate_2023
+    filePath: prepared_data/somali/climate_2023.nc
+    type: timeseries
+    variables:
+      - t2m
+      - tp
+  
+  # Vector data
+  - name: StudyArea
+    filePath: prepared_data/somali/somali.shp
+    type: vector
+
 
 files:
   studySite: "prepared_data/somali/somali.shp"
-  elevation: "prepared_data/somali/Small_Somali_Elevation_10m.tif"
-  buildings: "prepared_data/somali/Small_Somali_Building_Density_10m.tif"
-  population: "prepared_data/somali/population_2020_1km.tif"
-  climateNetCDF: "prepared_data/somali/climate_t2m_tp_2020.nc"
+
 
 gridCellSizeDegrees: 0.001
   
@@ -111,15 +138,15 @@ agentLayers:
 
   - name: "WaterTanks"
     rules:
+      - condition: "true"  # Always execute
+        action: "evaporate"
+        priority: 1
       - condition: "waterVolume <= 5 && waterVolume > 0"
         action: "dry_out"
         priority: 3
       - condition: "temperature < 273.15 && waterVolume > 0"
         action: "freeze"
         priority: 2
-      - condition: "temperature > 288.15 && precipitation < 0.002"
-        action: "evaporate"
-        priority: 5
       - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
         action: "die"
         priority: 4
@@ -128,7 +155,12 @@ agentLayers:
 # Seeding – habitat-weighted (critical for spatial validity)
 # ======================================================================
 seeding:
-  seedAcrossFullStudySite: False       # Use habitat suitability weighting
+  seedAcrossFullStudySite: false
+  useOccurrencePoints: true
+  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv" 
+  occurrenceYearStart: 2016      
+  occurrenceYearEnd: 2023
+  occurrenceBufferKm: 0.05
   tanksToSeed: 5000
   mosquitoesToSeed: 10000
   habitatGridSizeX: 100
@@ -145,4 +177,4 @@ seeding:
 project:
   defaultAgentSearchRadius: 0.005    # ~550 m
   defaultAgentStep: 0.00005           # ~5.5 m per tick
-  defaultMaxAgentAge: 2880            # 30 days (longer for realistic seniors)
+  defaultMaxAgentAge: 2880            # 30 days

@@ -320,20 +320,40 @@ public class RuleEngine {
             }
         }
     }
-
+    
+    
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
-            double evaporationRate = Math.max(0.01, (temperature - 293.15) / 20.0);
-            evaporationRate *= (1.0 - Math.min(1.0, precipitation * 1000));
-            double newWater = Math.max(0, ia.getWaterVolume() - evaporationRate);
-            ia.setWaterVolume(newWater);
-            if (precipitation > 0.001) {
-                double refill = precipitation * 100;
-                ia.setWaterVolume(Math.min(100, ia.getWaterVolume() + refill));
+
+            // Convert temperature to Celsius
+            double tempC = temperature - 273.15;
+
+            // More aggressive evaporation (2-5% per tick at 20-30°C)
+            double baseEvapRate = 0.02; // 2% per tick at baseline (was 0.005)
+            double tempFactor = Math.max(0.2, 1.0 + (tempC - 20.0) * 0.05);
+            double evaporationRate = baseEvapRate * tempFactor;
+
+            // More aggressive refill (precipitation in mm)
+            // tp is in meters, convert to mm: * 1000
+            double precipMm = precipitation * 1000;
+            double refillRate = Math.min(15.0, precipMm * 0.5); // 0.5mm rain = 0.5% refill
+
+            double oldWater = ia.getWaterVolume();
+            
+            // Apply evaporation and refill
+            double newWater = oldWater - evaporationRate + refillRate;
+
+            // Clamp between 0 and 100
+            double clampedWater = Math.max(0, Math.min(100, newWater));
+            ia.setWaterVolume(clampedWater);
+
+            // Log significant changes (for debugging)
+            if (Math.abs(newWater - ia.getWaterVolume()) > 0.1) {
+                SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% (evap: %.2f%%, refill: %.2f%%) at (%.6f, %.6f)",
+                        ia.getWaterVolume(), clampedWater, evaporationRate, refillRate, ia.getX(), ia.getY());
             }
-            layer.updateAgentPositionImmediately(agent);
         }
     }
 

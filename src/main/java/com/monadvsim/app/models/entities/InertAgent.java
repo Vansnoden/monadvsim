@@ -45,9 +45,11 @@ public class InertAgent extends Agent {
     public double getWaterVolume() {
         return waterVolume.get();
     }
-
+    
     public void setWaterVolume(double volume) {
-        waterVolume.set(Math.max(0.0, Math.min(100.0, volume)));
+        double clamped = Math.max(0.0, Math.min(100.0, volume));
+        waterVolume.set(clamped);
+        updateCapacityFromVolume();
     }
 
     public int getLarvalCount() {

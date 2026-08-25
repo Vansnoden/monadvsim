@@ -167,8 +167,8 @@ public class AgentLayer extends Layer {
         }, 100);
     }
 
+
     private void processAgentRules(Agent agent, Project project) {
-        
         if (agent == null) return;
 
         if (agent instanceof LivingAgent la && !la.isAlive()) {
@@ -176,7 +176,8 @@ public class AgentLayer extends Layer {
         }
 
         if (rulesEvaluated.get() > 1_000_000_000L) {
-            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
+            SimulationLogger.severe("WARNING: Rule evaluation limit reached, "
+                    + "skipping further evaluations");
             return;
         }
 
@@ -184,12 +185,11 @@ public class AgentLayer extends Layer {
             try {
                 // --------------------------------------------------------------------
                 // 1. INERT AGENT: Passive hatching (eggs → larvae)
-                //    This is independent of behaviour and can stay first.
                 // --------------------------------------------------------------------
                 if (agent instanceof InertAgent ia && lifecycleModel != null) {
                     double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
                     int hatched = ia.hatchEggs(temperature, lifecycleModel);
-                    Random rng = SeedManager.getRandom(); //
+                    Random rng = SeedManager.getRandom();
                     if (hatched > 0) {
                         AgentLayer mosquitoLayer = findMosquitoLayer(project);
                         if (mosquitoLayer != null) {
@@ -206,40 +206,32 @@ public class AgentLayer extends Layer {
                 }
 
                 // --------------------------------------------------------------------
-                // 2. LIVING AGENT: Behavioural rules (FEED, GET_GRAVID, LAY_EGGS, etc.)
-                //    These must happen BEFORE mortality / ageing / development.
+                // 2. RULE EVALUATION FOR ALL AGENT TYPES
+                //    This is the key change - rules now run for InertAgent too!
+                // --------------------------------------------------------------------
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+                    if (evalResult) {
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
+
+                        // If LivingAgent died during rule execution, stop processing
+                        if (agent instanceof LivingAgent la && !la.isAlive()) {
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                            break;
+                        }
+                        if (isTerminalAction(rule.action())) break;
+                    }
+                }
+
+                // --------------------------------------------------------------------
+                // 3. LIVING AGENT: Lifecycle updates (age, resting, development, etc.)
+                //    These should only run for LivingAgent
                 // --------------------------------------------------------------------
                 if (agent instanceof LivingAgent la) {
-                    // Evaluate behavioural rules
-                    for (RuleDefinition rule : rules) {
-                        rulesEvaluated.incrementAndGet();
-                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-                        // SimulationLogger.info("[RULE_CHECK] Agent %s, condition: %s => %s", 
-                        //    agent.getId(), rule.condition(), evalResult);
-                        if (evalResult) {
-                            ruleEngine.execute(rule.action(), agent, project, this);
-                            actionsExecuted.incrementAndGet();
-
-                            // If the agent died during rule execution, stop processing further rules
-                            if (!la.isAlive()) {
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                break;
-                            }
-                            if (isTerminalAction(rule.action())) break;
-                        }
-                    }
-
-                    // If the agent is already dead, skip all lifecycle updates
-                    if (!la.isAlive()) return;
-
-                    // --------------------------------------------------------------------
-                    // 3. LIFE‑CYCLE TRANSITIONS, AGEING, MORTALITY (after behaviour)
-                    //    Including: development (larva→pupa→adult), resting updates, ageing,
-                    //    temperature‑dependent mortality, and age‑based death.
-                    // --------------------------------------------------------------------
-
-                    // Update resting state (depends only on elapsed time)
+                    // Update resting state
                     if (la.isResting()) {
                         la.incrementRestingDuration();
                         if (la.getRestingDuration() > la.getMaxRestingDuration()) {
@@ -247,7 +239,7 @@ public class AgentLayer extends Layer {
                         }
                     } else {
                         la.incrementTimeWithoutRest();
-                        if (la.getTimeWithoutRest() > 96) { // ~24 hours without rest
+                        if (la.getTimeWithoutRest() > 96) {
                             la.setAlive(false);
                             lifecycleManager.scheduleDeath(agent.getId());
                             deathsThisTick.incrementAndGet();
@@ -255,7 +247,7 @@ public class AgentLayer extends Layer {
                         }
                     }
 
-                    // Age increment (after behaviour, so an adult can lay eggs on its final tick)
+                    // Age increment
                     la.incrementAge();
                     if (la.getAge() > project.getDefaultMaxAgentAge()) {
                         la.setAlive(false);
@@ -264,12 +256,7 @@ public class AgentLayer extends Layer {
                         return;
                     }
 
-                    // Temperature‑dependent development (larva→pupa, pupa→adult) and adult mortality
-//                    applyLifecycleTransitions(la, project);
-//                    if (!la.isAlive()) {
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                    }
+                    // Temperature‑dependent development
                     if (la.isAlive()) {
                         double temperature = getTemperatureAt(project, la.getX(), la.getY());
                         LifecycleStage stage = la.getStage();
@@ -283,7 +270,8 @@ public class AgentLayer extends Layer {
                             case ADULT:
                                 lifecycleModel.applyAdultMortality(la, temperature);
                                 break;
-                            default: break;
+                            default:
+                                break;
                         }
                         if (!la.isAlive()) {
                             lifecycleManager.scheduleDeath(agent.getId());
@@ -292,12 +280,15 @@ public class AgentLayer extends Layer {
                     }
                 }
             } catch (Exception e) {
-                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing agent " 
+                        + agent.getId() 
+                        + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
-
+    
+    
     // New method: apply temperature‑driven stage transitions
     private void applyLifecycleTransitions(LivingAgent agent, Project project) {
         if (lifecycleModel == null) return;

@@ -18,6 +18,9 @@ public class SimulationConfig {
     // Project defaults
     public ProjectDefaults project;
     
+    // Layer definitions - data-driven layer creation
+    public List<LayerDefinition> layers;
+    
     // Spatial registry grid cell size (degrees)
     public double gridCellSizeDegrees;
     
@@ -35,7 +38,20 @@ public class SimulationConfig {
         public String elevation;
         public String buildings;
         public String population;
-        public String climateNetCDF;
+        public String climateNetCDF; // single .nc file
+        public List<String> climateFiles; // in case of multiple Multiple NetCDF files
+    }
+    
+    
+    public static class LayerDefinition {
+        public String name;
+        public String filePath;
+        public String type;  // "raster", "timeseries", "vector", "occurrence"
+        public String variable;  // For NetCDF: variable name to extract
+        public boolean active = true;
+        
+        // For NetCDF files with multiple variables, you can specify which to load
+        public List<String> variables;
     }
 
     
@@ -93,6 +109,11 @@ public class SimulationConfig {
         public double mosquitoBuildingThreshold;
         public double mosquitoPopulationThreshold;
         public boolean seedAcrossFullStudySite = false;
+        public boolean useOccurrencePoints = false;
+        public String occurrenceFilePath = "";
+        public int occurrenceYearStart = 0;
+        public int occurrenceYearEnd = 9999;
+        public double occurrenceBufferKm = 5.0;  // Buffer around each point
     }
 
     public static class ProjectDefaults {

@@ -1028,14 +1028,23 @@ public class SimulationEngine implements Runnable {
 
         long totalLarvae = 0;
         long totalEggs = 0;
+        long tanksWithWater = 0;
+        double avgWater = 0;
         // Sum over all InertAgent (water tanks) across all layers
         for (AgentLayer layer : project.getAgentLayers()) {
             for (Agent agent : layer.getAgents()) {
                 if (agent instanceof InertAgent ia) {
                     totalLarvae += ia.getLarvalCount();
                     totalEggs += ia.getEggCount();
+                    avgWater += ia.getWaterVolume();
+                    tanksWithWater++;
                 }
             }
+        }
+        
+        if (tanksWithWater > 0) {
+            SimulationLogger.info("Avg water volume: %.1f%% across %d tanks", 
+                avgWater / tanksWithWater, tanksWithWater);
         }
 
         SimulationLogger.info(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",

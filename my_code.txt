@@ -1625,14 +1625,23 @@ public class SimulationEngine implements Runnable {
 
         long totalLarvae = 0;
         long totalEggs = 0;
+        long tanksWithWater = 0;
+        double avgWater = 0;
         // Sum over all InertAgent (water tanks) across all layers
         for (AgentLayer layer : project.getAgentLayers()) {
             for (Agent agent : layer.getAgents()) {
                 if (agent instanceof InertAgent ia) {
                     totalLarvae += ia.getLarvalCount();
                     totalEggs += ia.getEggCount();
+                    avgWater += ia.getWaterVolume();
+                    tanksWithWater++;
                 }
             }
+        }
+        
+        if (tanksWithWater > 0) {
+            SimulationLogger.info("Avg water volume: %.1f%% across %d tanks", 
+                avgWater / tanksWithWater, tanksWithWater);
         }
 
         SimulationLogger.info(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
@@ -2100,20 +2109,40 @@ public class RuleEngine {
             }
         }
     }
-
+    
+    
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
-            double evaporationRate = Math.max(0.01, (temperature - 293.15) / 20.0);
-            evaporationRate *= (1.0 - Math.min(1.0, precipitation * 1000));
-            double newWater = Math.max(0, ia.getWaterVolume() - evaporationRate);
-            ia.setWaterVolume(newWater);
-            if (precipitation > 0.001) {
-                double refill = precipitation * 100;
-                ia.setWaterVolume(Math.min(100, ia.getWaterVolume() + refill));
+
+            // Convert temperature to Celsius
+            double tempC = temperature - 273.15;
+
+            // More aggressive evaporation (2-5% per tick at 20-30°C)
+            double baseEvapRate = 0.02; // 2% per tick at baseline (was 0.005)
+            double tempFactor = Math.max(0.2, 1.0 + (tempC - 20.0) * 0.05);
+            double evaporationRate = baseEvapRate * tempFactor;
+
+            // More aggressive refill (precipitation in mm)
+            // tp is in meters, convert to mm: * 1000
+            double precipMm = precipitation * 1000;
+            double refillRate = Math.min(15.0, precipMm * 0.5); // 0.5mm rain = 0.5% refill
+
+            double oldWater = ia.getWaterVolume();
+            
+            // Apply evaporation and refill
+            double newWater = oldWater - evaporationRate + refillRate;
+
+            // Clamp between 0 and 100
+            double clampedWater = Math.max(0, Math.min(100, newWater));
+            ia.setWaterVolume(clampedWater);
+
+            // Log significant changes (for debugging)
+            if (Math.abs(newWater - ia.getWaterVolume()) > 0.1) {
+                SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% (evap: %.2f%%, refill: %.2f%%) at (%.6f, %.6f)",
+                        ia.getWaterVolume(), clampedWater, evaporationRate, refillRate, ia.getX(), ia.getY());
             }
-            layer.updateAgentPositionImmediately(agent);
         }
     }
 
@@ -2647,6 +2676,203 @@ public class SpeciesParameters implements Serializable {
 
 
     public SpeciesParameters() {}
+}package com.monadvsim.app.models.services;
+
+import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.engine.TimeManager;
+import com.monadvsim.app.models.utils.SimulationLogger;
+import ucar.nc2.NetcdfFile;
+import ucar.nc2.NetcdfFiles;
+import ucar.nc2.Variable;
+
+import java.io.File;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+/**
+ * Factory for creating layers from files based on file type detection.
+ * Supports: GeoTIFF, NetCDF, Shapefile, CSV
+ */
+public class LayerFactory {
+    
+    private final TimeManager timeManager;
+    private final ProjectPersistenceService persistenceService;
+    
+    public LayerFactory(TimeManager timeManager) {
+        this.timeManager = timeManager;
+        this.persistenceService = new ProjectPersistenceService();
+    }
+    
+    /**
+     * Create a layer from a file path.
+     * Automatically detects file type and returns appropriate layer.
+     */
+    public Layer createLayer(String filePath, String layerName) throws IOException {
+        return createLayer(filePath, layerName, null);
+    }
+    
+    /**
+     * Create a layer from a file path with optional variable name for NetCDF.
+     */
+    public Layer createLayer(String filePath, String layerName, String variableName) throws IOException {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new IOException("File not found: " + filePath);
+        }
+        
+        String extension = getFileExtension(filePath).toLowerCase();
+        
+        SimulationLogger.info("Creating layer '%s' from %s (type: %s)", 
+            layerName, filePath, extension);
+        
+        switch (extension) {
+            case "tif":
+            case "tiff":
+            case "geotiff":
+                return createRasterLayer(filePath, layerName);
+                
+            case "nc":
+            case "netcdf":
+                return createNetCDFLayer(filePath, layerName, variableName);
+                
+            case "shp":
+                return createVectorLayer(filePath, layerName);
+                
+            case "csv":
+                return createOccurrenceLayer(filePath, layerName);
+                
+            default:
+                throw new IOException("Unsupported file type: " + extension);
+        }
+    }
+    
+    /**
+     * Create multiple layers from a NetCDF file.
+     * Detects all climate variables and creates InterpolatedRasterLayer for each.
+     */
+    public List<Layer> createLayersFromNetCDF(String filePath) throws IOException {
+        List<Layer> layers = new ArrayList<>();
+        
+        try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
+            for (Variable var : ncfile.getVariables()) {
+                String varName = var.getShortName();
+                
+                // Skip coordinate variables
+                if (isCoordinateVariable(varName)) {
+                    continue;
+                }
+                
+                String layerName = varName;
+                SimulationLogger.info("Detected NetCDF variable: %s", varName);
+                
+                // Map to readable names
+                switch (varName) {
+                    case "t2m":
+                        layerName = "Temperature";
+                        break;
+                    case "tp":
+                        layerName = "Precipitation";
+                        break;
+                    case "sp":
+                        layerName = "SurfacePressure";
+                        break;
+                    case "u10":
+                        layerName = "WindU";
+                        break;
+                    case "v10":
+                        layerName = "WindV";
+                        break;
+                }
+                
+                InterpolatedRasterLayer layer = new InterpolatedRasterLayer(layerName, timeManager);
+                layer.loadFromNetCDF(filePath, varName);
+                layers.add(layer);
+                SimulationLogger.info("  Created layer: %s from variable %s", layerName, varName);
+            }
+        }
+        
+        return layers;
+    }
+    
+    /**
+     * Load multiple NetCDF files (e.g., for different years).
+     * Each file can have multiple variables.
+     */
+    public List<Layer> createLayersFromMultipleNetCDF(List<String> filePaths) throws IOException {
+        List<Layer> allLayers = new ArrayList<>();
+        
+        for (String filePath : filePaths) {
+            SimulationLogger.info("Loading NetCDF: %s", filePath);
+            List<Layer> layers = createLayersFromNetCDF(filePath);
+            allLayers.addAll(layers);
+        }
+        
+        return allLayers;
+    }
+    
+    private Layer createRasterLayer(String filePath, String layerName) throws IOException {
+        RasterLayer layer = new MemoryMappedRasterLayer(layerName, 1, 1, 1);
+        try {
+            persistenceService.loadRasterData(layer, filePath);
+        } catch (Exception ex) {
+            Logger.getLogger(LayerFactory.class.getName()).log(Level.SEVERE, null, ex);
+        }
+        return layer;
+    }
+    
+    private Layer createNetCDFLayer(String filePath, String layerName, String variableName) throws IOException {
+        if (variableName == null) {
+            // If no variable specified, try to detect
+            try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
+                for (Variable var : ncfile.getVariables()) {
+                    if (!isCoordinateVariable(var.getShortName())) {
+                        variableName = var.getShortName();
+                        SimulationLogger.info("Auto-detected variable: %s", variableName);
+                        break;
+                    }
+                }
+            }
+            
+            if (variableName == null) {
+                throw new IOException("No climate variable found in NetCDF file");
+            }
+        }
+        
+        InterpolatedRasterLayer layer = new InterpolatedRasterLayer(layerName, timeManager);
+        layer.loadFromNetCDF(filePath, variableName);
+        return layer;
+    }
+    
+    private Layer createVectorLayer(String filePath, String layerName) throws IOException {
+        VectorLayer layer = new VectorLayer(layerName);
+        // Load shapefile geometry
+        // Implementation depends on your VectorLayer implementation
+        SimulationLogger.info("Vector layer loaded: %s", layerName);
+        return layer;
+    }
+    
+    private Layer createOccurrenceLayer(String filePath, String layerName) throws IOException {
+        // For occurrence points - could be a special layer type
+        SimulationLogger.info("Occurrence data loaded: %s", layerName);
+        // Return a VectorLayer or custom OccurrenceLayer
+        VectorLayer layer = new VectorLayer(layerName);
+        return layer;
+    }
+    
+    private String getFileExtension(String path) {
+        int lastDot = path.lastIndexOf('.');
+        return lastDot > 0 ? path.substring(lastDot + 1) : "";
+    }
+    
+    private boolean isCoordinateVariable(String varName) {
+        return varName.equals("latitude") || varName.equals("lat") ||
+               varName.equals("longitude") || varName.equals("lon") ||
+               varName.equals("time") || varName.equals("level") ||
+               varName.equals("step") || varName.equals("valid_time");
+    }
 }package com.monadvsim.app.models.services;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -4086,6 +4312,211 @@ public final class ResourceManager implements Closeable {
         }
     }
 }package com.monadvsim.app.models.utils;
+
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+
+/**
+ * Utility for loading occurrence data from CSV files.
+ * Expected format:
+ *   longitude, latitude, year, month, day, source
+ * 
+ * @author void
+ */
+public class OccurrenceLoader {
+    
+    public static class OccurrencePoint {
+        public final double longitude;
+        public final double latitude;
+        public final int year;
+        public final int month;
+        public final int day;
+        public final String source;
+        public final LocalDate date;
+        
+        public OccurrencePoint(double longitude, double latitude, int year, int month, int day, String source) {
+            this.longitude = longitude;
+            this.latitude = latitude;
+            this.year = year;
+            this.month = month;
+            this.day = day;
+            this.source = source;
+            this.date = LocalDate.of(year, month, day);
+        }
+        
+        @Override
+        public String toString() {
+            return String.format("Occurrence(%.6f, %.6f, %d-%02d-%02d, %s)", 
+                longitude, latitude, year, month, day, source);
+        }
+    }
+    
+    /**
+     * Load occurrence points from a CSV file.
+     * 
+     * Expected header: longitude,latitude,year,month,day,source
+     * If month/day are missing, they default to 1.
+     */
+    public static List<OccurrencePoint> loadOccurrences(String filePath) throws IOException {
+        List<OccurrencePoint> points = new ArrayList<>();
+        String line;
+        boolean headerSkipped = false;
+        
+        try (BufferedReader reader = new BufferedReader(new FileReader(filePath))) {
+            while ((line = reader.readLine()) != null) {
+                line = line.trim();
+                if (line.isEmpty()) continue;
+                
+                // Skip header
+                if (!headerSkipped) {
+                    headerSkipped = true;
+                    if (line.toLowerCase().contains("longitude") && 
+                        line.toLowerCase().contains("latitude")) {
+                        continue;
+                    }
+                }
+                
+                String[] parts = line.split(",");
+                if (parts.length < 3) {
+                    SimulationLogger.warning("Skipping malformed occurrence line: %s", line);
+                    continue;
+                }
+                
+                try {
+                    double lon = Double.parseDouble(parts[0].trim());
+                    double lat = Double.parseDouble(parts[1].trim());
+                    
+                    // Parse year
+                    int year = Integer.parseInt(parts[2].trim());
+                    int month = 1;
+                    int day = 1;
+                    String source = "";
+                    
+                    if (parts.length > 3) {
+                        try {
+                            month = Integer.parseInt(parts[3].trim());
+                        } catch (NumberFormatException e) {
+                            // Month may be text - try to parse date
+                            try {
+                                // Try to parse as date string
+                                String dateStr = parts[3].trim();
+                                // Try common formats
+                                if (dateStr.contains("-")) {
+                                    String[] dateParts = dateStr.split("-");
+                                    if (dateParts.length >= 2) {
+                                        month = Integer.parseInt(dateParts[1]);
+                                        if (dateParts.length >= 3) {
+                                            day = Integer.parseInt(dateParts[2]);
+                                        }
+                                    }
+                                }
+                            } catch (Exception e2) {
+                                // Ignore - keep default
+                            }
+                        }
+                    }
+                    
+                    if (parts.length > 4) {
+                        try {
+                            day = Integer.parseInt(parts[4].trim());
+                        } catch (NumberFormatException e) {
+                            // Ignore - keep default
+                        }
+                    }
+                    
+                    if (parts.length > 5) {
+                        source = parts[5].trim();
+                    }
+                    
+                    // Validate month/day
+                    if (month < 1) month = 1;
+                    if (month > 12) month = 12;
+                    if (day < 1) day = 1;
+                    if (day > 31) day = 31;
+                    
+                    points.add(new OccurrencePoint(lon, lat, year, month, day, source));
+                    
+                } catch (NumberFormatException e) {
+                    SimulationLogger.warning("Skipping occurrence with invalid number: %s", line);
+                }
+            }
+        }
+        
+        SimulationLogger.info("Loaded %d occurrence points from %s", points.size(), filePath);
+        return points;
+    }
+    
+    /**
+     * Filter occurrence points by year range.
+     */
+    public static List<OccurrencePoint> filterByYear(List<OccurrencePoint> points, int yearStart, int yearEnd) {
+        List<OccurrencePoint> filtered = new ArrayList<>();
+        for (OccurrencePoint p : points) {
+            if (p.year >= yearStart && p.year <= yearEnd) {
+                filtered.add(p);
+            }
+        }
+        SimulationLogger.info("Filtered to %d occurrence points in years %d-%d", 
+            filtered.size(), yearStart, yearEnd);
+        return filtered;
+    }
+    
+    /**
+     * Filter occurrence points by year range.
+     */
+    public static List<OccurrencePoint> filterByYear(List<OccurrencePoint> points, int year) {
+        return filterByYear(points, year, year);
+    }
+    
+    /**
+     * Get summary statistics of occurrence points.
+     */
+    public static Map<String, Object> getSummary(List<OccurrencePoint> points) {
+        Map<String, Object> summary = new HashMap<>();
+        summary.put("total", points.size());
+        
+        // Year distribution
+        Map<Integer, Integer> yearCounts = new HashMap<>();
+        for (OccurrencePoint p : points) {
+            yearCounts.put(p.year, yearCounts.getOrDefault(p.year, 0) + 1);
+        }
+        summary.put("byYear", yearCounts);
+        
+        // Source distribution
+        Map<String, Integer> sourceCounts = new HashMap<>();
+        for (OccurrencePoint p : points) {
+            String source = p.source.isEmpty() ? "unknown" : p.source;
+            sourceCounts.put(source, sourceCounts.getOrDefault(source, 0) + 1);
+        }
+        summary.put("bySource", sourceCounts);
+        
+        // Spatial bounds
+        if (!points.isEmpty()) {
+            double minLon = Double.MAX_VALUE, maxLon = -Double.MAX_VALUE;
+            double minLat = Double.MAX_VALUE, maxLat = -Double.MAX_VALUE;
+            for (OccurrencePoint p : points) {
+                minLon = Math.min(minLon, p.longitude);
+                maxLon = Math.max(maxLon, p.longitude);
+                minLat = Math.min(minLat, p.latitude);
+                maxLat = Math.max(maxLat, p.latitude);
+            }
+            summary.put("minLon", minLon);
+            summary.put("maxLon", maxLon);
+            summary.put("minLat", minLat);
+            summary.put("maxLat", maxLat);
+        }
+        
+        return summary;
+    }
+}package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import org.geotools.api.data.FileDataStore;
@@ -4739,11 +5170,11 @@ public class SpeciesParameterLoader {
         return new SpeciesParameters();
     }
 }package com.monadvsim.app.models.utils;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.monadvsim.app.models.config.SimulationConfig;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 
@@ -4751,6 +5182,53 @@ public class ConfigLoader {
 
     private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
 
+    /**
+     * Load configuration from the given path.
+     * Automatically detects if it's a classpath resource or file system path.
+     * 
+     * @param path - Path to the config file
+     * @return SimulationConfig object
+     * @throws IOException if the file cannot be loaded
+     */
+    public static SimulationConfig loadConfig(String path) throws IOException {
+        // Try classpath first (if path starts with "/")
+        if (path.startsWith("/")) {
+            try (InputStream is = ConfigLoader.class.getResourceAsStream(path)) {
+                if (is != null) {
+                    return YAML_MAPPER.readValue(is, SimulationConfig.class);
+                }
+            }
+        }
+        
+        // Try classpath with leading "/" added
+        if (!path.startsWith("/")) {
+            try (InputStream is = ConfigLoader.class.getResourceAsStream("/" + path)) {
+                if (is != null) {
+                    return YAML_MAPPER.readValue(is, SimulationConfig.class);
+                }
+            } catch (IOException e) {
+                // Continue to file system
+            }
+        }
+        
+        // Try file system
+        File file = new File(path);
+        if (file.exists()) {
+            return YAML_MAPPER.readValue(file, SimulationConfig.class);
+        }
+        
+        // Try with "config/" prefix
+        File configFile = new File("config/" + path);
+        if (configFile.exists()) {
+            return YAML_MAPPER.readValue(configFile, SimulationConfig.class);
+        }
+        
+        throw new IOException("Config file not found: " + path);
+    }
+
+    /**
+     * Load configuration from classpath resource (legacy method).
+     */
     public static SimulationConfig loadFromYaml(String resourcePath) throws IOException {
         try (InputStream is = ConfigLoader.class.getResourceAsStream(resourcePath)) {
             if (is == null) {
@@ -4758,6 +5236,17 @@ public class ConfigLoader {
             }
             return YAML_MAPPER.readValue(is, SimulationConfig.class);
         }
+    }
+    
+    /**
+     * Load configuration from file system path.
+     */
+    public static SimulationConfig loadFromFile(String filePath) throws IOException {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new IOException("Config file not found: " + filePath);
+        }
+        return YAML_MAPPER.readValue(file, SimulationConfig.class);
     }
 }package com.monadvsim.app.models.utils;
 
@@ -4931,6 +5420,9 @@ public class SimulationConfig {
     // Project defaults
     public ProjectDefaults project;
     
+    // Layer definitions - data-driven layer creation
+    public List<LayerDefinition> layers;
+    
     // Spatial registry grid cell size (degrees)
     public double gridCellSizeDegrees;
     
@@ -4948,7 +5440,20 @@ public class SimulationConfig {
         public String elevation;
         public String buildings;
         public String population;
-        public String climateNetCDF;
+        public String climateNetCDF; // single .nc file
+        public List<String> climateFiles; // in case of multiple Multiple NetCDF files
+    }
+    
+    
+    public static class LayerDefinition {
+        public String name;
+        public String filePath;
+        public String type;  // "raster", "timeseries", "vector", "occurrence"
+        public String variable;  // For NetCDF: variable name to extract
+        public boolean active = true;
+        
+        // For NetCDF files with multiple variables, you can specify which to load
+        public List<String> variables;
     }
 
     
@@ -5006,6 +5511,11 @@ public class SimulationConfig {
         public double mosquitoBuildingThreshold;
         public double mosquitoPopulationThreshold;
         public boolean seedAcrossFullStudySite = false;
+        public boolean useOccurrencePoints = false;
+        public String occurrenceFilePath = "";
+        public int occurrenceYearStart = 0;
+        public int occurrenceYearEnd = 9999;
+        public double occurrenceBufferKm = 5.0;  // Buffer around each point
     }
 
     public static class ProjectDefaults {
@@ -5187,8 +5697,8 @@ public class AgentLayer extends Layer {
         }, 100);
     }
 
+
     private void processAgentRules(Agent agent, Project project) {
-        
         if (agent == null) return;
 
         if (agent instanceof LivingAgent la && !la.isAlive()) {
@@ -5196,7 +5706,8 @@ public class AgentLayer extends Layer {
         }
 
         if (rulesEvaluated.get() > 1_000_000_000L) {
-            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
+            SimulationLogger.severe("WARNING: Rule evaluation limit reached, "
+                    + "skipping further evaluations");
             return;
         }
 
@@ -5204,12 +5715,11 @@ public class AgentLayer extends Layer {
             try {
                 // --------------------------------------------------------------------
                 // 1. INERT AGENT: Passive hatching (eggs → larvae)
-                //    This is independent of behaviour and can stay first.
                 // --------------------------------------------------------------------
                 if (agent instanceof InertAgent ia && lifecycleModel != null) {
                     double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
                     int hatched = ia.hatchEggs(temperature, lifecycleModel);
-                    Random rng = SeedManager.getRandom(); //
+                    Random rng = SeedManager.getRandom();
                     if (hatched > 0) {
                         AgentLayer mosquitoLayer = findMosquitoLayer(project);
                         if (mosquitoLayer != null) {
@@ -5226,40 +5736,32 @@ public class AgentLayer extends Layer {
                 }
 
                 // --------------------------------------------------------------------
-                // 2. LIVING AGENT: Behavioural rules (FEED, GET_GRAVID, LAY_EGGS, etc.)
-                //    These must happen BEFORE mortality / ageing / development.
+                // 2. RULE EVALUATION FOR ALL AGENT TYPES
+                //    This is the key change - rules now run for InertAgent too!
+                // --------------------------------------------------------------------
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+                    if (evalResult) {
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
+
+                        // If LivingAgent died during rule execution, stop processing
+                        if (agent instanceof LivingAgent la && !la.isAlive()) {
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                            break;
+                        }
+                        if (isTerminalAction(rule.action())) break;
+                    }
+                }
+
+                // --------------------------------------------------------------------
+                // 3. LIVING AGENT: Lifecycle updates (age, resting, development, etc.)
+                //    These should only run for LivingAgent
                 // --------------------------------------------------------------------
                 if (agent instanceof LivingAgent la) {
-                    // Evaluate behavioural rules
-                    for (RuleDefinition rule : rules) {
-                        rulesEvaluated.incrementAndGet();
-                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-                        // SimulationLogger.info("[RULE_CHECK] Agent %s, condition: %s => %s", 
-                        //    agent.getId(), rule.condition(), evalResult);
-                        if (evalResult) {
-                            ruleEngine.execute(rule.action(), agent, project, this);
-                            actionsExecuted.incrementAndGet();
-
-                            // If the agent died during rule execution, stop processing further rules
-                            if (!la.isAlive()) {
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                break;
-                            }
-                            if (isTerminalAction(rule.action())) break;
-                        }
-                    }
-
-                    // If the agent is already dead, skip all lifecycle updates
-                    if (!la.isAlive()) return;
-
-                    // --------------------------------------------------------------------
-                    // 3. LIFE‑CYCLE TRANSITIONS, AGEING, MORTALITY (after behaviour)
-                    //    Including: development (larva→pupa→adult), resting updates, ageing,
-                    //    temperature‑dependent mortality, and age‑based death.
-                    // --------------------------------------------------------------------
-
-                    // Update resting state (depends only on elapsed time)
+                    // Update resting state
                     if (la.isResting()) {
                         la.incrementRestingDuration();
                         if (la.getRestingDuration() > la.getMaxRestingDuration()) {
@@ -5267,7 +5769,7 @@ public class AgentLayer extends Layer {
                         }
                     } else {
                         la.incrementTimeWithoutRest();
-                        if (la.getTimeWithoutRest() > 96) { // ~24 hours without rest
+                        if (la.getTimeWithoutRest() > 96) {
                             la.setAlive(false);
                             lifecycleManager.scheduleDeath(agent.getId());
                             deathsThisTick.incrementAndGet();
@@ -5275,7 +5777,7 @@ public class AgentLayer extends Layer {
                         }
                     }
 
-                    // Age increment (after behaviour, so an adult can lay eggs on its final tick)
+                    // Age increment
                     la.incrementAge();
                     if (la.getAge() > project.getDefaultMaxAgentAge()) {
                         la.setAlive(false);
@@ -5284,12 +5786,7 @@ public class AgentLayer extends Layer {
                         return;
                     }
 
-                    // Temperature‑dependent development (larva→pupa, pupa→adult) and adult mortality
-//                    applyLifecycleTransitions(la, project);
-//                    if (!la.isAlive()) {
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                    }
+                    // Temperature‑dependent development
                     if (la.isAlive()) {
                         double temperature = getTemperatureAt(project, la.getX(), la.getY());
                         LifecycleStage stage = la.getStage();
@@ -5303,7 +5800,8 @@ public class AgentLayer extends Layer {
                             case ADULT:
                                 lifecycleModel.applyAdultMortality(la, temperature);
                                 break;
-                            default: break;
+                            default:
+                                break;
                         }
                         if (!la.isAlive()) {
                             lifecycleManager.scheduleDeath(agent.getId());
@@ -5312,12 +5810,15 @@ public class AgentLayer extends Layer {
                     }
                 }
             } catch (Exception e) {
-                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
+                SimulationLogger.severe("Error processing agent " 
+                        + agent.getId() 
+                        + ": " + e.getMessage());
                 e.printStackTrace();
             }
         }
     }
-
+    
+    
     // New method: apply temperature‑driven stage transitions
     private void applyLifecycleTransitions(LivingAgent agent, Project project) {
         if (lifecycleModel == null) return;
@@ -7191,9 +7692,11 @@ public class InertAgent extends Agent {
     public double getWaterVolume() {
         return waterVolume.get();
     }
-
+    
     public void setWaterVolume(double volume) {
-        waterVolume.set(Math.max(0.0, Math.min(100.0, volume)));
+        double clamped = Math.max(0.0, Math.min(100.0, volume));
+        waterVolume.set(clamped);
+        updateCapacityFromVolume();
     }
 
     public int getLarvalCount() {
@@ -7598,12 +8101,15 @@ public class LivingAgent extends Agent {
     public void setMaxRestingDuration(int duration) { maxRestingDuration.set(duration); }
     public void resetTimeWithoutRest() { timeWithoutRest.set(0); }
 }package com.monadvsim.app;
+
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.config.SimulationConfig;
 import com.monadvsim.app.models.engine.*;
 import com.monadvsim.app.models.entities.*;
+import com.monadvsim.app.models.services.LayerFactory;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ConfigLoader;
+import com.monadvsim.app.models.utils.OccurrenceLoader;
 import com.monadvsim.app.models.utils.SeedManager;
 import com.monadvsim.app.models.utils.SnapshotMerger;
 import com.monadvsim.app.models.utils.VectorBoundsLoader;
@@ -7628,7 +8134,12 @@ import org.locationtech.jts.geom.Coordinate;
  * Main Application Entry Point
  *
  * Configures project settings, loads data (rasters, climate NetCDF) and seeds initial agent populations.
- * All configuration is read from a single YAML file (config/simulation.yaml).
+ * All configuration is read from a single YAML file.
+ *
+ * Command line arguments:
+ *   args[0] - seed (optional, default: current time)
+ *   args[1] - output directory (optional, default: "results")
+ *   args[2] - config file path (optional, default: "config/simulation.yaml")
  *
  * @author void
  */
@@ -7644,44 +8155,63 @@ public class App {
     private static SimulationConfig config;
     private static String outputDir;
 
+    // Default configuration path (classpath resource)
+    private static final String DEFAULT_CONFIG_PATH = "config/simulation.yaml";
+    private static final String DEFAULT_OUTPUT_DIR = "results";
+
     public static void main(String[] args) {
         SimulationLogger.info("Starting Multi-Agent Simulation System");
 
         try {
-            // 1. Load configuration from YAML
-            config = ConfigLoader.loadFromYaml("/config/simulation.yaml");
-            SimulationLogger.info("Configuration loaded from /config/simulation.yaml");
-            
-            // 1.1 Get seed from command line (or use default)
-            String outputDir = "results";
+            // ======================================================================
+            // 1. PARSE COMMAND LINE ARGUMENTS
+            // ======================================================================
             long seed = System.currentTimeMillis();
+            String outputDir = DEFAULT_OUTPUT_DIR;
+            String configPath = DEFAULT_CONFIG_PATH;
+            
             if (args.length > 0) {
+                // First argument: seed (optional)
                 try {
                     seed = Long.parseLong(args[0]);
-                    if (args.length > 1) {
-                        outputDir = args[1];
-                    }
+                    SimulationLogger.info("Seed from command line: %d", seed);
                 } catch (NumberFormatException e) {
-                    System.err.println("Invalid seed, using current time.");
+                    // If first arg is not a number, treat it as config path
+                    configPath = args[0];
+                    SimulationLogger.info("Config path from command line: %s", configPath);
                 }
             }
-            // 1.2 Set seed
-            SeedManager.setSeed(seed);
-            SimulationLogger.info("Using seed: %d", seed);
-
-            // 2. Create results directory
+            
+            if (args.length > 1) {
+                // Second argument: output directory
+                outputDir = args[1];
+                SimulationLogger.info("Output directory from command line: %s", outputDir);
+            }
+            
+            if (args.length > 2) {
+                // Third argument: config path (overrides previous)
+                configPath = args[2];
+                SimulationLogger.info("Config path from command line (arg 3): %s", configPath);
+            }
+            
+            // Ensure config path works for both classpath and file system
+            // Don't force leading "/" - let ConfigLoader handle it
+            if (configPath.startsWith("/")) {
+                // Classpath resource
+                configPath = configPath;
+            } else if (!configPath.startsWith("file:") && !configPath.startsWith("http")) {
+                // Default: try classpath first, then file system
+                // We'll let loadConfig handle the resolution
+            }
+            
+            // ======================================================================
+            // 2. SETUP OUTPUT DIRECTORY AND LOGGING
+            // ======================================================================
+            
             File resultsDir = new File(outputDir);
             if (!resultsDir.exists()) {
                 if (!resultsDir.mkdirs()) {
                     SimulationLogger.severe("Could not create results directory: " + outputDir);
-                    return;
-                }
-            }
-            
-            // Ensure directory exists
-            if (!resultsDir.exists()) {
-                if (!resultsDir.mkdirs()) {
-                    SimulationLogger.severe("Could not create results directory: " + resultsDir.getAbsolutePath());
                     return;
                 }
             }
@@ -7693,19 +8223,41 @@ public class App {
             
             App.outputDir = resultsDir.getAbsolutePath();
             
+            // Set seed
             SeedManager.setSeed(seed);
             SimulationLogger.info("Using seed: %d", seed);
             SimulationLogger.info("Output directory: %s", resultsDir.getAbsolutePath());
+            SimulationLogger.info("Config file: %s", configPath);
 
-            // 3. Setup time manager from config
+            // ======================================================================
+            // 3. LOAD CONFIGURATION FROM YAML
+            // ======================================================================
+            
+            config = loadConfig(configPath);
+            if (config == null) {
+                SimulationLogger.severe("Failed to load configuration from: %s", configPath);
+                SimulationLogger.info("Using default configuration values...");
+                config = createDefaultConfig();
+            }
+
+            // ======================================================================
+            // 4. SETUP TIME MANAGER
+            // ======================================================================
+            
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
-            // 4. World bounds from study site file (shapefile)
+            // ======================================================================
+            // 5. WORLD BOUNDS FROM STUDY SITE
+            // ======================================================================
+            
             worldBounds = getWorldBoundsFromStudySite(config.files.studySite);
             SimulationLogger.info("World bounds from study site: " + worldBounds);
 
-            // 5. Load study area geometry for seeding constraints
+            // ======================================================================
+            // 6. LOAD STUDY AREA GEOMETRY FOR SEEDING
+            // ======================================================================
+            
             Geometry studyAreaGeometry = null;
             try {
                 studyAreaGeometry = VectorBoundsLoader.getStudyAreaGeometry(config.files.studySite);
@@ -7715,31 +8267,49 @@ public class App {
                 SimulationLogger.severe("Seeding will use rectangular bounds only.");
             }
 
-            // 6. Spatial registry with grid cell size from config
+            // ======================================================================
+            // 7. SPATIAL REGISTRY
+            // ======================================================================
+            
             spatialRegistry = new SpatialRegistry(worldBounds, config.gridCellSizeDegrees);
 
-            // 7. Create project and configure (pass geometry)
+            // ======================================================================
+            // 8. CREATE AND CONFIGURE PROJECT
+            // ======================================================================
+            
             project = new Project("Mosquito Simulation");
             configureSimulation(project, spatialRegistry, timeManager, worldBounds, config, studyAreaGeometry);
 
-            // 8. Start simulation
+            // ======================================================================
+            // 9. START SIMULATION
+            // ======================================================================
+            
             createAndStartSimulation(project, timeManager, spatialRegistry, resultsDir.getAbsolutePath());
 
-            // 9. Shutdown hook
+            // ======================================================================
+            // 10. SHUTDOWN HOOK
+            // ======================================================================
+            
             Runtime.getRuntime().addShutdownHook(new Thread(() -> {
                 SimulationLogger.info("\n🛑 Shutdown signal received...");
                 if (simulationEngine != null) simulationEngine.stop();
             }));
 
-            // 10. Wait for completion
+            // ======================================================================
+            // 11. WAIT FOR COMPLETION
+            // ======================================================================
+            
             if (simulationThread != null && simulationThread.isAlive()) simulationThread.join();
 
-            // 11. Final statistics and merge
+            // ======================================================================
+            // 12. FINAL STATISTICS AND MERGE
+            // ======================================================================
+            
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine, resultsDir.getAbsolutePath());
 
             SnapshotMerger.mergeSnapshotsAndCleanup(resultsDir.getAbsolutePath(), 
-            String.format("merged_snapshots_%s.csv", 
-                LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))));
+                String.format("merged_snapshots_%s.csv", 
+                    LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"))));
 
             SimulationLogger.info("Simulation completed successfully!");
 
@@ -7752,6 +8322,214 @@ public class App {
             saveFinalStatisticsToFile(project, spatialRegistry, simulationEngine, outputDir);
         }
     }
+
+    // ======================================================================
+    // CONFIGURATION LOADING
+    // ======================================================================
+    
+    /**
+     * Load configuration from the specified path.
+     * Supports classpath resources and file system paths.
+     */
+    private static SimulationConfig loadConfig(String configPath) {
+        SimulationConfig loadedConfig = null;
+        
+        // Try loading from classpath first (default behavior)
+        try {
+            String classpathPath = configPath;
+            if (!classpathPath.startsWith("/")) {
+                classpathPath = "/" + classpathPath;
+            }
+            loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+            SimulationLogger.info("Configuration loaded from classpath: %s", classpathPath);
+            return loadedConfig;
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from classpath: %s", e.getMessage());
+        }
+        
+        // Try loading from file system
+        try {
+            File configFile = new File(configPath);
+            if (configFile.exists()) {
+                loadedConfig = ConfigLoader.loadFromFile(configPath);
+                SimulationLogger.info("Configuration loaded from file: %s", configPath);
+                return loadedConfig;
+            }
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from file: %s", e.getMessage());
+        }
+        
+        // Try with "config/" prefix for file system
+        try {
+            String prefixedPath = "config/" + configPath;
+            File configFile = new File(prefixedPath);
+            if (configFile.exists()) {
+                loadedConfig = ConfigLoader.loadFromFile(prefixedPath);
+                SimulationLogger.info("Configuration loaded from file: %s", prefixedPath);
+                return loadedConfig;
+            }
+        } catch (Exception e) {
+            SimulationLogger.fine("Could not load from config/ path: %s", e.getMessage());
+        }
+        
+        // Try with leading slash for classpath (if not already)
+        if (!configPath.startsWith("/")) {
+            try {
+                String classpathPath = "/" + configPath;
+                loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+                SimulationLogger.info("Configuration loaded from classpath (with /): %s", classpathPath);
+                return loadedConfig;
+            } catch (Exception e) {
+                SimulationLogger.fine("Could not load from classpath with /: %s", e.getMessage());
+            }
+        }
+        
+        // Try with "config/" and leading slash for classpath
+        if (!configPath.startsWith("/")) {
+            try {
+                String classpathPath = "/config/" + configPath;
+                loadedConfig = ConfigLoader.loadFromYaml(classpathPath);
+                SimulationLogger.info("Configuration loaded from classpath: %s", classpathPath);
+                return loadedConfig;
+            } catch (Exception e) {
+                SimulationLogger.fine("Could not load from classpath config/: %s", e.getMessage());
+            }
+        }
+        
+        SimulationLogger.severe("Could not load configuration from any location: %s", configPath);
+        return null;
+    }
+    
+    /**
+     * Create a default configuration with hard-coded values.
+     * Used as a fallback when config file cannot be loaded.
+     */
+    private static SimulationConfig createDefaultConfig() {
+        SimulationLogger.info("Creating default configuration...");
+        
+        SimulationConfig defaultConfig = new SimulationConfig();
+        
+        // Time settings
+        defaultConfig.time = new SimulationConfig.SimulationTime();
+        defaultConfig.time.startDateTime = "2020-04-01T00:00:00";
+        defaultConfig.time.totalTicks = 17280;
+        defaultConfig.time.tickMinutes = 15;
+        
+        // File paths
+        defaultConfig.files = new SimulationConfig.FilePaths();
+        defaultConfig.files.studySite = "prepared_data/somali/somali.shp";
+        defaultConfig.files.elevation = "prepared_data/somali/Small_Somali_Elevation_10m.tif";
+        defaultConfig.files.buildings = "prepared_data/somali/Small_Somali_Building_Density_10m.tif";
+        defaultConfig.files.population = "prepared_data/somali/population_2020_1km.tif";
+        defaultConfig.files.climateNetCDF = "prepared_data/somali/climate_t2m_tp_2020.nc";
+        
+        // Grid size
+        defaultConfig.gridCellSizeDegrees = 0.001;
+        
+        // Species parameters (default values from your config)
+        defaultConfig.species = new SimulationConfig.SpeciesParameters();
+        // Egg development
+        defaultConfig.species.egg_dev_rho = 0.005000000000000001;
+        defaultConfig.species.egg_dev_k = 39.20841161317061;
+        defaultConfig.species.egg_dev_Delta = 1.9999999999999998;
+        defaultConfig.species.egg_dev_lambda = -0.854916887158478;
+        // Larva development
+        defaultConfig.species.larva_dev_a = 2.7054689312186438e-05;
+        defaultConfig.species.larva_dev_Tmin = 5.123026541348266;
+        defaultConfig.species.larva_dev_Tmax = 44.999999999835175;
+        defaultConfig.species.larva_dev_m = 1.663077023745059;
+        // Pupa development
+        defaultConfig.species.pupa_dev_rho = 0.005115463305281753;
+        defaultConfig.species.pupa_dev_k = 39.940257466039114;
+        defaultConfig.species.pupa_dev_Delta = 1.9999999999999998;
+        defaultConfig.species.pupa_dev_lambda = -0.9081661833839708;
+        // Mortality
+        defaultConfig.species.egg_mort_b1 = 3.572876;
+        defaultConfig.species.egg_mort_b2 = -0.323474;
+        defaultConfig.species.egg_mort_b3 = 0.004941;
+        defaultConfig.species.larva_mort_b1 = 1.9999999999999998;
+        defaultConfig.species.larva_mort_b2 = -0.7395036647759831;
+        defaultConfig.species.larva_mort_b3 = 0.017491023810106067;
+        defaultConfig.species.pupa_mort_b1 = 5.882576;
+        defaultConfig.species.pupa_mort_b2 = -0.578528;
+        defaultConfig.species.pupa_mort_b3 = 0.009458;
+        // Fecundity
+        defaultConfig.species.fecundity_rmax = 1.6021994175985133;
+        defaultConfig.species.fecundity_Topt = 30.634033187663604;
+        defaultConfig.species.fecundity_c = -0.0052723551194922445;
+        // Adult mortality
+        defaultConfig.species.adult_mort_b1 = -1.4775;
+        defaultConfig.species.adult_mort_b2 = -0.1377;
+        defaultConfig.species.adult_mort_b3 = 0.003908;
+        defaultConfig.species.adult_mortality_per_day = 0.1198;
+        defaultConfig.species.sex_ratio = 0.5;
+        
+        // Project defaults
+        defaultConfig.project = new SimulationConfig.ProjectDefaults();
+        defaultConfig.project.defaultAgentSearchRadius = 0.005;
+        defaultConfig.project.defaultAgentStep = 0.00005;
+        defaultConfig.project.defaultMaxAgentAge = 2880;
+        
+        // Seeding
+        defaultConfig.seeding = new SimulationConfig.SeedingConfig();
+        defaultConfig.seeding.seedAcrossFullStudySite = false;
+        defaultConfig.seeding.tanksToSeed = 5000;
+        defaultConfig.seeding.mosquitoesToSeed = 10000;
+        defaultConfig.seeding.habitatGridSizeX = 100;
+        defaultConfig.seeding.habitatGridSizeY = 100;
+        defaultConfig.seeding.tankBuildingThreshold = 0.0001;
+        defaultConfig.seeding.tankPopulationThreshold = 0.0001;
+        defaultConfig.seeding.mosquitoBuildingThreshold = 0.0001;
+        defaultConfig.seeding.mosquitoPopulationThreshold = 0.0001;
+        
+        // Tokens
+        defaultConfig.tokens = new ArrayList<>();
+        SimulationConfig.TokenMapping tempToken = new SimulationConfig.TokenMapping();
+        tempToken.token = "temperature";
+        tempToken.layer = "t2m";
+        defaultConfig.tokens.add(tempToken);
+        
+        SimulationConfig.TokenMapping precipToken = new SimulationConfig.TokenMapping();
+        precipToken.token = "precipitation";
+        precipToken.layer = "tp";
+        defaultConfig.tokens.add(precipToken);
+        
+        SimulationConfig.TokenMapping popToken = new SimulationConfig.TokenMapping();
+        popToken.token = "population";
+        popToken.layer = "Population";
+        defaultConfig.tokens.add(popToken);
+        
+        SimulationConfig.TokenMapping buildToken = new SimulationConfig.TokenMapping();
+        buildToken.token = "building_density";
+        buildToken.layer = "Buildings";
+        defaultConfig.tokens.add(buildToken);
+        
+        SimulationConfig.TokenMapping elevToken = new SimulationConfig.TokenMapping();
+        elevToken.token = "elevation";
+        elevToken.layer = "Elevation";
+        defaultConfig.tokens.add(elevToken);
+        
+        // Agent layers (simplified)
+        defaultConfig.agentLayers = new ArrayList<>();
+        
+        // Mosquitoes layer
+        SimulationConfig.AgentLayerConfig mosquitoLayer = new SimulationConfig.AgentLayerConfig();
+        mosquitoLayer.name = "Mosquitoes";
+        mosquitoLayer.rules = new ArrayList<>();
+        defaultConfig.agentLayers.add(mosquitoLayer);
+        
+        // WaterTanks layer
+        SimulationConfig.AgentLayerConfig waterLayer = new SimulationConfig.AgentLayerConfig();
+        waterLayer.name = "WaterTanks";
+        waterLayer.rules = new ArrayList<>();
+        defaultConfig.agentLayers.add(waterLayer);
+        
+        return defaultConfig;
+    }
+
+    // ======================================================================
+    // HELPER METHODS (unchanged from your original)
+    // ======================================================================
 
     /**
      * Reads the bounding box from a shapefile or QGIS project.
@@ -7790,13 +8568,62 @@ public class App {
                                             TimeManager timeManager,
                                             Rectangle2D worldBounds,
                                             SimulationConfig config,
-                                            Geometry studyAreaGeometry) {  // NEW: added geometry parameter
+                                            Geometry studyAreaGeometry) {
         SimulationLogger.info("Configuring project from YAML");
         try {
+            LayerFactory layerFactory = new LayerFactory(timeManager);
             // ---- Project defaults from config ----
             project.setDefaultAgentSearchRadius(config.project.defaultAgentSearchRadius);
             project.setDefaultAgentStep(config.project.defaultAgentStep);
             project.setDefaultMaxAgentAge(config.project.defaultMaxAgentAge);
+            
+            // ============================================================
+            // DATA-DRIVEN LAYER LOADING
+            // ============================================================
+
+            if (config.layers != null && !config.layers.isEmpty()) {
+                // NEW: Use explicit layer definitions
+                SimulationLogger.info("Loading layers from configuration...");
+
+                for (SimulationConfig.LayerDefinition layerDef : config.layers) {
+                    try {
+                        if (!layerDef.active) {
+                            SimulationLogger.info("Skipping inactive layer: %s", layerDef.name);
+                            continue;
+                        }
+
+                        Layer layer;
+
+                        // Check if this is a NetCDF with multiple variables
+                        if (layerDef.variables != null && !layerDef.variables.isEmpty()) {
+                            // Load multiple variables from same file
+                            for (String varName : layerDef.variables) {
+                                String subLayerName = layerDef.name + "_" + varName;
+                                layer = layerFactory.createLayer(layerDef.filePath, subLayerName, varName);
+                                project.addLayer(layer);
+                                SimulationLogger.info("  Added layer: %s (%s)", subLayerName, varName);
+                            }
+                            continue;
+                        }
+
+                        // Single layer from file
+                        layer = layerFactory.createLayer(layerDef.filePath, layerDef.name, layerDef.variable);
+                        project.addLayer(layer);
+                        SimulationLogger.info("  Added layer: %s", layerDef.name);
+
+                    } catch (Exception e) {
+                        SimulationLogger.severe("Failed to load layer %s: %s", 
+                            layerDef.name, e.getMessage());
+                        // Continue with other layers
+                    }
+                }
+            } else {
+                // ============================================================
+                // LEGACY: Load from old config structure (for backward compatibility)
+                // ============================================================
+                SimulationLogger.info("Using legacy layer loading...");
+                loadLegacyLayers(project, layerFactory, config, timeManager);
+            }
 
             // ---- Species parameters and lifecycle model ----
             SpeciesParameters params = new SpeciesParameters();
@@ -7852,7 +8679,7 @@ public class App {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }
                 project.addLayer(layer);
-                SimulationLogger.info("Added agent layer '%s' with %d rules%n", layerConfig.name, layerConfig.rules.size());
+                SimulationLogger.info("Added agent layer '%s' with %d rules", layerConfig.name, layerConfig.rules.size());
             }
 
             // ---- Tokens for rule engine (loaded from YAML) ----
@@ -7864,7 +8691,7 @@ public class App {
             }
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
-            SimulationLogger.info("Loaded %d tokens from YAML%n", tokens.size());
+            SimulationLogger.info("Loaded %d tokens from YAML", tokens.size());
 
             // ---- Standardise geographic bounds for all raster layers ----
             double minLon = worldBounds.getMinX();
@@ -7887,7 +8714,7 @@ public class App {
             int totalMosquitoes = project.getAgentLayers().stream()
                     .filter(l -> l.getName().equals("Mosquitoes"))
                     .findFirst().map(l -> l.getAgents().size()).orElse(0);
-            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes%n", totalTanks, totalMosquitoes);
+            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes", totalTanks, totalMosquitoes);
 
         } catch (Exception e) {
             SimulationLogger.severe("Error: " + e.getMessage());
@@ -7899,8 +8726,53 @@ public class App {
     // Helper methods
     // ------------------------------------------------------------------------
 
+    private static void loadLegacyLayers(Project project, LayerFactory layerFactory,
+                                     SimulationConfig config, TimeManager timeManager) {
+        try {
+            // Load static rasters
+            if (config.files.elevation != null) {
+                Layer elev = layerFactory.createLayer(config.files.elevation, "Elevation");
+                project.addLayer(elev);
+            }
+
+            if (config.files.buildings != null) {
+                Layer buildings = layerFactory.createLayer(config.files.buildings, "Buildings");
+                project.addLayer(buildings);
+            }
+
+            if (config.files.population != null) {
+                Layer population = layerFactory.createLayer(config.files.population, "Population");
+                project.addLayer(population);
+            }
+
+            // Load climate data - now supports multiple files
+            if (config.files.climateFiles != null && !config.files.climateFiles.isEmpty()) {
+                SimulationLogger.info("Loading climate from %d NetCDF files", 
+                    config.files.climateFiles.size());
+
+                List<Layer> climateLayers = layerFactory.createLayersFromMultipleNetCDF(
+                    config.files.climateFiles);
+
+                for (Layer layer : climateLayers) {
+                    project.addLayer(layer);
+                    SimulationLogger.info("  Added climate layer: %s", layer.getName());
+                }
+            } else if (config.files.climateNetCDF != null) {
+                // Legacy single file
+                List<Layer> climateLayers = layerFactory.createLayersFromNetCDF(
+                    config.files.climateNetCDF);
+                for (Layer layer : climateLayers) {
+                    project.addLayer(layer);
+                }
+            }
+
+        } catch (Exception e) {
+            SimulationLogger.severe("Error loading legacy layers: %s", e.getMessage());
+        }
+    }
+    
     private static void copySpeciesParams(SpeciesParameters target, SimulationConfig.SpeciesParameters source) {
-    // Egg development
+        // Egg development
         target.eggDev_rho = source.egg_dev_rho;
         target.eggDev_k = source.egg_dev_k;
         target.eggDev_Delta = source.egg_dev_Delta;
@@ -7942,13 +8814,12 @@ public class App {
 
     
     private static void seedInitialPopulation(Project project,
-                                          SimulationConfig.SeedingConfig seeding,
-                                          RasterLayer buildings,
-                                          RasterLayer population,
-                                          SpatialRegistry spatialRegistry,
-                                          Rectangle2D worldBounds,
-                                          Geometry studyAreaGeometry) {
-//        Random rand = new Random();
+                                      SimulationConfig.SeedingConfig seeding,
+                                      RasterLayer buildings,
+                                      RasterLayer population,
+                                      SpatialRegistry spatialRegistry,
+                                      Rectangle2D worldBounds,
+                                      Geometry studyAreaGeometry) {
         Random rand = SeedManager.getRandom();
 
         AgentLayer habitatLayer = project.getAgentLayers().stream()
@@ -7960,9 +8831,58 @@ public class App {
             return;
         }
 
-        // ===== UNIFORM SEEDING (memory‑efficient rejection sampling) =====
-        if (seeding.seedAcrossFullStudySite) {
-            SimulationLogger.info("Seeding uniformly across the whole study area (seedAcrossFullStudySite = true)");
+        // ======================================================================
+        // LOAD OCCURRENCE POINTS FOR MOSQUITO SEEDING
+        // ======================================================================
+        List<OccurrenceLoader.OccurrencePoint> occurrencePoints = new ArrayList<>();
+        boolean useOccurrences = seeding.useOccurrencePoints && 
+                                 seeding.occurrenceFilePath != null && 
+                                 !seeding.occurrenceFilePath.isEmpty();
+
+        if (useOccurrences) {
+            try {
+                SimulationLogger.info("Loading occurrence points from: %s", seeding.occurrenceFilePath);
+                List<OccurrenceLoader.OccurrencePoint> allPoints = 
+                    OccurrenceLoader.loadOccurrences(seeding.occurrenceFilePath);
+
+                // Filter by year range
+                occurrencePoints = OccurrenceLoader.filterByYear(allPoints, 
+                    seeding.occurrenceYearStart, seeding.occurrenceYearEnd);
+
+                // Print summary
+                Map<String, Object> summary = OccurrenceLoader.getSummary(occurrencePoints);
+                SimulationLogger.info("Occurrence summary: %d points in years %d-%d", 
+                    occurrencePoints.size(), seeding.occurrenceYearStart, seeding.occurrenceYearEnd);
+
+                if (summary.containsKey("byYear")) {
+                    @SuppressWarnings("unchecked")
+                    Map<Integer, Integer> byYear = (Map<Integer, Integer>) summary.get("byYear");
+                    for (Map.Entry<Integer, Integer> entry : byYear.entrySet()) {
+                        SimulationLogger.info("  %d: %d points", entry.getKey(), entry.getValue());
+                    }
+                }
+
+                // Check if we have points
+                if (occurrencePoints.isEmpty()) {
+                    SimulationLogger.warning("No occurrence points found in year range. Falling back to uniform seeding.");
+                    useOccurrences = false;
+                }
+
+            } catch (Exception e) {
+                SimulationLogger.severe("Failed to load occurrence points: %s", e.getMessage());
+                SimulationLogger.info("Falling back to uniform seeding.");
+                useOccurrences = false;
+            }
+        }
+
+        // ======================================================================
+        // UNIFORM SEEDING (fallback or when seedAcrossFullStudySite = true)
+        // ======================================================================
+        if (seeding.seedAcrossFullStudySite || !useOccurrences) {
+            boolean isUniform = seeding.seedAcrossFullStudySite;
+            SimulationLogger.info("Seeding %s across the whole study area%s", 
+                isUniform ? "uniformly" : "using weighted habitat selection",
+                isUniform ? " (seedAcrossFullStudySite = true)" : " (no occurrence points loaded)");
 
             // Point generator that returns random points inside the study area (rejection sampling)
             java.util.function.Supplier<double[]> pointGenerator;
@@ -7976,49 +8896,76 @@ public class App {
                     } while (!studyAreaGeometry.contains(geomFactory.createPoint(new Coordinate(x, y))));
                     return new double[]{x, y};
                 };
-                SimulationLogger.info("Using polygon‑constrained uniform points (rejection sampling)");
+                SimulationLogger.info("Using polygon‑constrained points (rejection sampling)");
             } else {
                 // No polygon – just the bounding box
                 pointGenerator = () -> new double[]{
                         worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth(),
                         worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight()
                 };
-                SimulationLogger.info("Using bounding‑box uniform points (no polygon)");
+                SimulationLogger.info("Using bounding‑box points (no polygon)");
             }
 
-            // Seed water tanks
-            SimulationLogger.info("Seeding water tanks uniformly...");
+            // Seed water tanks (always use weighted habitat selection for tanks)
+            SimulationLogger.info("Seeding water tanks (weighted)...");
+            HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
+                    seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
+
             int tanksPlaced = 0;
             for (int i = 0; i < seeding.tanksToSeed; i++) {
-                double[] point = pointGenerator.get();
+                double[] point = habitatCalc.getRandomWeightedPoint();
                 double rx = point[0], ry = point[1];
-                InertAgent tank = new InertAgent(rx, ry);
-                tank.setWaterVolume(30 + rand.nextDouble() * 70);
-                tank.setLarvalCount(rand.nextInt(30) + 10);
-                tank.setEggCount(rand.nextInt(80) + 20);
-                tank.setCapacity(300 + rand.nextDouble() * 200);
-                habitatLayer.addAgent(tank);
-                spatialRegistry.registerAgent(tank);
-                tanksPlaced++;
-                if (tanksPlaced % 100 == 0) {
-                    SimulationLogger.info("  Placed %d/%d water tanks", tanksPlaced, seeding.tanksToSeed);
+                double buildingDensity = buildings.getValueAt(rx, ry);
+                double popDensity = population.getValueAt(rx, ry);
+                if (buildingDensity > seeding.tankBuildingThreshold && popDensity > seeding.tankPopulationThreshold) {
+                    InertAgent tank = new InertAgent(rx, ry);
+                    tank.setWaterVolume(70 + rand.nextDouble() * 30);
+                    tank.setLarvalCount(rand.nextInt(30) + 10);
+                    tank.setEggCount(rand.nextInt(80) + 20);
+                    tank.setCapacity(300 + rand.nextDouble() * 200);
+                    habitatLayer.addAgent(tank);
+                    spatialRegistry.registerAgent(tank);
+                    tanksPlaced++;
+                    if (tanksPlaced % 100 == 0)
+                        SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)",
+                                tanksPlaced, seeding.tanksToSeed, buildingDensity, popDensity);
                 }
             }
             SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
 
-            // Seed mosquitoes
-            SimulationLogger.info("Seeding mosquitoes uniformly...");
+            // Seed mosquitoes (uniform)
+            SimulationLogger.info("Seeding mosquitoes %s...", isUniform ? "uniformly" : "using weighted habitat selection");
             int mosquitoesPlaced = 0;
-            for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
-                double[] point = pointGenerator.get();
+            int targetMosquitoes = seeding.mosquitoesToSeed;
+
+            for (int i = 0; i < targetMosquitoes; i++) {
+                double[] point;
+                if (isUniform) {
+                    point = pointGenerator.get();
+                } else {
+                    point = habitatCalc.getRandomWeightedPoint();
+                }
                 double rx = point[0], ry = point[1];
+
+                // Check thresholds for weighted seeding
+                if (!isUniform) {
+                    double buildingDensity = buildings.getValueAt(rx, ry);
+                    double popDensity = population.getValueAt(rx, ry);
+                    if (!(buildingDensity > seeding.mosquitoBuildingThreshold || 
+                          popDensity > seeding.mosquitoPopulationThreshold)) {
+                        i--; // Retry
+                        continue;
+                    }
+                }
+
                 LivingAgent mosquito = new LivingAgent(rx, ry);
                 double r = rand.nextDouble();
-                LifecycleStage stage = r < 0.6 ? LifecycleStage.ADULT : (r < 0.85 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
+                LifecycleStage stage = r < 0.6 ? LifecycleStage.ADULT : 
+                                       (r < 0.85 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
                 mosquito.setStage(stage);
                 switch (stage) {
                     case ADULT:
-                        mosquito.setAge(0);
+                        mosquito.setAge(rand.nextInt(20 * 24 * 4));
                         mosquito.setGravid(rand.nextDouble() < 0.2);
                         mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5);
                         if (rand.nextDouble() < 0.3) {
@@ -8041,30 +8988,64 @@ public class App {
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
                 if (mosquitoesPlaced % 500 == 0) {
-                    SimulationLogger.info("  Placed %d/%d mosquitoes", mosquitoesPlaced, seeding.mosquitoesToSeed);
+                    SimulationLogger.info("  Placed %d/%d mosquitoes", mosquitoesPlaced, targetMosquitoes);
                 }
             }
             SimulationLogger.info("Seeded %d mosquitoes", mosquitoesPlaced);
-            SimulationLogger.info("\n=== Seeding Summary (Uniform) ===");
+            SimulationLogger.info("\n=== Seeding Summary (%s) ===", isUniform ? "Uniform" : "Weighted Habitat");
             SimulationLogger.info("Water tanks: %d (target: %d)", tanksPlaced, seeding.tanksToSeed);
-            SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, seeding.mosquitoesToSeed);
-            return;  // exit early – uniform seeding done
+            SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, targetMosquitoes);
+            return;
         }
 
-        // ===== ORIGINAL WEIGHTED HABITAT SEEDING (seedAcrossFullStudySite = false) =====
-        SimulationLogger.info("Seeding using weighted habitat selection (seedAcrossFullStudySite = false)");
+        // ======================================================================
+        // OCCURRENCE-BASED SEEDING
+        // ======================================================================
+        SimulationLogger.info("=== OCCURRENCE-BASED SEEDING ===");
+        SimulationLogger.info("Using %d occurrence points for mosquito seeding", occurrencePoints.size());
 
+        // Convert occurrence points to a list of coordinates
+        List<double[]> occurrenceCoords = new ArrayList<>();
+        for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
+            occurrenceCoords.add(new double[]{p.longitude, p.latitude});
+        }
+
+        // Calculate buffer distance in degrees
+        double bufferDegrees = seeding.occurrenceBufferKm / 111.32;
+        SimulationLogger.info("Buffer radius: %.2f km (%.6f degrees)", 
+            seeding.occurrenceBufferKm, bufferDegrees);
+
+        // Seed water tanks (weighted, but biased toward occurrence areas)
+        SimulationLogger.info("Seeding water tanks near occurrence points...");
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
                 seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
 
-        // Seed water tanks (weighted)
-        SimulationLogger.info("Seeding water tanks (weighted)...");
         int tanksPlaced = 0;
-        for (int i = 0; i < seeding.tanksToSeed; i++) {
-            double[] point = habitatCalc.getRandomWeightedPoint();
+        int tankAttempts = 0;
+        int maxTankAttempts = seeding.tanksToSeed * 10;
+
+        while (tanksPlaced < seeding.tanksToSeed && tankAttempts < maxTankAttempts) {
+            tankAttempts++;
+
+            // 80% chance to seed near occurrence, 20% random
+            double[] point;
+            if (rand.nextDouble() < 0.8 && !occurrenceCoords.isEmpty()) {
+                // Pick a random occurrence point and add random offset
+                double[] basePoint = occurrenceCoords.get(rand.nextInt(occurrenceCoords.size()));
+                double lon = basePoint[0] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
+                double lat = basePoint[1] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
+                // Clamp to bounds
+                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
+                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+                point = new double[]{lon, lat};
+            } else {
+                point = habitatCalc.getRandomWeightedPoint();
+            }
+
             double rx = point[0], ry = point[1];
             double buildingDensity = buildings.getValueAt(rx, ry);
             double popDensity = population.getValueAt(rx, ry);
+
             if (buildingDensity > seeding.tankBuildingThreshold && popDensity > seeding.tankPopulationThreshold) {
                 InertAgent tank = new InertAgent(rx, ry);
                 tank.setWaterVolume(70 + rand.nextDouble() * 30);
@@ -8074,32 +9055,64 @@ public class App {
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
-                if (tanksPlaced % 100 == 0)
-                    SimulationLogger.info("  Placed %d/%d water tanks (bldg=%.2f%%, pop=%.2f%%)",
-                            tanksPlaced, seeding.tanksToSeed, buildingDensity, popDensity);
+                if (tanksPlaced % 50 == 0)
+                    SimulationLogger.info("  Placed %d/%d water tanks", tanksPlaced, seeding.tanksToSeed);
             }
         }
-        SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
+        SimulationLogger.info("Seeded %d water tanks (after %d attempts)", tanksPlaced, tankAttempts);
 
-        assert tanksPlaced > 0 : "Sorry no tank seeded";
-        // Seed mosquitoes (weighted)
-        SimulationLogger.info("Seeding mosquitoes (weighted)...");
+        // Seed mosquitoes AT occurrence points
+        SimulationLogger.info("Seeding mosquitoes at occurrence points...");
         int mosquitoesPlaced = 0;
-        for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
-            double[] point = habitatCalc.getRandomWeightedPoint();
-            double rx = point[0], ry = point[1];
-            double buildingDensity = buildings.getValueAt(rx, ry);
-            double popDensity = population.getValueAt(rx, ry);
-            if (buildingDensity > seeding.mosquitoBuildingThreshold || popDensity > seeding.mosquitoPopulationThreshold) {
-                LivingAgent mosquito = new LivingAgent(rx, ry);
+
+        // For each occurrence point, seed multiple mosquitoes
+        int mosquitoesPerPoint = Math.max(1, seeding.mosquitoesToSeed / occurrencePoints.size());
+        SimulationLogger.info("Target mosquitoes per point: %d", mosquitoesPerPoint);
+
+        // Determine which year range to use for initial stage distribution
+        // If we're seeding for 2020-2023, we want mostly adults (already established)
+        boolean isTrainingPeriod = seeding.occurrenceYearEnd < 2020;
+
+        for (OccurrenceLoader.OccurrencePoint occPoint : occurrencePoints) {
+            // Add some spatial jitter to avoid exact overlap
+            double baseLon = occPoint.longitude;
+            double baseLat = occPoint.latitude;
+
+            int mosquitoesForThisPoint = mosquitoesPerPoint;
+            // If we have more points than needed, distribute evenly
+            if (mosquitoesPlaced + mosquitoesForThisPoint > seeding.mosquitoesToSeed) {
+                mosquitoesForThisPoint = seeding.mosquitoesToSeed - mosquitoesPlaced;
+            }
+
+            for (int i = 0; i < mosquitoesForThisPoint; i++) {
+                // Add small random offset (within the buffer)
+                double lon = baseLon + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
+                double lat = baseLat + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
+                // Clamp to bounds
+                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
+                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+
+                LivingAgent mosquito = new LivingAgent(lon, lat);
+
+                // For training period (2016-2019), use mixed stages
+                // For testing period (2020-2023), use mostly adults
                 double r = rand.nextDouble();
-                LifecycleStage stage = r < 0.6 ? LifecycleStage.ADULT : (r < 0.85 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
+                LifecycleStage stage;
+                if (isTrainingPeriod) {
+                    stage = r < 0.5 ? LifecycleStage.ADULT : 
+                            (r < 0.8 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
+                } else {
+                    // For testing, we want mostly adults already established
+                    stage = r < 0.8 ? LifecycleStage.ADULT : 
+                            (r < 0.9 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
+                }
                 mosquito.setStage(stage);
+
                 switch (stage) {
                     case ADULT:
                         mosquito.setAge(rand.nextInt(20 * 24 * 4));
-                        mosquito.setGravid(rand.nextDouble() < 0.2);
-                        mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5);
+                        mosquito.setGravid(rand.nextDouble() < 0.3);
+                        mosquito.setEnergy(0.4 + rand.nextDouble() * 0.5);
                         if (rand.nextDouble() < 0.3) {
                             mosquito.setResting(true);
                             mosquito.setRestingDuration(rand.nextInt(4));
@@ -8113,22 +9126,24 @@ public class App {
                         mosquito.setAge(rand.nextInt(3 * 24 * 4));
                         mosquito.setEnergy(0.5 + rand.nextDouble() * 0.3);
                         break;
+                    default:
+                        break;
                 }
                 mosquitoLayer.addAgent(mosquito);
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
-                if (mosquitoesPlaced % 500 == 0)
-                    SimulationLogger.info("  Placed %d/%d mosquitoes (bldg=%.2f%%, pop=%.2f%%)",
-                            mosquitoesPlaced, seeding.mosquitoesToSeed, buildingDensity, popDensity);
             }
+
+            if (mosquitoesPlaced >= seeding.mosquitoesToSeed) break;
         }
-        SimulationLogger.info("Seeded %d mosquitoes", mosquitoesPlaced);
-        SimulationLogger.info("\n=== Seeding Summary (Weighted) ===");
+
+        SimulationLogger.info("Seeded %d mosquitoes at/near occurrence points", mosquitoesPlaced);
+        SimulationLogger.info("\n=== Seeding Summary (Occurrence-Based) ===");
+        SimulationLogger.info("Occurrence points used: %d", occurrencePoints.size());
+        SimulationLogger.info("Buffer radius: %.2f km", seeding.occurrenceBufferKm);
         SimulationLogger.info("Water tanks: %d (target: %d)", tanksPlaced, seeding.tanksToSeed);
         SimulationLogger.info("Mosquitoes: %d (target: %d)", mosquitoesPlaced, seeding.mosquitoesToSeed);
     }
-    
-    
     
     // ------------------------------------------------------------------------
     // The rest of the helper methods
@@ -8222,14 +9237,14 @@ public class App {
 
                 int totalAgents = (Integer) state.getOrDefault("totalAgents", 0);
                 double avgTickTime = (Double) state.getOrDefault("avgTickTime", 0.0);
-                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms%n",
+                SimulationLogger.info("[Monitor] Tick: %d | Agents: %d | Avg Tick Time: %.2f ms",
                         tick, totalAgents, avgTickTime);
 
                 if (tick % 100 == 0) {
                     SimulationLogger.info("--- Detailed Status ---");
                     for (AgentLayer layer : project.getAgentLayers()) {
                         Map<String, Object> layerStats = layer.getStatistics();
-                        SimulationLogger.info("  %s: %d agents, %d rules evaluated%n",
+                        SimulationLogger.info("  %s: %d agents, %d rules evaluated",
                                 layer.getName(), layerStats.get("agentCount"), layerStats.get("rulesEvaluated"));
                     }
                     SimulationLogger.info("----------------------");
@@ -8456,7 +9471,6 @@ public class App {
         private final double cellSize;
         private final double minX, minY;
         private final int gridSizeX, gridSizeY;
-        // private final Random random = new Random();
         private final Random random = SeedManager.getRandom();
         private final Geometry studyArea;
 

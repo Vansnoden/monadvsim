@@ -170,6 +170,11 @@ agentLayers:
 # ======================================================================
 seeding:
   seedAcrossFullStudySite: {seed_across_full_study_site}
+  useOccurrencePoints: {use_occurrence_points}
+  occurrenceFilePath: "{occurrence_file_path}"
+  occurrenceYearStart: {occurrence_year_start}
+  occurrenceYearEnd: {occurrence_year_end}
+  occurrenceBufferKm: {occurrence_buffer_km}
   tanksToSeed: {tanks_to_seed}
   mosquitoesToSeed: {mosquitoes_to_seed}
   habitatGridSizeX: {habitat_grid_x}
@@ -630,6 +635,46 @@ PARAMETER_RANGES = {
         'max': 0.0005,
         'base': 0.0001,
         'description': 'Population threshold for mosquito seeding',
+        'category': 'seeding'
+    },
+
+    # --- Occurrence-Based Seeding ---
+
+    'use_occurrence_points': {
+        'type': 'choice',
+        'options': [False, True],
+        'base': True,
+        'description': 'Use occurrence points for mosquito seeding',
+        'category': 'seeding'
+    },
+    'occurrence_file_path': {
+        'type': 'string',
+        'base': '/home/void/Documents/codes/monadvsim/prepared_data/ethiopia_occurrence/merged_observations.csv',
+        'description': 'Path to occurrence CSV file',
+        'category': 'seeding'
+    },
+    'occurrence_year_start': {
+        'type': 'int_uniform',
+        'min': 2016,
+        'max': 2019,
+        'base': 2016,
+        'description': 'Earliest year to include from occurrence data',
+        'category': 'seeding'
+    },
+    'occurrence_year_end': {
+        'type': 'int_uniform',
+        'min': 2019,
+        'max': 2026,
+        'base': 2023,
+        'description': 'Latest year to include from occurrence data',
+        'category': 'seeding'
+    },
+    'occurrence_buffer_km': {
+        'type': 'uniform',
+        'min': 1.0,
+        'max': 10.0,
+        'base': 5.0,
+        'description': 'Buffer radius around occurrence points (km)',
         'category': 'seeding'
     },
     
