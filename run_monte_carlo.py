@@ -43,7 +43,7 @@ JAR_PATHS = [
 ]
 
 # ======================================================================
-# BASE YAML CONFIGURATION - MATCHES YOUR EXACT STRUCTURE
+# BASE YAML CONFIGURATION - UPDATED FOR DATA-DRIVEN LAYERS
 # ======================================================================
 
 BASE_YAML_TEMPLATE = """# ======================================================================
@@ -58,10 +58,6 @@ time:
 
 files:
   studySite: "prepared_data/somali/somali.shp"
-  elevation: "prepared_data/somali/Small_Somali_Elevation_10m.tif"
-  buildings: "prepared_data/somali/Small_Somali_Building_Density_10m.tif"
-  population: "prepared_data/somali/population_2020_1km.tif"
-  climateNetCDF: "prepared_data/somali/climate_t2m_tp_2020.nc"
 
 gridCellSizeDegrees: {grid_cell_size}
   
@@ -99,6 +95,35 @@ species:
 
 
 # ======================================================================
+# Data-Driven Layers
+# ======================================================================
+layers:
+  # Static rasters
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+    
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+    
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+  
+  # Climate data - using merged file
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+  
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+
+# ======================================================================
 # Tokens – environmental layers
 # ======================================================================
 tokens:
@@ -119,30 +144,36 @@ tokens:
 agentLayers:
   - name: "Mosquitoes"
     rules:
+      # Emergency transitions
       - condition: "stage == 'LARVA' && age > 960"
         action: "pupate"
         priority: 10
       - condition: "stage == 'PUPA' && age > 384"
         action: "emerge"
         priority: 10
+      # Feeding and resting cycle
       - condition: "stage == 'ADULT' && energy < {feeding_energy_threshold} && !resting"
         action: "feed"
         priority: 8
       - condition: "stage == 'ADULT' && energy < {resting_energy_threshold} && resting"
         action: "rest"
         priority: 6
+      # Gonotrophic cycle
       - condition: "stage == 'ADULT' && energy > {gravid_energy_threshold} && !gravid"
         action: "get_gravid"
         priority: 7
       - condition: "gravid == true && temperature > {egg_laying_temp_min}"
         action: "lay_eggs"
         priority: 6
+      # Temperature extremes
       - condition: "temperature < {temp_min_survival} || temperature > {temp_max_survival}"
         action: "die"
         priority: 9
+      # Seek shelter
       - condition: "(precipitation > {rain_threshold} || temperature < {shelter_temp_threshold}) && building_density > {building_density_threshold} && !resting"
         action: "rest_in_building"
         priority: 5
+      # Default movement
       - condition: "stage == 'ADULT' && !resting"
         action: "move_random"
         priority: 3
@@ -152,15 +183,15 @@ agentLayers:
 
   - name: "WaterTanks"
     rules:
+      - condition: "true"
+        action: "evaporate"
+        priority: 1
       - condition: "waterVolume <= {dry_out_threshold} && waterVolume > 0"
         action: "dry_out"
         priority: 3
       - condition: "temperature < {freeze_temp} && waterVolume > 0"
         action: "freeze"
         priority: 2
-      - condition: "temperature > {evap_temp_threshold} && precipitation < {evap_precip_threshold}"
-        action: "evaporate"
-        priority: 5
       - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
         action: "die"
         priority: 4
@@ -171,7 +202,7 @@ agentLayers:
 seeding:
   seedAcrossFullStudySite: {seed_across_full_study_site}
   useOccurrencePoints: {use_occurrence_points}
-  occurrenceFilePath: "{occurrence_file_path}"
+  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
   occurrenceYearStart: {occurrence_year_start}
   occurrenceYearEnd: {occurrence_year_end}
   occurrenceBufferKm: {occurrence_buffer_km}
@@ -548,22 +579,6 @@ PARAMETER_RANGES = {
         'description': 'Temperature for freezing (K)',
         'category': 'water'
     },
-    'evap_temp_threshold': {
-        'type': 'uniform',
-        'min': 285.0,
-        'max': 291.0,
-        'base': 288.15,
-        'description': 'Temperature threshold for evaporation (K)',
-        'category': 'water'
-    },
-    'evap_precip_threshold': {
-        'type': 'uniform',
-        'min': 0.001,
-        'max': 0.005,
-        'base': 0.002,
-        'description': 'Precipitation threshold for evaporation',
-        'category': 'water'
-    },
     
     # --- Seeding ---
     'seed_across_full_study_site': {
@@ -639,18 +654,11 @@ PARAMETER_RANGES = {
     },
 
     # --- Occurrence-Based Seeding ---
-
     'use_occurrence_points': {
         'type': 'choice',
         'options': [False, True],
         'base': True,
         'description': 'Use occurrence points for mosquito seeding',
-        'category': 'seeding'
-    },
-    'occurrence_file_path': {
-        'type': 'string',
-        'base': '/home/void/Documents/codes/monadvsim/prepared_data/ethiopia_occurrence/merged_observations.csv',
-        'description': 'Path to occurrence CSV file',
         'category': 'seeding'
     },
     'occurrence_year_start': {
@@ -984,11 +992,16 @@ def run_simulation(seed: int, output_dir: str, jar_path: Optional[str] = None,
         monitor_thread.start()
     
     try:
+        # Set environment variable for the simulation
+        env = os.environ.copy()
+        env["SIMULATION_SEED"] = str(seed)
+        
         result = subprocess.run(
             cmd,
             capture_output=True,
             text=True,
-            timeout=timeout
+            timeout=timeout,
+            env=env
         )
         
         elapsed = time.time() - start_time
@@ -1134,8 +1147,16 @@ def run_monte_carlo(n_runs: int, base_seed: Optional[int] = None,
         "hostname": os.uname().nodename if hasattr(os, 'uname') else "unknown",
         "resume": resume,
         "vary_params": vary_params,
-        "n_parameters_varied": len(parameter_ranges)
+        "n_parameters_varied": len(parameter_ranges),
+        "parameter_categories": {}
     }
+    
+    # Add parameter categories to metadata
+    for param_name, param_spec in parameter_ranges.items():
+        cat = param_spec.get('category', 'other')
+        if cat not in metadata["parameter_categories"]:
+            metadata["parameter_categories"][cat] = []
+        metadata["parameter_categories"][cat].append(param_name)
     
     with open(os.path.join(output_dir, "metadata.json"), 'w') as f:
         json.dump(metadata, f, indent=2)

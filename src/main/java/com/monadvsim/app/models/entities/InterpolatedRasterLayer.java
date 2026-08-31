@@ -396,6 +396,7 @@ public class InterpolatedRasterLayer extends Layer {
         dataGrid = revData;
     }
 
+
     private void updateCache(LocalDateTime currentTime) {
         dataLock.readLock().lock();
         try {
@@ -403,20 +404,21 @@ public class InterpolatedRasterLayer extends Layer {
                 SimulationLogger.warning("Time reference is null! Cannot interpolate.");
                 return;
             }
-            
+
             long secondsSinceRef = Duration.between(timeReference, currentTime).getSeconds();
-            
+
             // Find surrounding time indices
             int lowerIdx = -1, upperIdx = -1;
             double alpha = 0.0;
-            
+
             // Check if we're before the first time step
             if (secondsSinceRef <= timeValues[0]) {
                 lowerIdx = 0;
                 upperIdx = 0;
                 alpha = 0.0;
-                if (secondsSinceRef < timeValues[0]) {
-                    SimulationLogger.fine("Requested time %d is before first time step %.2f, clamping", 
+                // FIX: Check if lastCacheTime is null before calling equals
+                if (lastCacheTime != null && !lastCacheTime.equals(currentTime)) {
+                    SimulationLogger.fine("Time %d is before first time step %.2f, using first value", 
                         secondsSinceRef, timeValues[0]);
                 }
             } 
@@ -425,8 +427,9 @@ public class InterpolatedRasterLayer extends Layer {
                 lowerIdx = timeValues.length - 1;
                 upperIdx = timeValues.length - 1;
                 alpha = 0.0;
-                if (secondsSinceRef > timeValues[timeValues.length - 1]) {
-                    SimulationLogger.fine("Requested time %d is after last time step %.2f, clamping", 
+                // FIX: Check if lastCacheTime is null before calling equals
+                if (lastCacheTime != null && !lastCacheTime.equals(currentTime)) {
+                    SimulationLogger.fine("Time %d is after last time step %.2f, using last value", 
                         secondsSinceRef, timeValues[timeValues.length - 1]);
                 }
             } 
@@ -440,9 +443,8 @@ public class InterpolatedRasterLayer extends Layer {
                         break;
                     }
                 }
-                // If still not found (shouldn't happen), fallback to nearest
+                // If still not found, fallback to nearest
                 if (lowerIdx == -1) {
-                    // Find nearest index
                     lowerIdx = 0;
                     double minDiff = Math.abs(secondsSinceRef - timeValues[0]);
                     for (int i = 1; i < timeValues.length; i++) {
@@ -460,14 +462,14 @@ public class InterpolatedRasterLayer extends Layer {
 
             // Interpolate in time
             if (cachedGrid == null) cachedGrid = new double[latSize][lonSize];
-            
+
             // Check if we have valid indices
             if (lowerIdx < 0 || lowerIdx >= timeSize || upperIdx < 0 || upperIdx >= timeSize) {
                 SimulationLogger.warning("Invalid time indices: lower=%d, upper=%d, timeSize=%d", 
                     lowerIdx, upperIdx, timeSize);
                 return;
             }
-            
+
             for (int lat = 0; lat < latSize; lat++) {
                 for (int lon = 0; lon < lonSize; lon++) {
                     if (lowerIdx == upperIdx || alpha == 0.0) {
@@ -489,7 +491,8 @@ public class InterpolatedRasterLayer extends Layer {
             dataLock.readLock().unlock();
         }
     }
-
+    
+    
     private double getCachedValue(double lon, double lat) {
         if (!cacheValid) {
             return Double.NaN;
@@ -502,6 +505,7 @@ public class InterpolatedRasterLayer extends Layer {
         }
         return Double.NaN;
     }
+    
 
     private int findNearestIndex(double[] array, double value) {
         if (array == null || array.length == 0) return -1;

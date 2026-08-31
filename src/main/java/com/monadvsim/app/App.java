@@ -388,13 +388,13 @@ public class App {
     // ======================================================================
     // SIMULATION CONFIGURATION
     // ======================================================================
-
+    
     private static void configureSimulation(Project project,
-                                            SpatialRegistry spatialRegistry,
-                                            TimeManager timeManager,
-                                            Rectangle2D worldBounds,
-                                            SimulationConfig config,
-                                            Geometry studyAreaGeometry) {
+                                        SpatialRegistry spatialRegistry,
+                                        TimeManager timeManager,
+                                        Rectangle2D worldBounds,
+                                        SimulationConfig config,
+                                        Geometry studyAreaGeometry) {
         SimulationLogger.info("Configuring project from YAML");
 
         try {
@@ -441,19 +441,21 @@ public class App {
             }
 
             // ---- Tokens for rule engine ----
+            // IMPORTANT: Tokens should map to actual layer names
             List<String> tokens = new ArrayList<>();
             List<String> layerNames = new ArrayList<>();
             if (config.tokens != null) {
                 for (var tokenMapping : config.tokens) {
                     tokens.add(tokenMapping.token);
+                    // Use the actual layer name from config
                     layerNames.add(tokenMapping.layer);
                 }
             }
             project.setTokens(tokens);
             project.setLayerNames(layerNames);
-            SimulationLogger.info("Loaded %d tokens", tokens.size());
+            SimulationLogger.info("Loaded %d tokens: %s", tokens.size(), tokens);
 
-            // ---- Standardise geographic bounds for raster layers ----
+            // ---- Standardise geographic bounds for ALL raster layers ----
             double minLon = worldBounds.getMinX();
             double maxLon = worldBounds.getMaxX();
             double minLat = worldBounds.getMinY();
@@ -462,6 +464,13 @@ public class App {
             for (Layer layer : project.getLayers()) {
                 if (layer instanceof RasterLayer rl) {
                     rl.setBounds(minLon, maxLon, minLat, maxLat);
+                    SimulationLogger.info("Set bounds for raster layer: %s", layer.getName());
+                } else if (layer instanceof InterpolatedRasterLayer irl) {
+                    // InterpolatedRasterLayer has its own bounds from NetCDF
+                    // Log the bounds for verification
+                    SimulationLogger.info("Climate layer '%s' bounds: lat [%.4f, %.4f], lon [%.4f, %.4f]",
+                        layer.getName(), irl.getMinLat(), irl.getMaxLat(), 
+                        irl.getMinLon(), irl.getMaxLon());
                 }
             }
 
@@ -469,11 +478,27 @@ public class App {
             SimulationLogger.info("Seeding initial agents...");
             RasterLayer buildings = (RasterLayer) project.getLayerByName("Buildings");
             RasterLayer population = (RasterLayer) project.getLayerByName("Population");
-            
+
             if (buildings == null || population == null) {
-                SimulationLogger.warning("Buildings or Population layer not found. Using fallback rasters.");
-                buildings = new MemoryMappedRasterLayer("Buildings", 1, 1, 1);
-                population = new MemoryMappedRasterLayer("Population", 1, 1, 1);
+                SimulationLogger.warning("Buildings or Population layer not found. Available layers: %s", 
+                    project.getLayers().stream().map(Layer::getName).toList());
+                // Try to find them with different names
+                buildings = (RasterLayer) project.getLayerByName("building_density");
+                population = (RasterLayer) project.getLayerByName("Population");
+            }
+
+            // If still null, create fallback
+            if (buildings == null) {
+                SimulationLogger.warning("Creating fallback Buildings layer");
+                buildings = new MemoryMappedRasterLayer("Buildings", 100, 100, 1);
+                buildings.setBounds(minLon, maxLon, minLat, maxLat);
+                project.addLayer(buildings);
+            }
+            if (population == null) {
+                SimulationLogger.warning("Creating fallback Population layer");
+                population = new MemoryMappedRasterLayer("Population", 100, 100, 1);
+                population.setBounds(minLon, maxLon, minLat, maxLat);
+                project.addLayer(population);
             }
 
             seedInitialPopulation(project, config.seeding, buildings, population, 
@@ -494,12 +519,16 @@ public class App {
 
             SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes", totalTanks, totalMosquitoes);
 
+            // Print all layer names for debugging
+            SimulationLogger.info("All layers in project: %s", 
+                project.getLayers().stream().map(Layer::getName).toList());
+
         } catch (Exception e) {
             SimulationLogger.severe("Error configuring simulation: " + e.getMessage());
             e.printStackTrace();
         }
     }
-
+   
     // ============================================================
     // DATA-DRIVEN LAYER LOADING
     // ============================================================

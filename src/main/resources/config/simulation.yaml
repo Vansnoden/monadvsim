@@ -2,34 +2,6 @@ time:
   startDateTime: "2020-04-01T00:00:00"
   totalTicks: 17280        
   tickMinutes: 15
-  
- 
-layers:
-  # Static rasters
-  - name: Elevation
-    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
-    type: raster
-    
-  - name: Buildings
-    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
-    type: raster
-    
-  - name: Population
-    filePath: prepared_data/somali/population_2020_1km.tif
-    type: raster
-  
-  # Climate data - multiple years!
-  - name: Climate_2020_2023
-    filePath: prepared_data/somali/climate_2020.nc
-    type: timeseries
-    variables:
-      - t2m
-      - tp
-  
-  # Vector data
-  - name: StudyArea
-    filePath: prepared_data/somali/somali.shp
-    type: vector
 
 
 files:
@@ -71,14 +43,40 @@ species:
   sex_ratio: 0.5
 
 
+layers:
+  # Static rasters
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+    
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+    
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+  
+  # Climate data - multiple years!
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+  
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+
 # ======================================================================
 # Tokens – environmental layers
 # ======================================================================
 tokens:
   - token: "temperature"
-    layer: "Climate_2020_2023"
+    layer: "t2m"
   - token: "precipitation"
-    layer: "Climate_2020_2023"
+    layer: "tp"
   - token: "population"
     layer: "Population"
   - token: "building_density"
