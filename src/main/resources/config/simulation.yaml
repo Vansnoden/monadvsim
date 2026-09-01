@@ -1,5 +1,5 @@
 time:
-  startDateTime: "2020-04-01T00:00:00"
+  startDateTime: "2020-01-01T00:00:00"
   totalTicks: 17280        
   tickMinutes: 15
 
@@ -57,7 +57,7 @@ layers:
     filePath: prepared_data/somali/population_2020_1km.tif
     type: raster
   
-  # Climate data - multiple years!
+  # Climate data - (multiple years if possible)!
   - name: t2m
     filePath: prepared_data/somali/merged_2020_2023.nc
     type: timeseries
@@ -152,8 +152,8 @@ seeding:
   occurrenceYearStart: 2016      
   occurrenceYearEnd: 2023
   occurrenceBufferKm: 0.05
-  tanksToSeed: 5000
-  mosquitoesToSeed: 10000
+  tanksToSeed: 10
+  mosquitoesToSeed: 100
   habitatGridSizeX: 100
   habitatGridSizeY: 100
   # Low thresholds to include many cells, weighting will select most suitable

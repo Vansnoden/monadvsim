@@ -750,16 +750,17 @@ public class App {
         SimulationLogger.info("Seeded %d mosquitoes", mosquitoesPlaced);
     }
 
+
     private static void seedFromOccurrences(Project project,
-                                            SimulationConfig.SeedingConfig seeding,
-                                            RasterLayer buildings,
-                                            RasterLayer population,
-                                            SpatialRegistry spatialRegistry,
-                                            Rectangle2D worldBounds,
-                                            Geometry studyAreaGeometry,
-                                            AgentLayer habitatLayer,
-                                            AgentLayer mosquitoLayer,
-                                            List<OccurrenceLoader.OccurrencePoint> occurrencePoints) {
+                                        SimulationConfig.SeedingConfig seeding,
+                                        RasterLayer buildings,
+                                        RasterLayer population,
+                                        SpatialRegistry spatialRegistry,
+                                        Rectangle2D worldBounds,
+                                        Geometry studyAreaGeometry,
+                                        AgentLayer habitatLayer,
+                                        AgentLayer mosquitoLayer,
+                                        List<OccurrenceLoader.OccurrencePoint> occurrencePoints) {
         Random rand = SeedManager.getRandom();
         double bufferDegrees = seeding.occurrenceBufferKm / 111.32;
 
@@ -774,14 +775,29 @@ public class App {
 
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
             seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
+        
+        // After loading occurrence points, log the building/population values at each point
+        for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
+            double b = buildings.getValueAt(p.longitude, p.latitude);
+            double pop = population.getValueAt(p.longitude, p.latitude);
+            SimulationLogger.info("Occurrence at (%.6f, %.6f): building=%.6f, pop=%.6f", 
+                p.longitude, p.latitude, b, pop);
+        }
 
-        // Seed water tanks near occurrences
+        // Seed water tanks near occurrences - MUCH MORE AGGRESSIVE
         int tanksPlaced = 0;
-        int maxAttempts = seeding.tanksToSeed * 10;
+        int maxAttempts = seeding.tanksToSeed * 20; // More attempts
+
+        // LOWER thresholds for seeding - use values that exist in the data
+        double tankBuildingThreshold = Math.max(0.00001, seeding.tankBuildingThreshold / 10);
+        double tankPopulationThreshold = Math.max(0.00001, seeding.tankPopulationThreshold / 10);
+
+        SimulationLogger.info("Using tank thresholds: building=%.6f, population=%.6f", 
+            tankBuildingThreshold, tankPopulationThreshold);
 
         for (int attempt = 0; attempt < maxAttempts && tanksPlaced < seeding.tanksToSeed; attempt++) {
             double[] point;
-            if (rand.nextDouble() < 0.8 && !occurrenceCoords.isEmpty()) {
+            if (rand.nextDouble() < 0.7 && !occurrenceCoords.isEmpty()) {
                 double[] base = occurrenceCoords.get(rand.nextInt(occurrenceCoords.size()));
                 double lon = base[0] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
                 double lat = base[1] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
@@ -796,21 +812,65 @@ public class App {
             double buildingDensity = buildings.getValueAt(rx, ry);
             double popDensity = population.getValueAt(rx, ry);
 
-            if (buildingDensity > seeding.tankBuildingThreshold &&
-                popDensity > seeding.tankPopulationThreshold) {
+            // MUCH MORE PERMISSIVE: place tank if building OR population exists
+            // If we can't find suitable spots, place them ANYWAY near occurrences
+            boolean placeTank = false;
+
+            // Try to place in suitable habitat first
+            if (buildingDensity > tankBuildingThreshold && popDensity > tankPopulationThreshold) {
+                placeTank = true;
+            } 
+            // If we've tried many times and still not enough tanks, place anywhere near occurrences
+            else if (attempt > seeding.tanksToSeed * 2) {
+                // Place ANYWHERE near occurrence points
+                placeTank = true;
+            }
+
+            if (placeTank) {
                 InertAgent tank = new InertAgent(rx, ry);
+                // Ensure water volume exists (starts with water)
+                double waterVolume = 50 + rand.nextDouble() * 50;
+                tank.setWaterVolume(waterVolume);
+                tank.setLarvalCount(rand.nextInt(20) + 5);
+                tank.setEggCount(rand.nextInt(50) + 10);
+                tank.setCapacity(100 + rand.nextDouble() * 200);
+                habitatLayer.addAgent(tank);
+                spatialRegistry.registerAgent(tank);
+                tanksPlaced++;
+
+                if (tanksPlaced % 10 == 0 && tanksPlaced < 100) {
+                    SimulationLogger.fine("[TANK] Placed tank %d at (%.6f, %.6f), building=%.6f, pop=%.6f", 
+                        tanksPlaced, rx, ry, buildingDensity, popDensity);
+                }
+            }
+        }
+
+        SimulationLogger.info("Seeded %d water tanks near occurrences", tanksPlaced);
+
+        // If still no tanks, force-place them!
+        if (tanksPlaced == 0 && !occurrenceCoords.isEmpty()) {
+            SimulationLogger.warning("No tanks placed with thresholds, force-placing at occurrence points!");
+            for (int i = 0; i < Math.min(20, occurrenceCoords.size()); i++) {
+                double[] base = occurrenceCoords.get(i % occurrenceCoords.size());
+                // Add some random offset
+                double lon = base[0] + (rand.nextDouble() - 0.5) * 0.01;
+                double lat = base[1] + (rand.nextDouble() - 0.5) * 0.01;
+                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
+                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+
+                InertAgent tank = new InertAgent(lon, lat);
                 tank.setWaterVolume(70 + rand.nextDouble() * 30);
-                tank.setLarvalCount(rand.nextInt(30) + 10);
-                tank.setEggCount(rand.nextInt(80) + 20);
-                tank.setCapacity(300 + rand.nextDouble() * 200);
+                tank.setLarvalCount(rand.nextInt(15) + 5);
+                tank.setEggCount(rand.nextInt(30) + 10);
+                tank.setCapacity(150 + rand.nextDouble() * 150);
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
             }
+            SimulationLogger.info("Force-placed %d tanks", tanksPlaced);
         }
-        SimulationLogger.info("Seeded %d water tanks near occurrences", tanksPlaced);
 
-        // Seed mosquitoes at occurrence points
+        // Seed mosquitoes at occurrence points (same as before)
         int mosquitoesPlaced = 0;
         int perPoint = Math.max(1, seeding.mosquitoesToSeed / occurrencePoints.size());
 
@@ -831,7 +891,7 @@ public class App {
         }
         SimulationLogger.info("Seeded %d mosquitoes at occurrences", mosquitoesPlaced);
     }
-
+    
     private static LivingAgent createMosquito(Random rand, double x, double y) {
         LivingAgent mosquito = new LivingAgent(x, y);
         double r = rand.nextDouble();

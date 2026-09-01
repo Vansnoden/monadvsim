@@ -267,7 +267,7 @@ public class InterpolatedRasterLayer extends Layer {
             SimulationLogger.warning("Empty time units, using default reference: 1970-01-01");
             return;
         }
-        
+
         String[] parts = units.split("since");
         if (parts.length == 2) {
             String dateStr = parts[1].trim();
@@ -275,25 +275,41 @@ public class InterpolatedRasterLayer extends Layer {
                 // Try with time
                 if (dateStr.contains(" ")) {
                     try {
+                        // FIRST: Try strict format
                         timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
                     } catch (DateTimeParseException e) {
-                        timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
+                        // SECOND: Try format without leading zeros (2020-1-1)
+                        try {
+                            timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-M-d HH:mm:ss"));
+                        } catch (DateTimeParseException e2) {
+                            // THIRD: Try without seconds
+                            timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-M-d HH:mm"));
+                        }
                     }
                 } else {
-                    timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    // Date only
+                    try {
+                        timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                    } catch (DateTimeParseException e) {
+                        // Try without leading zeros
+                        timeReference = LocalDateTime.parse(dateStr, DateTimeFormatter.ofPattern("yyyy-M-d"));
+                    }
                 }
                 SimulationLogger.info("Time reference parsed: %s", timeReference);
                 return;
             } catch (Exception e) {
                 SimulationLogger.warning("Could not parse time units: %s - %s", units, e.getMessage());
-                // Try alternative format
+                // Try alternative format with .0 suffix
                 try {
-                    // Some NetCDF files use "hours since 1900-01-01 00:00:00.0"
                     String cleanDate = dateStr.replace(".0", "");
                     if (cleanDate.contains(" ")) {
-                        timeReference = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+                        try {
+                            timeReference = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyy-M-d HH:mm:ss"));
+                        } catch (DateTimeParseException e2) {
+                            timeReference = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyy-M-d HH:mm"));
+                        }
                     } else {
-                        timeReference = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyy-MM-dd"));
+                        timeReference = LocalDateTime.parse(cleanDate, DateTimeFormatter.ofPattern("yyyy-M-d"));
                     }
                     SimulationLogger.info("Time reference parsed (alt): %s", timeReference);
                 } catch (Exception e2) {
@@ -405,93 +421,58 @@ public class InterpolatedRasterLayer extends Layer {
                 return;
             }
 
-            long secondsSinceRef = Duration.between(timeReference, currentTime).getSeconds();
+            // Get the frame index from TimeManager (already has the 41400 second offset applied)
+            int frameIndex = timeManager.getCurrentFrameIndex();
 
-            // Find surrounding time indices
-            int lowerIdx = -1, upperIdx = -1;
-            double alpha = 0.0;
+            // Clamp to valid range
+            int idx = Math.max(0, Math.min(frameIndex, timeSize - 1));
+            int nextIdx = Math.min(idx + 1, timeSize - 1);
 
-            // Check if we're before the first time step
-            if (secondsSinceRef <= timeValues[0]) {
-                lowerIdx = 0;
-                upperIdx = 0;
-                alpha = 0.0;
-                // FIX: Check if lastCacheTime is null before calling equals
-                if (lastCacheTime != null && !lastCacheTime.equals(currentTime)) {
-                    SimulationLogger.fine("Time %d is before first time step %.2f, using first value", 
-                        secondsSinceRef, timeValues[0]);
-                }
-            } 
-            // Check if we're after the last time step
-            else if (secondsSinceRef >= timeValues[timeValues.length - 1]) {
-                lowerIdx = timeValues.length - 1;
-                upperIdx = timeValues.length - 1;
-                alpha = 0.0;
-                // FIX: Check if lastCacheTime is null before calling equals
-                if (lastCacheTime != null && !lastCacheTime.equals(currentTime)) {
-                    SimulationLogger.fine("Time %d is after last time step %.2f, using last value", 
-                        secondsSinceRef, timeValues[timeValues.length - 1]);
-                }
-            } 
-            // Find the surrounding time steps
-            else {
-                for (int i = 0; i < timeValues.length - 1; i++) {
-                    if (secondsSinceRef >= timeValues[i] && secondsSinceRef < timeValues[i + 1]) {
-                        lowerIdx = i;
-                        upperIdx = i + 1;
-                        alpha = (secondsSinceRef - timeValues[i]) / (timeValues[i + 1] - timeValues[i]);
-                        break;
-                    }
-                }
-                // If still not found, fallback to nearest
-                if (lowerIdx == -1) {
-                    lowerIdx = 0;
-                    double minDiff = Math.abs(secondsSinceRef - timeValues[0]);
-                    for (int i = 1; i < timeValues.length; i++) {
-                        double diff = Math.abs(secondsSinceRef - timeValues[i]);
-                        if (diff < minDiff) {
-                            minDiff = diff;
-                            lowerIdx = i;
-                        }
-                    }
-                    upperIdx = lowerIdx;
-                    alpha = 0.0;
-                    SimulationLogger.fine("Using nearest time index %d for time %d", lowerIdx, secondsSinceRef);
-                }
+            // Get interpolation factor (fraction of hour into the current hour)
+            double alpha = timeManager.getInterpolationFactor();
+
+            // Allocate cache grid if needed
+            if (cachedGrid == null) {
+                cachedGrid = new double[latSize][lonSize];
             }
 
-            // Interpolate in time
-            if (cachedGrid == null) cachedGrid = new double[latSize][lonSize];
-
-            // Check if we have valid indices
-            if (lowerIdx < 0 || lowerIdx >= timeSize || upperIdx < 0 || upperIdx >= timeSize) {
-                SimulationLogger.warning("Invalid time indices: lower=%d, upper=%d, timeSize=%d", 
-                    lowerIdx, upperIdx, timeSize);
-                return;
-            }
-
+            // Interpolate between current and next time step
             for (int lat = 0; lat < latSize; lat++) {
                 for (int lon = 0; lon < lonSize; lon++) {
-                    if (lowerIdx == upperIdx || alpha == 0.0) {
-                        cachedGrid[lat][lon] = dataGrid[lowerIdx][lat][lon];
+                    if (idx == nextIdx || alpha == 0.0) {
+                        // No interpolation needed - use single value
+                        cachedGrid[lat][lon] = dataGrid[idx][lat][lon];
                     } else {
-                        double vLow = dataGrid[lowerIdx][lat][lon];
-                        double vHigh = dataGrid[upperIdx][lat][lon];
-                        cachedGrid[lat][lon] = vLow + alpha * (vHigh - vLow);
+                        // Linear interpolation between two time steps
+                        double vLow = dataGrid[idx][lat][lon];
+                        double vHigh = dataGrid[nextIdx][lat][lon];
+                        // Handle NaN values gracefully
+                        if (Double.isNaN(vLow) && !Double.isNaN(vHigh)) {
+                            cachedGrid[lat][lon] = vHigh;
+                        } else if (!Double.isNaN(vLow) && Double.isNaN(vHigh)) {
+                            cachedGrid[lat][lon] = vLow;
+                        } else if (Double.isNaN(vLow) && Double.isNaN(vHigh)) {
+                            cachedGrid[lat][lon] = Double.NaN;
+                        } else {
+                            cachedGrid[lat][lon] = vLow + alpha * (vHigh - vLow);
+                        }
                     }
                 }
             }
+
+            // Update cache state
             lastCacheTime = currentTime;
             cacheValid = true;
             cacheMisses++;
+
         } catch (Exception e) {
             SimulationLogger.severe("Error in updateCache: " + e.getMessage());
             e.printStackTrace();
+            cacheValid = false;
         } finally {
             dataLock.readLock().unlock();
         }
     }
-    
     
     private double getCachedValue(double lon, double lat) {
         if (!cacheValid) {

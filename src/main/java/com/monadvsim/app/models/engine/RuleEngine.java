@@ -38,7 +38,11 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        String cacheKey = condition + "|" + agent.getId();
+        // Create a cache key that includes the condition and a hash of the agent's state
+        // This allows reuse across agents with similar states
+        String stateHash = getAgentStateHash(agent);
+        String cacheKey = condition + "|" + stateHash;
+
         Boolean cached = evaluationCache.get(cacheKey);
         if (cached != null) {
             return cached;
@@ -48,8 +52,6 @@ public class RuleEngine {
         context.enter();
         try {
             Value bindings = context.getBindings("js");
-            // Clear old bindings to avoid accumulation? Not necessary, but ensure fresh values
-            // Actually, we should override each time.
             populateBindings(bindings, agent, project);
 
             Source source = scriptCache.computeIfAbsent(condition, c ->
@@ -61,15 +63,33 @@ public class RuleEngine {
             evaluationCache.put(cacheKey, boolResult);
             return boolResult;
         } catch (Exception e) {
-            // Log the detailed exception for debugging
             SimulationLogger.severe("Rule Evaluation Error: " + condition + " -> " + e.toString());
-            // Provide fallback: return false to avoid crashing the simulation
             return false;
         } finally {
             context.leave();
         }
     }
 
+    private String getAgentStateHash(Agent agent) {
+        if (agent instanceof LivingAgent la) {
+            // Only include attributes that matter for rules
+            StringBuilder sb = new StringBuilder();
+            sb.append(la.getStage()).append("_");
+            sb.append((int)(la.getEnergy() * 10)).append("_"); // Round to 1 decimal
+            sb.append(la.isGravid() ? "1" : "0").append("_");
+            sb.append(la.isResting() ? "1" : "0");
+            // Age in buckets (not exact)
+            int ageBucket = Math.min(la.getAge() / 10, 100);
+            sb.append("_").append(ageBucket);
+            return sb.toString();
+        } else if (agent instanceof InertAgent ia) {
+            // For inert agents, use water volume bucket
+            int waterBucket = (int)(ia.getWaterVolume() / 10);
+            return "inert_" + waterBucket;
+        }
+        return "default";
+    }
+    
     private void populateBindings(Value bindings, Agent agent, Project project) {
         // Reset all common bindings to safe defaults
         // Agent basic properties
@@ -152,6 +172,24 @@ public class RuleEngine {
             case "stop_resting" -> executeStopResting(agent, layer);
             case "die_exhaustion" -> executeDieExhaustion(agent, layer);
             case "rest_in_building" -> executeRestInBuilding(agent, project, layer);
+            case "pupate" -> executePupate(agent, layer);
+            case "emerge" -> executeEmerge(agent, layer);
+        }
+    }
+    
+    private void executeEmerge(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+            la.setStage(LifecycleStage.ADULT);
+            la.setEnergy(0.9);
+            SimulationLogger.info("[ACTION] %s PUPA → ADULT (forced)", la.getId());
+        }
+    }
+    
+    private void executePupate(Agent agent, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
+            la.setStage(LifecycleStage.PUPA);
+            la.setEnergy(0.6);
+            SimulationLogger.info("[ACTION] %s LARVA → PUPA (forced)", la.getId());
         }
     }
 
@@ -327,32 +365,22 @@ public class RuleEngine {
             double temperature = getValueAt(project, "t2m", ia.getX(), ia.getY());
             double precipitation = getValueAt(project, "tp", ia.getX(), ia.getY());
 
-            // Convert temperature to Celsius
             double tempC = temperature - 273.15;
-
-            // More aggressive evaporation (2-5% per tick at 20-30°C)
-            double baseEvapRate = 0.02; // 2% per tick at baseline (was 0.005)
+            double baseEvapRate = 0.02;
             double tempFactor = Math.max(0.2, 1.0 + (tempC - 20.0) * 0.05);
             double evaporationRate = baseEvapRate * tempFactor;
-
-            // More aggressive refill (precipitation in mm)
-            // tp is in meters, convert to mm: * 1000
             double precipMm = precipitation * 1000;
-            double refillRate = Math.min(15.0, precipMm * 0.5); // 0.5mm rain = 0.5% refill
+            double refillRate = Math.min(15.0, precipMm * 0.5);
 
             double oldWater = ia.getWaterVolume();
-            
-            // Apply evaporation and refill
             double newWater = oldWater - evaporationRate + refillRate;
-
-            // Clamp between 0 and 100
             double clampedWater = Math.max(0, Math.min(100, newWater));
             ia.setWaterVolume(clampedWater);
 
-            // Log significant changes (for debugging)
-            if (Math.abs(newWater - ia.getWaterVolume()) > 0.1) {
-                SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% (evap: %.2f%%, refill: %.2f%%) at (%.6f, %.6f)",
-                        ia.getWaterVolume(), clampedWater, evaporationRate, refillRate, ia.getX(), ia.getY());
+            // Only log if change > 5% (was 0.1%)
+            if (Math.abs(clampedWater - oldWater) > 5.0) {
+                SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% at (%.6f, %.6f)",
+                        oldWater, clampedWater, ia.getX(), ia.getY());
             }
         }
     }

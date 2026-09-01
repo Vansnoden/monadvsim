@@ -760,13 +760,12 @@ public class SimulationEngine implements Runnable {
             .mapToInt(l -> l.getAgents().size())
             .sum();
 
-        // Base timeout + additional time per 1000 agents
-        long baseTimeout = 5000; // 5 seconds base
-        long perAgentTimeout = 10; // 10ms per 1000 agents
+        // Base timeout + additional time per agent
+        long baseTimeout = 15000; // 15 seconds (was 5000)
+        long perAgentTimeout = 50; // 50ms per agent (was 10)
 
-        return baseTimeout + (totalAgents / 1000) * perAgentTimeout;
+        return baseTimeout + (totalAgents / 100) * perAgentTimeout;
     }
-
     
     
     private void printFinalStatistics() {

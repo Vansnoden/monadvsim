@@ -130,7 +130,6 @@ public class AgentLayer extends Layer {
             deathsThisTick.set(0);
             rulesEvaluated.set(0);
 
-            // Ensure we have the lifecycle model from the project
             if (lifecycleModel == null) {
                 lifecycleModel = project.getLifecycleModel();
             }
@@ -143,7 +142,9 @@ public class AgentLayer extends Layer {
             if (lifecycleManager != null) {
                 lifecycleManager.processLifecycleEvents();
             }
-            
+
+            // Clear cache AFTER all agents in this tick are processed
+            // This ensures cache hits within the same tick
             ruleEngine.clearCache();
 
         } catch (Exception e) {
@@ -230,6 +231,7 @@ public class AgentLayer extends Layer {
                 // 3. LIVING AGENT: Lifecycle updates (age, resting, development, etc.)
                 //    These should only run for LivingAgent
                 // --------------------------------------------------------------------
+                
                 if (agent instanceof LivingAgent la) {
                     // Update resting state
                     if (la.isResting()) {
@@ -237,6 +239,7 @@ public class AgentLayer extends Layer {
                         if (la.getRestingDuration() > la.getMaxRestingDuration()) {
                             la.setResting(false);
                         }
+                        return;
                     } else {
                         la.incrementTimeWithoutRest();
                         if (la.getTimeWithoutRest() > 96) {
@@ -395,13 +398,18 @@ public class AgentLayer extends Layer {
     private boolean isTerminalAction(String action) {
         return action.equalsIgnoreCase("die") || action.equalsIgnoreCase("lay_eggs");
     }
-
+    
     private void logUpdatePerformance(long startTime) {
         long duration = System.nanoTime() - startTime;
         double durationMs = duration / 1_000_000.0;
-        SimulationLogger.info("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d%n",
-            getName(), durationMs, agentContainer.size(),
-            birthsThisTick.get(), deathsThisTick.get(), rulesEvaluated.get());
+        // Only log every 10 ticks or if > 500ms
+        if (durationMs > 500 || (getStatistics().get("agentCount") != null && 
+            (Integer)getStatistics().get("agentCount") > 0 && 
+            deathsThisTick.get() > 0)) {
+            SimulationLogger.info("[%s] Update: %.2f ms | Agents: %d | Births: %d | Deaths: %d | Rules: %d",
+                getName(), durationMs, agentContainer.size(),
+                birthsThisTick.get(), deathsThisTick.get(), rulesEvaluated.get());
+        }
     }
 
     public Map<String, Object> getStatistics() {

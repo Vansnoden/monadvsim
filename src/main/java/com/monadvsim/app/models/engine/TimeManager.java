@@ -48,11 +48,11 @@ public class TimeManager {
         return currentDateTime.isBefore(endDateTime);
     }
 
-    public int getCurrentFrameIndex() {
-        /*Get current frame index*/
-        Duration elapsed = Duration.between(startDateTime, currentDateTime);
-        return (int) (elapsed.toHours()); // Simple mapping for hourly data
-    }
+//    public int getCurrentFrameIndex() {
+//        /*Get current frame index*/
+//        Duration elapsed = Duration.between(startDateTime, currentDateTime);
+//        return (int) (elapsed.toHours()); // Simple mapping for hourly data
+//    }
 
     public double getInterpolationFactor() {
         long minutesIntoHour = currentDateTime.getMinute();
@@ -74,6 +74,16 @@ public class TimeManager {
     
     public long getTickMinutes() {
         return tickDuration.toMinutes();
+    }
+    
+    public int getCurrentFrameIndex() {
+        // Offset the simulation time by 11.5 hours (41400 seconds)
+        // This aligns with the NetCDF data start
+        Duration elapsed = Duration.between(startDateTime, currentDateTime);
+        long seconds = elapsed.getSeconds();
+        // Add offset to match climate data
+        long offsetSeconds = 41400; // 11.5 hours
+        return (int) ((seconds + offsetSeconds) / 3600);
     }
     
 }
