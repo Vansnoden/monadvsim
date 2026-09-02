@@ -12,7 +12,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * High-performance Concurrent Spatial Indexing System.
- * Fine-grained concurrency without coarse write-locks during agent updates.
  */
 public class SpatialRegistry {
 
@@ -22,10 +21,8 @@ public class SpatialRegistry {
     private final int gridWidth;
     private final int gridHeight;
 
-    // Agent position tracking
     private final Map<String, GridCell> agentPositions = new ConcurrentHashMap<>();
 
-    // Statistics
     private final AtomicInteger totalInserts = new AtomicInteger(0);
     private final AtomicInteger totalRemoves = new AtomicInteger(0);
     private final AtomicInteger totalUpdates = new AtomicInteger(0);
@@ -146,7 +143,7 @@ public class SpatialRegistry {
     }
 
     public void applyPendingChanges() {
-        // Kept for interface backward compatibility; write operations are now real-time thread-safe
+        // Safe lock-free updates implemented directly
     }
 
     public void bulkUpdate(List<Agent> allAgents) {
@@ -188,7 +185,7 @@ public class SpatialRegistry {
             maxAgents = Math.max(maxAgents, size);
         }
         stats.put("maxAgentsPerCell", maxAgents);
-        stats.put("avgAgentsPerCell", total / (double) (gridWidth * gridHeight));
+        stats.put("avgAgentsPerCell", gridWidth * gridHeight == 0 ? 0 : total / (double) (gridWidth * gridHeight));
         return stats;
     }
 

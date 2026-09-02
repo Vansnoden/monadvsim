@@ -1,50 +1,89 @@
+# ================================================================
+# SIMULATION CONFIGURATION - REVISED FOR STABLE POPULATION DYNAMICS
+# ================================================================
+
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 17280        
+  totalTicks: 3000        
   tickMinutes: 15
-
 
 files:
   studySite: "prepared_data/somali/somali.shp"
 
-
 gridCellSizeDegrees: 0.001
-  
 
+# ================================================================
+# SPECIES PARAMETERS - REVISED FOR REALISTIC DEVELOPMENT
+# ================================================================
 species:
+  # ==============================================================
+  # EGG DEVELOPMENT (exponential)
+  # ==============================================================
   egg_dev_rho: 0.005000000000000001
   egg_dev_k: 39.20841161317061
   egg_dev_Delta: 1.9999999999999998
   egg_dev_lambda: -0.854916887158478
-  larva_dev_a: 2.7054689312186438e-05
+
+  # ==============================================================
+  # LARVA DEVELOPMENT (Brière) - SIGNIFICANTLY INCREASED
+  # ==============================================================
+  larva_dev_a: 1.0e-4                    # WAS: 2.7e-5 (3.7x faster)
   larva_dev_Tmin: 5.123026541348266
   larva_dev_Tmax: 44.999999999835175
   larva_dev_m: 1.663077023745059
-  pupa_dev_rho: 0.005115463305281753
+
+  # ==============================================================
+  # PUPA DEVELOPMENT (exponential) - INCREASED
+  # ==============================================================
+  pupa_dev_rho: 0.015                    # WAS: 0.0051 (3x faster)
   pupa_dev_k: 39.940257466039114
   pupa_dev_Delta: 1.9999999999999998
   pupa_dev_lambda: -0.9081661833839708
-  egg_mort_b1: 3.572876
-  egg_mort_b2: -0.323474
-  egg_mort_b3: 0.004941
-  larva_mort_b1: 1.9999999999999998
-  larva_mort_b2: -0.7395036647759831
-  larva_mort_b3: 0.017491023810106067
-  pupa_mort_b1: 5.882576
-  pupa_mort_b2: -0.578528
-  pupa_mort_b3: 0.009458
-  fecundity_rmax: 1.6021994175985133
+
+  # ==============================================================
+  # MORTALITY RATES - REDUCED FOR BETTER SURVIVAL
+  # ==============================================================
+  egg_mort_b1: 2.0                       # WAS: 3.57 (lower mortality)
+  egg_mort_b2: -0.20                     # WAS: -0.323
+  egg_mort_b3: 0.0035                    # WAS: 0.00494
+
+  larva_mort_b1: 1.5                     # WAS: 2.0 (lower mortality)
+  larva_mort_b2: -0.60                   # WAS: -0.739
+  larva_mort_b3: 0.014                   # WAS: 0.01749
+
+  pupa_mort_b1: 4.5                      # WAS: 5.88 (lower mortality)
+  pupa_mort_b2: -0.45                    # WAS: -0.578
+  pupa_mort_b3: 0.0075                   # WAS: 0.009458
+
+  # ==============================================================
+  # FECUNDITY - INCREASED EGG PRODUCTION
+  # ==============================================================
+  fecundity_rmax: 2.8                    # WAS: 1.602 (more eggs)
   fecundity_Topt: 30.634033187663604
   fecundity_c: -0.0052723551194922445
-  adult_mort_b1: -1.4775
-  adult_mort_b2: -0.1377
-  adult_mort_b3: 0.003908
-  adult_mortality_per_day: 0.1198
+
+  # ==============================================================
+  # ADULT MORTALITY - DRAMATICALLY REDUCED
+  # ==============================================================
+  adult_mort_b1: -3.5                    # WAS: -1.4775 (much lower)
+  adult_mort_b2: -0.10                   # WAS: -0.1377
+  adult_mort_b3: 0.0030                  # WAS: 0.003908
+  adult_mortality_per_day: 0.04          # WAS: 0.1198 (25 days lifespan)
+  
+  # ==============================================================
+  # SEX RATIO
+  # ==============================================================
   sex_ratio: 0.5
 
+  # ==============================================================
+  # HOST CARRYING CAPACITY
+  # ==============================================================
+  host_carrying_capacity_base: 5.0       # WAS: 1.0 (more egg capacity)
 
+# ================================================================
+# LAYER DEFINITIONS
+# ================================================================
 layers:
-  # Static rasters
   - name: Elevation
     filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
     type: raster
@@ -57,7 +96,6 @@ layers:
     filePath: prepared_data/somali/population_2020_1km.tif
     type: raster
   
-  # Climate data - (multiple years if possible)!
   - name: t2m
     filePath: prepared_data/somali/merged_2020_2023.nc
     type: timeseries
@@ -68,10 +106,9 @@ layers:
     type: timeseries
     variable: tp
 
-
-# ======================================================================
-# Tokens – environmental layers
-# ======================================================================
+# ================================================================
+# TOKENS FOR RULE ENGINE
+# ================================================================
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -84,52 +121,82 @@ tokens:
   - token: "elevation"
     layer: "Elevation"
 
-# ======================================================================
-# Agent rules – refined with physiological realism
-# ======================================================================
+# ================================================================
+# AGENT LAYERS WITH REVISED RULES
+# ================================================================
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      # Emergency transitions (if development extremely delayed)
-      - condition: "stage == 'LARVA' && age > 960"
+      # ==============================================================
+      # DEVELOPMENT TRANSITIONS (Emergency fallbacks only)
+      # ==============================================================
+      
+      # Larva → Pupa: Emergency if automatic development fails
+      - condition: "stage == 'LARVA' && age > 384 && energy > 0.5"
         action: "pupate"
-        priority: 10
+        priority: 5
+        
+      # Pupa → Adult: Emergency if automatic development fails
       - condition: "stage == 'PUPA' && age > 384"
         action: "emerge"
-        priority: 10
-      # Feeding and resting cycle
-      - condition: "stage == 'ADULT' && energy < 0.6 && !resting"
-        action: "feed"
-        priority: 8
-      - condition: "stage == 'ADULT' && energy < 0.9 && resting"
-        action: "rest"
-        priority: 6
-      # Gonotrophic cycle – only when energy sufficient
-      - condition: "stage == 'ADULT' && energy > 0.7 && !gravid"
-        action: "get_gravid"
-        priority: 7
-      - condition: "gravid == true && temperature > 288.15"
-        action: "lay_eggs"
-        priority: 6
-      # Temperature extremes
-      - condition: "temperature < 283.15 || temperature > 313.15"
-        action: "die"
-        priority: 9
-      # Seek shelter if heavy rain or low temperature
-      - condition: "(precipitation > 0.008 || temperature < 287.15) && building_density > 0.1 && !resting"
-        action: "rest_in_building"
         priority: 5
-      # Default movement
+      
+      # ==============================================================
+      # FEEDING - More aggressive
+      # ==============================================================
+      - condition: "stage == 'ADULT' && energy < 0.5 && !resting"
+        action: "feed"
+        priority: 9
+        
+      - condition: "stage == 'ADULT' && energy < 0.7 && resting"
+        action: "rest"
+        priority: 7
+      
+      # ==============================================================
+      # REPRODUCTION - Much more aggressive
+      # ==============================================================
+      
+      # Get gravid as soon as energy is sufficient
+      - condition: "stage == 'ADULT' && energy > 0.5 && !gravid"
+        action: "get_gravid"
+        priority: 8
+      
+      # Lay eggs ASAP when gravid (lower temperature threshold)
+      - condition: "gravid == true && temperature > 278.15"
+        action: "lay_eggs"
+        priority: 7
+      
+      # ==============================================================
+      # TEMPERATURE EXTREMES
+      # ==============================================================
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
+      
+      # ==============================================================
+      # SHELTER SEEKING
+      # ==============================================================
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
+        action: "rest_in_building"
+        priority: 6
+      
+      # ==============================================================
+      # MOVEMENT
+      # ==============================================================
       - condition: "stage == 'ADULT' && !resting"
         action: "move_random"
         priority: 3
+      
+      # ==============================================================
+      # DEFAULT: Rest to avoid exhaustion
+      # ==============================================================
       - condition: "true"
         action: "rest"
         priority: 2
 
   - name: "WaterTanks"
     rules:
-      - condition: "true"  # Always execute
+      - condition: "true"
         action: "evaporate"
         priority: 1
       - condition: "waterVolume <= 5 && waterVolume > 0"
@@ -142,9 +209,9 @@ agentLayers:
         action: "die"
         priority: 4
 
-# ======================================================================
-# Seeding – habitat-weighted (critical for spatial validity)
-# ======================================================================
+# ================================================================
+# SEEDING CONFIGURATION
+# ================================================================
 seeding:
   seedAcrossFullStudySite: false
   useOccurrencePoints: true
@@ -152,20 +219,24 @@ seeding:
   occurrenceYearStart: 2016      
   occurrenceYearEnd: 2023
   occurrenceBufferKm: 0.05
-  tanksToSeed: 10
-  mosquitoesToSeed: 100
+  tanksToSeed: 1000                     # WAS: 500 (more breeding sites)
+  mosquitoesToSeed: 2000                # WAS: 1000 (more initial adults)
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  # Low thresholds to include many cells, weighting will select most suitable
-  tankBuildingThreshold: 0.0001
-  tankPopulationThreshold: 0.0001
+  tankBuildingThreshold: 0.000001       # WAS: 0.00001 (even more permissive)
+  tankPopulationThreshold: 0.000001     # WAS: 0.00001 (even more permissive)
   mosquitoBuildingThreshold: 0.0001
   mosquitoPopulationThreshold: 0.0001
 
-# ======================================================================
-# Project defaults
-# ======================================================================
+# ================================================================
+# PROJECT DEFAULTS
+# ================================================================
 project:
-  defaultAgentSearchRadius: 0.005    # ~550 m
-  defaultAgentStep: 0.00005           # ~5.5 m per tick
-  defaultMaxAgentAge: 2880            # 30 days
+  defaultAgentSearchRadius: 0.005
+  defaultAgentStep: 0.00005
+  defaultMaxAgentAge: 2880
+  # Stage-specific max age multipliers
+  maxAgeMultiplierEgg: 0.05      # 5% = 144 ticks (36 hours)
+  maxAgeMultiplierLarva: 0.45    # 45% = 1296 ticks (13.5 days) 
+  maxAgeMultiplierPupa: 0.15     # 15% = 432 ticks (4.5 days)
+  maxAgeMultiplierAdult: 0.35    # 35% = 1008 ticks (10.5 days)

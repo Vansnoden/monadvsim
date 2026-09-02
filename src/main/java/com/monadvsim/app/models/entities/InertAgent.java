@@ -27,6 +27,8 @@ public class InertAgent extends Agent {
     private final AtomicInteger larvalCount = new AtomicInteger(0);
     private final AtomicReference<Double> capacity = new AtomicReference<>(0.0);
     private final AtomicInteger eggCount = new AtomicInteger(0);
+    // Add egg development progress tracking
+    private final AtomicReference<Double> eggDevelopmentProgress = new AtomicReference<>(0.0);
 
     // For thread-safe batch operations (kept for potential future use)
     private final Object batchLock = new Object();
@@ -171,14 +173,49 @@ public class InertAgent extends Agent {
 //        return eggsHatched;
 //    }
 
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int current = eggCount.get();
+//        if (current == 0) return 0;
+//        int hatched = model.tryHatchEggs(current, temperature);
+//        if (hatched > 0) {
+//            eggCount.addAndGet(-hatched);
+//            larvalCount.addAndGet(hatched);
+//            updateCapacityFromVolume();
+//        }
+//        return hatched;
+//    }
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
         if (current == 0) return 0;
-        int hatched = model.tryHatchEggs(current, temperature);
+        
+        // Accumulate egg development progress
+        double de = model.eggDevelopmentRate(temperature);
+        double newProgress = eggDevelopmentProgress.get() + de * 0.0104; // dtDays
+        eggDevelopmentProgress.set(newProgress);
+        
+        // Only hatch when development is complete
+        if (newProgress < 1.0) {
+            return 0;
+        }
+        
+        // Reset progress
+        eggDevelopmentProgress.set(0.0);
+        
+        // Check capacity
+        double cap = capacity.get();
+        int currentLarvae = larvalCount.get();
+        if (currentLarvae >= cap) {
+            return 0;
+        }
+        
+        int maxHatch = (int)(cap - currentLarvae);
+        // Hatch all eggs that are ready
+        int hatched = Math.min(current, maxHatch);
+        
         if (hatched > 0) {
             eggCount.addAndGet(-hatched);
             larvalCount.addAndGet(hatched);
-            updateCapacityFromVolume();
         }
         return hatched;
     }

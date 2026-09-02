@@ -432,6 +432,8 @@ public class App {
                 AgentLayer layer = new AgentLayer(layerConfig.name, ruleEngine, lifecycleManager);
                 layer.setLifecycleManager(lifecycleManager);
                 layer.setLifecycleModel(lifecycleModel);
+                layer.setTimeManager(timeManager);
+                layer.setProject(project);
                 for (var rule : layerConfig.rules) {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }

@@ -1,6 +1,6 @@
 package com.monadvsim.app.models.engine;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.utils.SeedManager;
 import org.graalvm.polyglot.Context;
@@ -12,7 +12,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 
 public class RuleEngine {
 
@@ -21,7 +20,6 @@ public class RuleEngine {
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
-            // Use a builder with explicit permissions and low resource limits
             return Context.newBuilder("js")
                     .allowAllAccess(true)
                     .allowHostAccess(HostAccess.ALL)
@@ -38,15 +36,11 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        // Create a cache key that includes the condition and a hash of the agent's state
-        // This allows reuse across agents with similar states
         String stateHash = getAgentStateHash(agent);
         String cacheKey = condition + "|" + stateHash;
 
         Boolean cached = evaluationCache.get(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
+        if (cached != null) return cached;
 
         Context context = threadLocalContext.get();
         context.enter();
@@ -72,18 +66,15 @@ public class RuleEngine {
 
     private String getAgentStateHash(Agent agent) {
         if (agent instanceof LivingAgent la) {
-            // Only include attributes that matter for rules
             StringBuilder sb = new StringBuilder();
             sb.append(la.getStage()).append("_");
-            sb.append((int)(la.getEnergy() * 10)).append("_"); // Round to 1 decimal
+            sb.append((int)(la.getEnergy() * 10)).append("_");
             sb.append(la.isGravid() ? "1" : "0").append("_");
             sb.append(la.isResting() ? "1" : "0");
-            // Age in buckets (not exact)
             int ageBucket = Math.min(la.getAge() / 10, 100);
             sb.append("_").append(ageBucket);
             return sb.toString();
         } else if (agent instanceof InertAgent ia) {
-            // For inert agents, use water volume bucket
             int waterBucket = (int)(ia.getWaterVolume() / 10);
             return "inert_" + waterBucket;
         }
@@ -91,8 +82,6 @@ public class RuleEngine {
     }
     
     private void populateBindings(Value bindings, Agent agent, Project project) {
-        // Reset all common bindings to safe defaults
-        // Agent basic properties
         bindings.putMember("agent", agent);
         
         if (agent instanceof LivingAgent la) {
@@ -110,7 +99,6 @@ public class RuleEngine {
             bindings.putMember("larvalCount", ia.getLarvalCount());
             bindings.putMember("capacity", ia.getCapacity());
         } else {
-            // Fallback for any agent type
             bindings.putMember("stage", "UNKNOWN");
             bindings.putMember("age", 0);
             bindings.putMember("energy", 0.0);
@@ -121,8 +109,6 @@ public class RuleEngine {
             bindings.putMember("y", agent != null ? agent.getY() : 0);
         }
 
-        // Environmental variables - always define with default 0.0 to avoid undefined
-        // First, get all layer names and tokens safely
         List<String> layerNames = project.getLayerNames();
         List<String> tokens = project.getTokens();
         if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
@@ -130,33 +116,18 @@ public class RuleEngine {
                 String token = tokens.get(i);
                 double x = agent != null ? agent.getX() : 0;
                 double y = agent != null ? agent.getY() : 0;
-                double value = getValueAt(project, layerNames.get(i), x, y);
-                bindings.putMember(token, value);
+                bindings.putMember(token, getValueAt(project, layerNames.get(i), x, y));
             }
-        } else {
-            SimulationLogger.warning("Layer names/tokens missing or mismatched; using defaults.");
         }
-        
-        // Also bind raw layer names for compatibility? Not needed.
-        // Ensure common tokens always exist (fallback)
+
         if (!bindings.hasMember("temperature")) {
             bindings.putMember("temperature", getValueAt(project, "t2m", agent.getX(), agent.getY()));
         }
         if (!bindings.hasMember("precipitation")) {
             bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
         }
-        if (!bindings.hasMember("population")) {
-            bindings.putMember("population", getValueAt(project, "Population", agent.getX(), agent.getY()));
-        }
-        if (!bindings.hasMember("building_density")) {
-            bindings.putMember("building_density", getValueAt(project, "Buildings", agent.getX(), agent.getY()));
-        }
-        if (!bindings.hasMember("elevation")) {
-            bindings.putMember("elevation", getValueAt(project, "Elevation", agent.getX(), agent.getY()));
-        }
     }
 
-    // ---------- Actions (unchanged, but ensure no null pointer) ----------
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
         switch (action.toLowerCase()) {
             case "die" -> executeDie(agent, layer);
@@ -172,24 +143,32 @@ public class RuleEngine {
             case "stop_resting" -> executeStopResting(agent, layer);
             case "die_exhaustion" -> executeDieExhaustion(agent, layer);
             case "rest_in_building" -> executeRestInBuilding(agent, project, layer);
-            case "pupate" -> executePupate(agent, layer);
-            case "emerge" -> executeEmerge(agent, layer);
+            case "pupate" -> executePupate(agent, project, layer);
+            case "emerge" -> executeEmerge(agent, project, layer);
         }
     }
     
-    private void executeEmerge(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
-            la.setStage(LifecycleStage.ADULT);
-            la.setEnergy(0.9);
-            SimulationLogger.info("[ACTION] %s PUPA → ADULT (forced)", la.getId());
-        }
-    }
-    
-    private void executePupate(Agent agent, AgentLayer layer) {
+    private void executePupate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
-            la.setStage(LifecycleStage.PUPA);
-            la.setEnergy(0.6);
-            SimulationLogger.info("[ACTION] %s LARVA → PUPA (forced)", la.getId());
+            if (project != null) {
+                LifecycleModel model = project.getLifecycleModel();
+                if (model != null) {
+                    double tempKelvin = getValueAt(project, "t2m", agent.getX(), agent.getY());
+                    model.tryAdvanceFromLarva(la, tempKelvin);
+                }
+            }
+        }
+    }
+
+    private void executeEmerge(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+            if (project != null) {
+                LifecycleModel model = project.getLifecycleModel();
+                if (model != null) {
+                    double tempKelvin = getValueAt(project, "t2m", agent.getX(), agent.getY());
+                    model.tryAdvanceFromPupa(la, tempKelvin);
+                }
+            }
         }
     }
 
@@ -202,9 +181,7 @@ public class RuleEngine {
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la) {
-            la.setResting(false);
-        }
+        if (agent instanceof LivingAgent la) la.setResting(false);
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
@@ -262,14 +239,8 @@ public class RuleEngine {
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
-            if (populationLayer != null) {
-                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-                if (popDensity > 0.01) {
-                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
-                }
-            } else {
-                la.setEnergy(Math.min(1.0, la.getEnergy() + 0.1));
-            }
+            double popDensity = populationLayer != null ? populationLayer.getValueAt(agent.getX(), agent.getY()) : 0.0;
+            la.setEnergy(Math.min(1.0, la.getEnergy() + (popDensity > 0.01 ? 0.2 : 0.1)));
         }
     }
 
@@ -277,8 +248,7 @@ public class RuleEngine {
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
             Random rng = SeedManager.getRandom();
-            la.move((rng.nextDouble() - 0.5) * step,
-                    (rng.nextDouble() - 0.5) * step);
+            la.move((rng.nextDouble() - 0.5) * step, (rng.nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
         }
     }
@@ -302,12 +272,8 @@ public class RuleEngine {
     }
 
     private void executeDie(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la) {
-            la.setAlive(false);
-            layer.killAgentImmediately(agent.getId());
-        } else if (agent instanceof InertAgent) {
-            layer.killAgentImmediately(agent.getId());
-        }
+        if (agent instanceof LivingAgent la) la.setAlive(false);
+        layer.killAgentImmediately(agent.getId());
     }
 
     private void executeDryOut(Agent agent, AgentLayer layer) {
@@ -329,24 +295,20 @@ public class RuleEngine {
     }
 
     private void executeGetGravid(Agent agent) {
-        if (agent instanceof LivingAgent la) {
-            la.setGravid(true);
-        }
+        if (agent instanceof LivingAgent la) la.setGravid(true);
     }
 
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
-        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) {
-            return;
-        }
+        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
         double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
         double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
-        if (livestock <= 0) {
-            livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
-        }
+        if (livestock <= 0) livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
+        
         LifecycleModel model = project.getLifecycleModel();
         if (model == null) return;
         int eggsToLay = model.eggsToLay(temperature, livestock);
         if (eggsToLay <= 0) return;
+
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
         for (Agent n : nearby) {
@@ -358,7 +320,6 @@ public class RuleEngine {
             }
         }
     }
-    
     
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
@@ -373,11 +334,9 @@ public class RuleEngine {
             double refillRate = Math.min(15.0, precipMm * 0.5);
 
             double oldWater = ia.getWaterVolume();
-            double newWater = oldWater - evaporationRate + refillRate;
-            double clampedWater = Math.max(0, Math.min(100, newWater));
+            double clampedWater = Math.max(0, Math.min(100, oldWater - evaporationRate + refillRate));
             ia.setWaterVolume(clampedWater);
 
-            // Only log if change > 5% (was 0.1%)
             if (Math.abs(clampedWater - oldWater) > 5.0) {
                 SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% at (%.6f, %.6f)",
                         oldWater, clampedWater, ia.getX(), ia.getY());

@@ -9,34 +9,22 @@ import java.util.Random;
 /**
  * Temperature‑dependent life‑cycle model for Anopheles stephensi
  * following the ODE differential equations of Komi et al. 2025.
- * 
- * Development rates: egg/pupa exponential, larva Brière.
- * Mortality rates: exp‑quadratic (egg, larva, pupa), constant (adult).
- * Fecundity: Gaussian‑on‑log.
- * 
- * All rates are per‑day; per‑tick probabilities via Poisson.
  */
 public class LifecycleModel {
 
     private final SpeciesParameters p;
-    private final double dtDays;          // tick duration in days
-    private final Random rng;             // Now using SeedManager instead of ThreadLocalRandom
+    private final double dtDays;          
+    private final Random rng;             
 
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
         this.p = params;
         this.dtDays = tickMinutes / (24.0 * 60.0);
-        this.rng = SeedManager.getRandom(); // Get seeded random from SeedManager
+        this.rng = SeedManager.getRandom(); 
         SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)", dtDays, tickMinutes);
     }
 
-    // ------------------------------------------------------------------------
-    // Temperature conversion
-    // ------------------------------------------------------------------------
     private double celsius(double kelvin) { return kelvin - 273.15; }
 
-    // ------------------------------------------------------------------------
-    // Development rates (1/day)
-    // ------------------------------------------------------------------------
     public double eggDevelopmentRate(double tempKelvin) {
         double T = celsius(tempKelvin);
         double expPart = Math.exp(p.eggDev_rho * T
@@ -59,9 +47,6 @@ public class LifecycleModel {
         return Math.max(0, expPart + p.pupaDev_lambda);
     }
 
-    // ------------------------------------------------------------------------
-    // Mortality rates (1/day)
-    // ------------------------------------------------------------------------
     public double eggMortalityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
         return Math.exp(p.eggMort_b1 + p.eggMort_b2 * T + p.eggMort_b3 * T * T);
@@ -79,33 +64,28 @@ public class LifecycleModel {
 
     public double adultMortalityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
-        return Math.exp(p.adultMort_b1 + p.adultMort_b2 * T + p.adultMort_b3 * T * T);
+        if (p.adultMort_b1 != 0 || p.adultMort_b2 != 0 || p.adultMort_b3 != 0) {
+            return Math.exp(p.adultMort_b1 + p.adultMort_b2 * T + p.adultMort_b3 * T * T);
+        }
+        return p.adultMortalityPerDay;
     }
 
-    // ------------------------------------------------------------------------
-    // Fecundity (eggs/female/day) including sex ratio
-    // ------------------------------------------------------------------------
     public double fecundityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
         double val = Math.exp(p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2));
         return Math.max(0, val * p.sexRatio);
     }
 
-    // Host carrying capacity scaling
     public double hostCarryingCapacity(double livestockDensity) {
-        return 1.0 + Math.log1p(livestockDensity);
+        return p.hostCarryingCapacityBase + Math.log1p(livestockDensity);
     }
 
-    // Effective fecundity (eggs/female/tick)
     public double effectiveFecundity(double tempKelvin, double livestockDensity) {
         double F = fecundityRate(tempKelvin);
         double K = hostCarryingCapacity(livestockDensity);
         return F * K * dtDays;
     }
 
-    // ------------------------------------------------------------------------
-    // Per‑tick probabilities (Poisson)
-    // ------------------------------------------------------------------------
     public double transitionProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
@@ -114,27 +94,58 @@ public class LifecycleModel {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-    // ------------------------------------------------------------------------
-    // Stage transitions (mortality + development each tick)
-    // ------------------------------------------------------------------------
+//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
+//        double dL = larvaDevelopmentRate(tempKelvin);
+//        double mL = larvaMortalityRate(tempKelvin);
+//        double pAdv = transitionProb(dL);
+//        double pDie = mortalityProb(mL);
+//        
+//        if (agent.getAge() % 100 == 0) {
+//            SimulationLogger.fine("[DEBUG] Larva age=%d, T=%.2fK, dL=%.6f, pAdv=%.6f, pDie=%.6f",
+//                agent.getAge(), tempKelvin, dL, pAdv, pDie);
+//        }
+//
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//            return;
+//        }
+//        if (rng.nextDouble() < pAdv) {
+//            agent.setStage(LifecycleStage.PUPA);
+//            agent.setEnergy(0.6);
+//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
+    /**
+     * Updates larval development using accumulated progress.
+     * This replaces the previous stochastic transition method.
+     */
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double dL = larvaDevelopmentRate(tempKelvin);
         double mL = larvaMortalityRate(tempKelvin);
-        double pAdv = transitionProb(dL);
-        double pDie = mortalityProb(mL);
 
-        // mortality first
-        if (rng.nextDouble() < pDie) {
-            agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+        // 1. Accumulate development progress (in days)
+        agent.setDevelopmentProgress(
+                agent.getDevelopmentProgress() + dL * dtDays);
+
+        // 2. When accumulated progress reaches 1.0 (100%), pupate
+        if (agent.getDevelopmentProgress() >= 1.0) {
+            agent.setStage(LifecycleStage.PUPA);
+            agent.setDevelopmentProgress(0.0);
+            agent.setEnergy(0.6);
+            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
                     agent.getId(), agent.getAge(), tempKelvin);
             return;
         }
-        // then development
-        if (rng.nextDouble() < pAdv) {
-            agent.setStage(LifecycleStage.PUPA);
-            agent.setEnergy(0.6);
-            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+
+        // 3. Apply mortality with the same probability as before
+        double pDie = mortalityProb(mL);
+        if (rng.nextDouble() < pDie) {
+            agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
                     agent.getId(), agent.getAge(), tempKelvin);
         }
     }
@@ -169,17 +180,13 @@ public class LifecycleModel {
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Egg hatching (for InertAgent)
-    // ------------------------------------------------------------------------
     public int tryHatchEggs(int currentEggs, double tempKelvin) {
-        if (currentEggs == 0) return 0;
+        if (currentEggs <= 0) return 0;
         double de = eggDevelopmentRate(tempKelvin);
         double me = eggMortalityRate(tempKelvin);
         double pAdv = transitionProb(de);
         double pDie = mortalityProb(me);
 
-        // Deaths
         int deaths;
         if (currentEggs < 100) {
             deaths = 0;
@@ -191,7 +198,6 @@ public class LifecycleModel {
         }
         int survivors = currentEggs - deaths;
 
-        // Hatch
         int hatched;
         if (survivors < 100) {
             hatched = 0;
@@ -204,9 +210,6 @@ public class LifecycleModel {
         return hatched;
     }
 
-    // ------------------------------------------------------------------------
-    // Stochastic egg laying
-    // ------------------------------------------------------------------------
     public int eggsToLay(double tempKelvin, double hostDensity) {
         double expected = effectiveFecundity(tempKelvin, hostDensity);
         int eggs = (int) expected;
@@ -222,55 +225,36 @@ import com.monadvsim.app.models.utils.SimulationLogger;
 import java.awt.geom.Rectangle2D;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.locks.StampedLock;
 
 /**
- * Spatial Indexing System – Lazy cell creation.
- * No pre‑allocation of grid cells; cells are created on first use.
+ * High-performance Concurrent Spatial Indexing System.
  */
 public class SpatialRegistry {
 
-    // Maps a GridCell (key) to a thread‑safe list of agents in that cell
     private final ConcurrentHashMap<GridCell, List<Agent>> spatialGrid = new ConcurrentHashMap<>();
     private final Rectangle2D worldBounds;
     private final double cellSize;
     private final int gridWidth;
     private final int gridHeight;
 
-    // Agent tracking
-    private final Map<String, AgentRecord> agentRecords = new ConcurrentHashMap<>();
     private final Map<String, GridCell> agentPositions = new ConcurrentHashMap<>();
 
-    // Change tracking (optional, kept for compatibility)
-    private final Queue<SpatialChange> pendingChanges = new ConcurrentLinkedQueue<>();
-    private final AtomicInteger changeCount = new AtomicInteger(0);
-    private final StampedLock updateLock = new StampedLock();
-
-    // Statistics
     private final AtomicInteger totalInserts = new AtomicInteger(0);
     private final AtomicInteger totalRemoves = new AtomicInteger(0);
     private final AtomicInteger totalUpdates = new AtomicInteger(0);
     private final AtomicInteger queryCount = new AtomicInteger(0);
-
-    // Result cache
-    private final Map<GridCell, CellCacheEntry> cellCache = new ConcurrentHashMap<>();
-    private final int maxCacheSize = 1000;
 
     public SpatialRegistry(Rectangle2D worldBounds, double cellSize) {
         this.worldBounds = worldBounds;
         this.cellSize = cellSize;
         this.gridWidth = (int) Math.ceil(worldBounds.getWidth() / cellSize);
         this.gridHeight = (int) Math.ceil(worldBounds.getHeight() / cellSize);
-        // No pre‑initialization – cells are created lazily
-        SimulationLogger.info("Initialized SpatialRegistry [%dx%d cells, %.6f° cell size] (lazy)",
+        SimulationLogger.info("Initialized High-Perf SpatialRegistry [%dx%d cells, %.6f° cell size]",
                 gridWidth, gridHeight, cellSize);
     }
 
-    // ------------------------------------------------------------------------
-    // Core operations
-    // ------------------------------------------------------------------------
     private GridCell getCellForPosition(double x, double y) {
         if (!worldBounds.contains(x, y)) return null;
         int gridX = (int) ((x - worldBounds.getX()) / cellSize);
@@ -281,153 +265,75 @@ public class SpatialRegistry {
     }
 
     private List<Agent> getOrCreateCellList(GridCell cell) {
-        return spatialGrid.computeIfAbsent(cell, k -> Collections.synchronizedList(new ArrayList<>()));
+        return spatialGrid.computeIfAbsent(cell, k -> new CopyOnWriteArrayList<>());
     }
 
     public void registerAgent(Agent agent) {
         if (agent == null) return;
-        long stamp = updateLock.writeLock();
-        try {
-            GridCell cell = getCellForPosition(agent.getX(), agent.getY());
-            if (cell == null) return;
-            List<Agent> cellList = getOrCreateCellList(cell);
-            cellList.add(agent);
-            agentPositions.put(agent.getId(), cell);
-            agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
-            pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
-            changeCount.incrementAndGet();
-            totalInserts.incrementAndGet();
-            cellCache.remove(cell);
-        } finally {
-            updateLock.unlockWrite(stamp);
-        }
+        GridCell cell = getCellForPosition(agent.getX(), agent.getY());
+        if (cell == null) return;
+
+        List<Agent> cellList = getOrCreateCellList(cell);
+        cellList.add(agent);
+        agentPositions.put(agent.getId(), cell);
+        totalInserts.incrementAndGet();
     }
 
     public void registerAgents(Collection<Agent> agents) {
         if (agents == null || agents.isEmpty()) return;
-        long stamp = updateLock.writeLock();
-        try {
-            for (Agent agent : agents) {
-                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
-                if (cell == null) continue;
-                List<Agent> cellList = getOrCreateCellList(cell);
-                cellList.add(agent);
-                agentPositions.put(agent.getId(), cell);
-                agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
-                pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.INSERT, agent.getId(), cell, null));
-                changeCount.incrementAndGet();
-                totalInserts.incrementAndGet();
-                cellCache.remove(cell);
-            }
-        } finally {
-            updateLock.unlockWrite(stamp);
+        for (Agent agent : agents) {
+            registerAgent(agent);
         }
     }
 
     public void unregisterAgent(String agentId) {
         if (agentId == null) return;
-        long stamp = updateLock.writeLock();
-        try {
-            GridCell oldCell = agentPositions.remove(agentId);
-            if (oldCell != null) {
-                List<Agent> cellList = spatialGrid.get(oldCell);
-                if (cellList != null) {
-                    boolean removed = cellList.removeIf(a -> a.getId().equals(agentId));
-                    if (removed) {
-                        agentRecords.remove(agentId);
-                        pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
-                        changeCount.incrementAndGet();
-                        totalRemoves.incrementAndGet();
-                        cellCache.remove(oldCell);
-                        // If cell becomes empty, we may leave it – optional cleanup
-                    }
-                }
+        GridCell oldCell = agentPositions.remove(agentId);
+        if (oldCell != null) {
+            List<Agent> cellList = spatialGrid.get(oldCell);
+            if (cellList != null) {
+                cellList.removeIf(a -> a.getId().equals(agentId));
+                totalRemoves.incrementAndGet();
             }
-        } finally {
-            updateLock.unlockWrite(stamp);
         }
     }
 
     public void unregisterAgents(Collection<String> agentIds) {
         if (agentIds == null || agentIds.isEmpty()) return;
-        long stamp = updateLock.writeLock();
-        try {
-            for (String agentId : agentIds) {
-                GridCell oldCell = agentPositions.remove(agentId);
-                if (oldCell != null) {
-                    List<Agent> cellList = spatialGrid.get(oldCell);
-                    if (cellList != null) {
-                        cellList.removeIf(a -> a.getId().equals(agentId));
-                        agentRecords.remove(agentId);
-                        pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.REMOVE, agentId, null, oldCell));
-                        changeCount.incrementAndGet();
-                        totalRemoves.incrementAndGet();
-                        cellCache.remove(oldCell);
-                    }
-                }
-            }
-        } finally {
-            updateLock.unlockWrite(stamp);
+        for (String agentId : agentIds) {
+            unregisterAgent(agentId);
         }
     }
 
     public void updateAgentPosition(Agent agent) {
         if (agent == null) return;
-        long stamp = updateLock.writeLock();
-        try {
-            String agentId = agent.getId();
-            GridCell oldCell = agentPositions.get(agentId);
-            GridCell newCell = getCellForPosition(agent.getX(), agent.getY());
-            if (newCell == null) {
-                if (oldCell != null) unregisterAgent(agentId);
-                return;
+        String agentId = agent.getId();
+        GridCell newCell = getCellForPosition(agent.getX(), agent.getY());
+        GridCell oldCell = agentPositions.get(agentId);
+
+        if (newCell == null) {
+            if (oldCell != null) unregisterAgent(agentId);
+            return;
+        }
+
+        if (oldCell == null) {
+            registerAgent(agent);
+        } else if (!oldCell.equals(newCell)) {
+            List<Agent> oldList = spatialGrid.get(oldCell);
+            if (oldList != null) {
+                oldList.removeIf(a -> a.getId().equals(agentId));
             }
-            if (oldCell == null) {
-                registerAgent(agent);
-            } else if (!oldCell.equals(newCell)) {
-                List<Agent> oldList = spatialGrid.get(oldCell);
-                if (oldList != null) oldList.removeIf(a -> a.getId().equals(agentId));
-                List<Agent> newList = getOrCreateCellList(newCell);
-                newList.add(agent);
-                agentPositions.put(agentId, newCell);
-                agentRecords.put(agentId, new AgentRecord(agent, newCell));
-                pendingChanges.offer(new SpatialChange(SpatialChange.ChangeType.MOVE, agentId, newCell, oldCell));
-                changeCount.incrementAndGet();
-                totalUpdates.incrementAndGet();
-                cellCache.remove(oldCell);
-                cellCache.remove(newCell);
-            }
-        } finally {
-            updateLock.unlockWrite(stamp);
+            List<Agent> newList = getOrCreateCellList(newCell);
+            newList.add(agent);
+            agentPositions.put(agentId, newCell);
+            totalUpdates.incrementAndGet();
         }
     }
 
-    // ------------------------------------------------------------------------
-    // Queries
-    // ------------------------------------------------------------------------
     public List<Agent> getNearbyAgents(double x, double y, double radius) {
         queryCount.incrementAndGet();
-        long stamp = updateLock.tryOptimisticRead();
         GridCell centerCell = getCellForPosition(x, y);
         if (centerCell == null) return Collections.emptyList();
-
-        List<Agent> result = queryNearbyOptimistic(x, y, radius, centerCell);
-        if (!updateLock.validate(stamp)) {
-            stamp = updateLock.readLock();
-            try {
-                result = queryNearbyOptimistic(x, y, radius, centerCell);
-            } finally {
-                updateLock.unlockRead(stamp);
-            }
-        }
-        return result;
-    }
-
-    private List<Agent> queryNearbyOptimistic(double x, double y, double radius, GridCell centerCell) {
-        CellCacheKey cacheKey = new CellCacheKey(centerCell, radius);
-        CellCacheEntry cached = cellCache.get(centerCell);
-        if (cached != null && cached.isValidFor(cacheKey))
-            return new ArrayList<>(cached.agents);
 
         List<Agent> result = new ArrayList<>();
         int cellsRadius = (int) Math.ceil(radius / cellSize);
@@ -436,72 +342,37 @@ public class SpatialRegistry {
             for (int dy = -cellsRadius; dy <= cellsRadius; dy++) {
                 int checkX = centerCell.gridX + dx;
                 int checkY = centerCell.gridY + dy;
+
                 if (checkX >= 0 && checkX < gridWidth && checkY >= 0 && checkY < gridHeight) {
                     GridCell checkCell = new GridCell(checkX, checkY);
                     List<Agent> cellAgents = spatialGrid.get(checkCell);
-                    if (cellAgents != null) {
+                    if (cellAgents != null && !cellAgents.isEmpty()) {
                         for (Agent agent : cellAgents) {
                             double dist = Math.hypot(agent.getX() - x, agent.getY() - y);
-                            if (dist <= radius) result.add(agent);
+                            if (dist <= radius) {
+                                result.add(agent);
+                            }
                         }
                     }
                 }
             }
         }
-
-        if (result.size() <= 1000)
-            cacheQueryResult(centerCell, radius, result);
         return result;
     }
 
-    private void cacheQueryResult(GridCell cell, double radius, List<Agent> agents) {
-        if (cellCache.size() >= maxCacheSize) {
-            GridCell oldest = cellCache.keySet().iterator().next();
-            cellCache.remove(oldest);
-        }
-        cellCache.put(cell, new CellCacheEntry(new CellCacheKey(cell, radius), agents));
-    }
-
-    // ------------------------------------------------------------------------
-    // Maintenance & statistics
-    // ------------------------------------------------------------------------
     public void applyPendingChanges() {
-        pendingChanges.clear();
-        changeCount.set(0);
+        // Safe lock-free updates implemented directly
     }
 
     public void bulkUpdate(List<Agent> allAgents) {
-        long stamp = updateLock.writeLock();
-        try {
-            spatialGrid.clear();
-            agentPositions.clear();
-            agentRecords.clear();
-            cellCache.clear();
-            for (Agent agent : allAgents) {
-                GridCell cell = getCellForPosition(agent.getX(), agent.getY());
-                if (cell != null) {
-                    List<Agent> cellList = getOrCreateCellList(cell);
-                    cellList.add(agent);
-                    agentPositions.put(agent.getId(), cell);
-                    agentRecords.put(agent.getId(), new AgentRecord(agent, cell));
-                }
-            }
-            pendingChanges.clear();
-            changeCount.set(0);
-        } finally {
-            updateLock.unlockWrite(stamp);
-        }
+        clear();
+        registerAgents(allAgents);
     }
 
     public List<Agent> getAllAgents() {
         List<Agent> all = new ArrayList<>();
-        long stamp = updateLock.readLock();
-        try {
-            for (List<Agent> list : spatialGrid.values()) {
-                all.addAll(list);
-            }
-        } finally {
-            updateLock.unlockRead(stamp);
+        for (List<Agent> list : spatialGrid.values()) {
+            all.addAll(list);
         }
         return all;
     }
@@ -511,89 +382,34 @@ public class SpatialRegistry {
         return list != null ? new ArrayList<>(list) : Collections.emptyList();
     }
 
-    public GridCell getAgentCell(String agentId) { return agentPositions.get(agentId); }
+    public GridCell getAgentCell(String agentId) { 
+        return agentPositions.get(agentId); 
+    }
 
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
-        stats.put("totalAgents", agentRecords.size());
+        stats.put("totalAgents", agentPositions.size());
         stats.put("gridCells", gridWidth * gridHeight);
         stats.put("cellSizeDegrees", cellSize);
-        stats.put("pendingChanges", changeCount.get());
         stats.put("queryCount", queryCount.get());
         stats.put("totalInserts", totalInserts.get());
         stats.put("totalRemoves", totalRemoves.get());
         stats.put("totalUpdates", totalUpdates.get());
-        stats.put("cacheSize", cellCache.size());
 
-        int maxAgents = 0, empty = 0, total = 0;
+        int maxAgents = 0, total = 0;
         for (List<Agent> list : spatialGrid.values()) {
             int size = list.size();
             total += size;
             maxAgents = Math.max(maxAgents, size);
-            if (size == 0) empty++;
         }
         stats.put("maxAgentsPerCell", maxAgents);
-        stats.put("emptyCells", empty);
-        stats.put("avgAgentsPerCell", total / (double) (gridWidth * gridHeight));
+        stats.put("avgAgentsPerCell", gridWidth * gridHeight == 0 ? 0 : total / (double) (gridWidth * gridHeight));
         return stats;
     }
 
     public void clear() {
-        long stamp = updateLock.writeLock();
-        try {
-            spatialGrid.clear();
-            agentPositions.clear();
-            agentRecords.clear();
-            cellCache.clear();
-            pendingChanges.clear();
-            changeCount.set(0);
-        } finally {
-            updateLock.unlockWrite(stamp);
-        }
-    }
-
-    // ------------------------------------------------------------------------
-    // Inner classes
-    // ------------------------------------------------------------------------
-    private static class AgentRecord {
-        final Agent agent; final GridCell cell; final long timestamp;
-        AgentRecord(Agent agent, GridCell cell) {
-            this.agent = agent; this.cell = cell; this.timestamp = System.currentTimeMillis();
-        }
-    }
-
-    private static class SpatialChange {
-        enum ChangeType { INSERT, REMOVE, MOVE }
-        final ChangeType type; final String agentId; final GridCell newCell, oldCell; final long timestamp;
-        SpatialChange(ChangeType type, String agentId, GridCell newCell, GridCell oldCell) {
-            this.type = type; this.agentId = agentId; this.newCell = newCell; this.oldCell = oldCell;
-            this.timestamp = System.currentTimeMillis();
-        }
-    }
-
-    private static class CellCacheKey {
-        final GridCell cell; final double radius; final long timestamp;
-        CellCacheKey(GridCell cell, double radius) {
-            this.cell = cell; this.radius = radius; this.timestamp = System.currentTimeMillis();
-        }
-        @Override public boolean equals(Object o) {
-            if (this == o) return true;
-            if (!(o instanceof CellCacheKey)) return false;
-            CellCacheKey that = (CellCacheKey) o;
-            return Double.compare(that.radius, radius) == 0 && Objects.equals(cell, that.cell);
-        }
-        @Override public int hashCode() { return Objects.hash(cell, radius); }
-    }
-
-    private static class CellCacheEntry {
-        final CellCacheKey key; final List<Agent> agents; final long created;
-        CellCacheEntry(CellCacheKey key, List<Agent> agents) {
-            this.key = key; this.agents = Collections.unmodifiableList(new ArrayList<>(agents));
-            this.created = System.currentTimeMillis();
-        }
-        boolean isValidFor(CellCacheKey queryKey) {
-            return key.equals(queryKey) && (System.currentTimeMillis() - created) < 1000;
-        }
+        spatialGrid.clear();
+        agentPositions.clear();
     }
 }package com.monadvsim.app.models.engine;
 
@@ -602,6 +418,8 @@ import com.monadvsim.app.models.services.ProjectPersistenceService;
 import com.monadvsim.app.models.utils.ManagedExecutorService;
 import com.monadvsim.app.models.utils.ResourceManager;
 import com.monadvsim.app.models.utils.SnapshotMerger;
+import com.monadvsim.app.models.utils.SimulationLogger;
+
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileReader;
@@ -611,39 +429,16 @@ import java.io.PrintWriter;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.logging.Level;
-import java.util.stream.Collectors;
-import com.monadvsim.app.models.utils.SimulationLogger;
 import java.util.logging.Logger;
-
+import java.util.stream.Collectors;
 
 /**
  * Core Simulation Loop
- *
- * Main simulation controller implementing Runnable
- *
- * Manages the simulation tick sequence: time advance → environment update →
- * agent processing
- *
- * Handles periodic snapshot exports and statistics reporting
- *
- * Integrates with TimeManager, SpatialRegistry, and AgentLifecycleManager
- *
- * Implements adaptive sleep for real-time simulation pacing
- *
- * Provides resource cleanup and monitoring
- * 
- * @author void
  */
 public class SimulationEngine implements Runnable {
     
@@ -657,20 +452,19 @@ public class SimulationEngine implements Runnable {
     private final ResourceManager resourceManager = ResourceManager.getInstance();
     private final ManagedExecutorService simulationExecutor;
     private final AtomicBoolean resourcesCleaned = new AtomicBoolean(false);
-    // Performance monitoring
+
     private final SimulationMetrics metrics = new SimulationMetrics();
     private long lastTickTime = 0;
     private double averageTickTime = 0;
     private final int tickTimeWindow = 100;
-    // Statistics
+
     private final ConcurrentHashMap<String, AtomicInteger> layerStats = new ConcurrentHashMap<>();
     private final Object exportLock = new Object();
-    // Export management
+
     private final ExecutorService exportExecutor;
     private final AtomicBoolean exportInProgress = new AtomicBoolean(false);
     private final Queue<ExportTask> exportQueue = new ConcurrentLinkedQueue<>();
 
-    
     public SimulationEngine(Project project, TimeManager timeManager, SpatialRegistry spatialRegistry) {
         this(project, timeManager, spatialRegistry, "results");
     }
@@ -683,14 +477,13 @@ public class SimulationEngine implements Runnable {
         this.outputDir = outputDir != null ? outputDir : "results";
         this.project.setSpatialRegistry(spatialRegistry);
         
-        // Create managed executor service
         int coreCount = Runtime.getRuntime().availableProcessors();
         this.simulationExecutor = new ManagedExecutorService(
             "SimulationEngine",
-            Math.max(2, coreCount - 1),  // Leave one core for system
-            coreCount * 2,               // Maximum threads
-            1000,                        // Queue capacity
-            60, TimeUnit.SECONDS         // Keep-alive time
+            Math.max(2, coreCount - 1),
+            coreCount * 2,
+            1000,
+            60, TimeUnit.SECONDS
         );
         
         this.exportExecutor = Executors.newSingleThreadExecutor(r -> {
@@ -700,10 +493,7 @@ public class SimulationEngine implements Runnable {
             return t;
         });
         
-        // Register shutdown hook
         this.simulationExecutor.addShutdownHook(this::cleanupResources);
-        
-        // Ensure output directory exists
         ensureOutputDirectory();
     }
     
@@ -727,65 +517,44 @@ public class SimulationEngine implements Runnable {
             while (running.get()) {
                 long tickStart = System.nanoTime();
 
-                // TICK SEQUENCE:
-                // 1. Advance time
                 if (!timeManager.tick()) {
-                    SimulationLogger.info("Simulation time limit reached at tick "
-                            + timeManager.getTickCount());
+                    SimulationLogger.info("Simulation time limit reached at tick " + timeManager.getTickCount());
                     break;
                 }
 
-                // 2. Update environment
                 project.updateEnvironment(timeManager.getCurrentFrameIndex());
-
-                // 3. Process agent layers WITH immediate spatial updates
                 processAgentLayersWithImmediateUpdates();
-
-                // 4. Finalize spatial registry for this tick
                 finalizeSpatialRegistry();
-
-                // 5. Report progress and export periodic snapshots
                 reportTickProgress(tickStart);
-                
-                // Adaptive sleep
                 adaptiveSleep(System.nanoTime() - tickStart);
             }
         } catch (Exception e) {
             SimulationLogger.warning("Error in simulation loop: " + e.getMessage());
             e.printStackTrace();
         } finally {
-            // Always run cleanup
             cleanup();
         }
     }
     
-    
     private void finalizeSpatialRegistry() {
-        // Apply any pending changes in spatial registry
-        SpatialRegistry registry = 
-            (SpatialRegistry) project.getSpatialRegistry();
+        SpatialRegistry registry = (SpatialRegistry) project.getSpatialRegistry();
         registry.applyPendingChanges();
         
-        // Validate consistency (debug builds only)
         if (System.getProperty("debug.spatial") != null) {
             validateSpatialConsistency();
         }
     }
     
-    
     private boolean areAnyLivingAgentsAlive() {
-        // Check all agent layers for living agents
         for (AgentLayer layer : project.getAgentLayers()) {
             List<Agent> agents = layer.getAgents();
             for (Agent agent : agents) {
-                if (agent instanceof LivingAgent la) {
-                    if (la.isAlive()) {
-                        return true; // Found at least one living agent
-                    }
+                if (agent instanceof LivingAgent la && la.isAlive()) {
+                    return true;
                 }
             }
         }
-        return false; // No living agents found
+        return false;
     }
     
     private int getLivingAgentCount() {
@@ -801,70 +570,35 @@ public class SimulationEngine implements Runnable {
         return count;
     }
     
-    
     private void validateSpatialConsistency() {
-        SpatialRegistry registry = 
-            (SpatialRegistry) project.getSpatialRegistry();
-        
-        // Get all agents from layers
+        SpatialRegistry registry = (SpatialRegistry) project.getSpatialRegistry();
         List<Agent> layerAgents = project.getAgentLayers().stream()
             .flatMap(l -> l.getAgents().stream())
             .collect(Collectors.toList());
         
-        // Get all agents from spatial registry
         List<Agent> registryAgents = registry.getAllAgents();
         
-        // Check counts match
         if (layerAgents.size() != registryAgents.size()) {
             SimulationLogger.warning("Spatial inconsistency: layers=%d, registry=%d%n", layerAgents.size(), registryAgents.size());
-            
-            // Find missing agents
-            Set<String> layerIds = layerAgents.stream()
-                .map(Agent::getId)
-                .collect(Collectors.toSet());
-            Set<String> registryIds = registryAgents.stream()
-                .map(Agent::getId)
-                .collect(Collectors.toSet());
-            
-            Set<String> missingInRegistry = new HashSet<>(layerIds);
-            missingInRegistry.removeAll(registryIds);
-            
-            Set<String> extraInRegistry = new HashSet<>(registryIds);
-            extraInRegistry.removeAll(layerIds);
-            
-            if (!missingInRegistry.isEmpty()) {
-                SimulationLogger.warning("Agents missing in registry: " + missingInRegistry.size());
-            }
-            if (!extraInRegistry.isEmpty()) {
-                SimulationLogger.warning("Extra agents in registry: " + extraInRegistry.size());
-            }
         }
     }
     
-    
     private void reportTickProgress(long tickStart) {
         long tickDuration = System.nanoTime() - tickStart;
-
-        // Update performance metrics
         updatePerformanceMetrics(tickDuration);
 
-        // Export snapshot every 100 ticks
         if (timeManager.getTickCount() % 100 == 0) {
             exportPeriodicSnapshot();
             printExportStatus();
         }
 
-        // Print progress every 10 ticks
         if (timeManager.getTickCount() % 10 == 0) {
             reportProgress();
         }
     }
     
-    
     private void exportPeriodicSnapshot() {
         long currentTick = timeManager.getTickCount();
-
-        // Check for stuck exports
         checkAndClearStuckExports();
 
         SimulationLogger.info("[Export] Scheduling export for tick %d at %s%n", 
@@ -873,10 +607,7 @@ public class SimulationEngine implements Runnable {
         ExportTask task = new ExportTask(project, currentTick, outputDir);
         exportQueue.offer(task);
 
-        SimulationLogger.info("[Export] Queue size: %d%n", exportQueue.size());
-
         if (exportInProgress.compareAndSet(false, true)) {
-            SimulationLogger.info("[Export] Starting export processing...");
             exportExecutor.submit(() -> {
                 try {
                     processExportQueue();
@@ -889,21 +620,6 @@ public class SimulationEngine implements Runnable {
         }
     }
     
-    
-    private void exportSnapshot(Project project) {
-        long currentTick = timeManager.getTickCount();
-
-        // Create a snapshot of project data for export (avoids concurrency issues)
-        ExportTask task = new ExportTask(project, currentTick, outputDir);
-        exportQueue.offer(task);
-
-        // Process export queue if not already processing
-        if (exportInProgress.compareAndSet(false, true)) {
-            exportExecutor.submit(this::processExportQueue);
-        }
-    }
-    
-    
     private void processExportQueue() {
         try {
             while (!exportQueue.isEmpty()) {
@@ -914,14 +630,11 @@ public class SimulationEngine implements Runnable {
             }
         } finally {
             exportInProgress.set(false);
-
-            // If new tasks arrived while processing, start again
             if (!exportQueue.isEmpty() && exportInProgress.compareAndSet(false, true)) {
                 exportExecutor.submit(this::processExportQueue);
             }
         }
     }
-    
     
     private void processSingleExport(ExportTask task) {
         if (task == null || task.project == null) {
@@ -929,118 +642,61 @@ public class SimulationEngine implements Runnable {
             return;
         }
 
-        SimulationLogger.info("[Export] START processing tick %d at %s%n", 
-            task.tick, LocalDateTime.now().format(DateTimeFormatter.ofPattern("HH:mm:ss")));
-
         String filename = String.format("%s/snapshot_tick_%d.csv", task.outputDir, task.tick);
-
-        // Use simplified export method
         ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-        boolean success;
         try {
-            success = persistenceService.exportToCSV(task.project, filename, task.tick);
+            boolean success = persistenceService.exportToCSV(task.project, filename, task.tick);
             if (success) {
                 SimulationLogger.info("[Export] DONE processing tick %d%n", task.tick);
-            } else {
-                SimulationLogger.info("[Export] FAILED processing tick %d%n", task.tick);
             }
         } catch (IOException ex) {
             Logger.getLogger(SimulationEngine.class.getName()).log(Level.SEVERE, null, ex);
         }
     }
     
-    
     private void checkAndClearStuckExports() {
-        if (exportQueue.size() > 10) { // Too many queued exports
-            SimulationLogger.warning("[Export] Too many queued exports (" + 
-                              exportQueue.size() + "), clearing queue");
+        if (exportQueue.size() > 10) {
+            SimulationLogger.warning("[Export] Too many queued exports (" + exportQueue.size() + "), clearing queue");
             exportQueue.clear();
             exportInProgress.set(false);
         }
     }
     
-    
     private Project createCompleteProjectSnapshot(Project original, List<Agent> agents) {
-        // Create a complete snapshot for export
         Project snapshot = new Project(original.getName() + "_snapshot_tick_" + System.currentTimeMillis());
 
-        // Copy basic settings
         snapshot.setDefaultAgentSearchRadius(original.getDefaultAgentSearchRadius());
         snapshot.setDefaultHatchingProbability(original.getDefaultHatchingProbability());
         snapshot.setDefaultAgentStep(original.getDefaultAgentStep());
         snapshot.setDefaultBirthRate(original.getDefaultBirthRate());
         snapshot.setDefaultMaxAgentAge(original.getDefaultMaxAgentAge());
 
-        // Copy ALL layers (both raster and agent layers)
         for (Layer layer : original.getLayers()) {
             if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
-                // For raster layers, create a copy with current frame data
                 snapshot.addLayer(layer);
             }
         }
 
-        // Group agents by their original layer for proper export
         Map<String, List<Agent>> agentsByLayerName = new HashMap<>();
         for (Agent agent : agents) {
-            // Find which layer this agent belongs to
             for (AgentLayer originalLayer : original.getAgentLayers()) {
                 if (originalLayer.getAgents().contains(agent)) {
-                    agentsByLayerName.computeIfAbsent(originalLayer.getName(), 
-                        k -> new ArrayList<>()).add(agent);
+                    agentsByLayerName.computeIfAbsent(originalLayer.getName(), k -> new ArrayList<>()).add(agent);
                     break;
                 }
             }
         }
 
-        // Create agent layers with their respective agents
         for (Map.Entry<String, List<Agent>> entry : agentsByLayerName.entrySet()) {
-            String layerName = entry.getKey();
-            AgentLayer layerSnapshot = new AgentLayer(layerName, null, null);
+            AgentLayer layerSnapshot = new AgentLayer(entry.getKey(), null, null);
             layerSnapshot.addAgents(entry.getValue());
             snapshot.addLayer(layerSnapshot);
         }
 
-        // Copy spatial registry reference
         snapshot.setSpatialRegistry(original.getSpatialRegistry());
-
         return snapshot;
     }
-    
-    
-    private Project createProjectSnapshot(Project original, List<Agent> agents) {
-        // Create a lightweight snapshot for export
-        Project snapshot = new Project(original.getName() + "_snapshot");
 
-        // Copy basic settings
-        snapshot.setDefaultAgentSearchRadius(original.getDefaultAgentSearchRadius());
-        snapshot.setDefaultHatchingProbability(original.getDefaultHatchingProbability());
-        snapshot.setDefaultAgentStep(original.getDefaultAgentStep());
-        snapshot.setDefaultBirthRate(original.getDefaultBirthRate());
-        snapshot.setDefaultMaxAgentAge(original.getDefaultMaxAgentAge());
-
-        // Copy layers (these are mostly immutable)
-        for (Layer layer : original.getLayers()) {
-            if (!(layer instanceof AgentLayer)) {
-                snapshot.addLayer(layer);
-            }
-        }
-
-        // Create agent layers snapshot
-        for (AgentLayer originalLayer : original.getAgentLayers()) {
-            AgentLayer layerSnapshot = new AgentLayer(originalLayer.getName(), null, null);
-
-            // Add only agents from this layer
-            for (Agent agent : agents) {
-                // This is simplified - you might need to filter by layer
-                layerSnapshot.addAgent(agent);
-            }
-
-            snapshot.addLayer(layerSnapshot);
-        }
-
-        return snapshot;
-    }
-    
     private static class ExportTask {
         final Project project;
         final long tick;
@@ -1052,50 +708,27 @@ public class SimulationEngine implements Runnable {
             this.outputDir = outputDir;
         }
     }
-    
-    
-    private void reportSpatialStatistics() {
-        SpatialRegistry registry = 
-            (SpatialRegistry) project.getSpatialRegistry();
-        
-        Map<String, Object> stats = registry.getStatistics();
-        SimulationLogger.info("[Spatial] Agents: %d | Queries: %d | Cache: %d/%d%n",
-            stats.get("totalAgents"), stats.get("queryCount"),
-            stats.get("cacheSize"), stats.get("gridCells"));
-    }
-    
-    
+
     private void cleanup() {
         SimulationLogger.info("Cleaning up simulation resources...");
-
-        // 1. Ensure all pending exports are processed
         exportFinalSnapshotNow();
-
-        // 2. Wait for any ongoing exports to complete
         waitForExportsToComplete();
-
-        // 3. Now merge the snapshots
         mergeSnapshots();
-
         SimulationLogger.info("Cleanup completed successfully");
     }
 
     private void exportFinalSnapshotNow() {
         long currentTick = timeManager.getTickCount();
         try {
-            String dirPath = outputDir;
-            File dir = new File(dirPath);
-            if (!dir.exists()) {
-                if (!dir.mkdirs()) {
-                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
-                    return;
-                }
+            File dir = new File(outputDir);
+            if (!dir.exists() && !dir.mkdirs()) {
+                SimulationLogger.severe("[EXPORT] Could not create output directory: " + outputDir);
+                return;
             }
 
             String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
             ProjectPersistenceService persistenceService = new ProjectPersistenceService();
 
-            // Get a safe copy of all agents
             List<Agent> agentsSnapshot = new ArrayList<>();
             for (AgentLayer layer : project.getAgentLayers()) {
                 synchronized (layer) {
@@ -1103,7 +736,6 @@ public class SimulationEngine implements Runnable {
                 }
             }
 
-            // Create a complete project snapshot
             Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
             persistenceService.exportToCSV(snapshot, filename, currentTick);
             SimulationLogger.info("[EXPORT] FINAL Snapshot exported to: " + filename);
@@ -1118,9 +750,7 @@ public class SimulationEngine implements Runnable {
         if (exportExecutor != null) {
             exportExecutor.shutdown();
             try {
-                SimulationLogger.info("Waiting for exports to complete...");
                 if (!exportExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
-                    SimulationLogger.warning("Export timeout reached, forcing shutdown");
                     exportExecutor.shutdownNow();
                 }
             } catch (InterruptedException e) {
@@ -1130,12 +760,9 @@ public class SimulationEngine implements Runnable {
         }
     }
     
-    
-    
     private void mergeSnapshots() {
         SimulationLogger.info("Merging snapshot files...");
         try {
-            // Use SnapshotMerger with output directory
             String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
             String mergedFilename = String.format("merged_snapshots_%s.csv", timestamp);
             SnapshotMerger.mergeSnapshotsAndCleanup(outputDir, mergedFilename);
@@ -1143,490 +770,88 @@ public class SimulationEngine implements Runnable {
             SimulationLogger.warning("Failed to merge snapshots: " + e.getMessage());
         }
     }
-    
-    
-    private void exportFinalSnapshot() {
-        long currentTick = timeManager.getTickCount();
-        try {
-            String dirPath = outputDir;
-            File dir = new File(dirPath);
-            if (!dir.exists()) {
-                if (!dir.mkdirs()) {
-                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
-                    return;
-                }
-            }
 
-            String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
-            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-
-            // Get a safe copy of all agents
-            List<Agent> agentsSnapshot = new ArrayList<>();
-            for (AgentLayer layer : project.getAgentLayers()) {
-                synchronized (layer) {
-                    agentsSnapshot.addAll(new ArrayList<>(layer.getAgents()));
-                }
-            }
-
-            // Create a complete project snapshot
-            Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
-            persistenceService.exportToCSV(snapshot, filename, currentTick);
-            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
-
-        } catch (Exception e) {
-            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private void mergeAllSnapshots() {
-        try {
-            SimulationLogger.info("🔄 Merging all snapshots...");
-
-            // Create output directory if it doesn't exist
-            File resultsDir = new File(outputDir);
-            if (!resultsDir.exists()) {
-                if (!resultsDir.mkdirs()) {
-                    SimulationLogger.warning("Could not create output directory: " + outputDir);
-                    return;
-                }
-                SimulationLogger.info("No results directory found, nothing to merge");
-                return;
-            }
-
-            // Get all snapshot files
-            File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
-                name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
-
-            if (snapshotFiles == null || snapshotFiles.length == 0) {
-                SimulationLogger.info("No snapshot files found to merge");
-                return;
-            }
-
-            SimulationLogger.info("Found " + snapshotFiles.length + " snapshot files to merge");
-
-            // Sort files by tick number
-            Arrays.sort(snapshotFiles, (f1, f2) -> {
-                try {
-                    int tick1 = extractTickNumber(f1.getName());
-                    int tick2 = extractTickNumber(f2.getName());
-                    return Integer.compare(tick1, tick2);
-                } catch (Exception e) {
-                    return 0;
-                }
-            });
-
-            // Create merged filename with timestamp
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String mergedFilename = String.format("%s/merged_simulation_results_%s.csv", outputDir, timestamp);
-
-            // Merge all files
-            try (PrintWriter writer = new PrintWriter(new FileWriter(mergedFilename))) {
-                boolean headerWritten = false;
-                int totalRows = 0;
-
-                for (int i = 0; i < snapshotFiles.length; i++) {
-                    File file = snapshotFiles[i];
-
-                    try (BufferedReader reader = new BufferedReader(new FileReader(file))) {
-                        String line;
-                        int lineNumber = 0;
-
-                        while ((line = reader.readLine()) != null) {
-                            line = line.trim();
-                            if (line.isEmpty()) continue;
-
-                            // Write header only once (from first file)
-                            if (i == 0 && !headerWritten && line.startsWith("TickCount,AgentID")) {
-                                writer.println(line);
-                                headerWritten = true;
-                                continue;
-                            }
-
-                            // Skip header for subsequent files
-                            if (i > 0 && lineNumber == 0 && line.startsWith("TickCount,AgentID")) {
-                                lineNumber++;
-                                continue;
-                            }
-
-                            writer.println(line);
-                            totalRows++;
-                            lineNumber++;
-                        }
-
-                        SimulationLogger.info("Processed: %s (%d rows)%n", file.getName(), lineNumber);
-
-                    } catch (IOException e) {
-                        SimulationLogger.warning("Error reading file: " + file.getName() + " - " + e.getMessage());
-                    }
-                }
-
-                SimulationLogger.info("Successfully merged %d files into %s (total rows: %d)%n",
-                    snapshotFiles.length, mergedFilename, totalRows);
-
-            } catch (IOException e) {
-                SimulationLogger.warning("Error writing merged file: " + e.getMessage());
-            }
-
-        } catch (Exception e) {
-            SimulationLogger.warning("Error merging snapshots: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    private int extractTickNumber(String filename) {
-        // Extract number from "snapshot_tick_123.csv"
-        try {
-            String numberPart = filename.replace("snapshot_tick_", "").replace(".csv", "");
-            return Integer.parseInt(numberPart);
-        } catch (NumberFormatException e) {
-            return 0;
-        }
-    }
-    
-    
-    private void exportSnapshotSynchronously(Project project) {
-        long currentTick = timeManager.getTickCount();
-        try {
-            String dirPath = outputDir;
-            File dir = new File(dirPath);
-            if (!dir.exists()) {
-                if (!dir.mkdirs()) {
-                    SimulationLogger.severe("[EXPORT] Could not create output directory: " + dirPath);
-                    return;
-                }
-            }
-
-            String filename = String.format("%s/snapshot_tick_%d.csv", outputDir, currentTick);
-            ProjectPersistenceService persistenceService = new ProjectPersistenceService();
-
-            // Get a safe copy of all agents
-            List<Agent> agentsSnapshot = new ArrayList<>();
-            for (AgentLayer layer : project.getAgentLayers()) {
-                // Use getAllAgents() from AgentContainer which creates a copy
-                agentsSnapshot.addAll(layer.getAgents());
-            }
-
-            // Create a complete project snapshot
-            Project snapshot = createCompleteProjectSnapshot(project, agentsSnapshot);
-            persistenceService.exportToCSV(snapshot, filename, currentTick);
-            SimulationLogger.info("FINAL Snapshot exported to: " + filename);
-
-        } catch (Exception e) {
-            SimulationLogger.warning("Error exporting final snapshot: " + e.getMessage());
-            e.printStackTrace();
-        }
-    }
-
-    
     private void processAgentLayersWithImmediateUpdates() {
         List<AgentLayer> layers = project.getAgentLayers();
-
-        // Calculate adaptive timeout based on agent count
         long adaptiveTimeout = calculateAdaptiveTimeout(layers);
 
         for (AgentLayer layer : layers) {
             try {
-                long layerStartTime = System.currentTimeMillis();
-
-                // Process layer with progress monitoring
-                CompletableFuture<Void> layerFuture = CompletableFuture.runAsync(() -> {
-                    layer.update(project);
-                });
-
-                try {
-                    // Wait with timeout, but allow more time for large layers
-                    layerFuture.get(adaptiveTimeout, TimeUnit.MILLISECONDS);
-                } catch (TimeoutException e) {
-                    SimulationLogger.warning("WARNING: Layer " + layer.getName() + 
-                                     " processing timed out after " + adaptiveTimeout + "ms");
-                    layerFuture.cancel(true);
-                    // Continue with next layer instead of breaking
-                }
-
+                CompletableFuture<Void> layerFuture = CompletableFuture.runAsync(() -> layer.update(project));
+                layerFuture.get(adaptiveTimeout, TimeUnit.MILLISECONDS);
+            } catch (TimeoutException e) {
+                SimulationLogger.warning("WARNING: Layer " + layer.getName() + " timed out.");
             } catch (Exception e) {
                 SimulationLogger.warning("Error in layer " + layer.getName() + ": " + e.getMessage());
-                e.printStackTrace();
             }
         }
     }
-    
     
     private long calculateAdaptiveTimeout(List<AgentLayer> layers) {
-        int totalAgents = layers.stream()
-            .mapToInt(l -> l.getAgents().size())
-            .sum();
-
-        // Base timeout + additional time per agent
-        long baseTimeout = 15000; // 15 seconds (was 5000)
-        long perAgentTimeout = 50; // 50ms per agent (was 10)
-
-        return baseTimeout + (totalAgents / 100) * perAgentTimeout;
-    }
-    
-    
-    private void printFinalStatistics() {
-        try {
-            // Create results directory
-            File resultsDir = new File(outputDir);
-            if (!resultsDir.exists()) {
-                if (!resultsDir.mkdirs()) {
-                    SimulationLogger.warning("Could not create output directory: " + outputDir);
-                    return;
-                }
-            }
-
-            // Generate filename
-            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
-            String safeProjectName = project.getName().replaceAll("[^a-zA-Z0-9_\\-]", "_");
-            String filename = String.format("%s/%s_final_stats_%s.txt", outputDir, safeProjectName, timestamp);
-
-            try (PrintWriter writer = new PrintWriter(new FileWriter(filename))) {
-                // Redirect console output to both console and file
-                ConsoleAndFileWriter dualWriter = new ConsoleAndFileWriter(writer);
-
-                dualWriter.println("\n=== Final Simulation Statistics ===");
-
-                // Agent statistics
-                int totalAgents = project.getAgentLayers().stream()
-                    .mapToInt(l -> l.getAgents().size())
-                    .sum();
-                dualWriter.printf("Total agents: %,d%n", totalAgents);
-
-                // Spatial registry statistics
-                SpatialRegistry registry = project.getSpatialRegistry();
-                Map<String, Object> stats = registry.getStatistics();
-
-                dualWriter.printf("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
-                    stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
-
-                // Layer statistics
-                for (AgentLayer layer : project.getAgentLayers()) {
-                    Map<String, Object> layerStats = layer.getStatistics();
-                    dualWriter.printf("%s: %,d agents%n", 
-                        layer.getName(), layerStats.get("agentCount"));
-                }
-
-                // Performance metrics
-                dualWriter.printf("Average tick time: %.2f ms%n", averageTickTime);
-                dualWriter.printf("Total ticks: %d%n", timeManager.getTickCount());
-
-                SimulationLogger.info("✅ Statistics saved to: " + filename);
-
-            } catch (IOException e) {
-                SimulationLogger.warning("Error writing statistics file: " + e.getMessage());
-                // Fallback to console only
-                printToConsoleOnly();
-            }
-
-        } catch (Exception e) {
-            SimulationLogger.warning("Error in statistics generation: " + e.getMessage());
-            printToConsoleOnly();
-        }
-        
-    }
-    
-    
-    private void printToConsoleOnly() {
-        SimulationLogger.info("\n=== Final Simulation Statistics ===");
-        
-        // Agent statistics
-        int totalAgents = project.getAgentLayers().stream()
-            .mapToInt(l -> l.getAgents().size())
-            .sum();
-        SimulationLogger.info("Total agents: %,d%n", totalAgents);
-        
-        // Spatial registry statistics
-        SpatialRegistry registry = project.getSpatialRegistry();
-        Map<String, Object> stats = registry.getStatistics();
-
-        SimulationLogger.info("Spatial registry: %,d inserts, %,d removes, %,d updates%n",
-            stats.get("totalInserts"), stats.get("totalRemoves"), stats.get("totalUpdates"));
-        
-        // Layer statistics
-        for (AgentLayer layer : project.getAgentLayers()) {
-            Map<String, Object> layerStats = layer.getStatistics();
-            SimulationLogger.info("%s: %,d agents%n", 
-                layer.getName(), layerStats.get("agentCount"));
-        }
-    }
-    
-    
-    // Helper class to write to both console and file
-    private static class ConsoleAndFileWriter {
-        private final PrintWriter fileWriter;
-
-        ConsoleAndFileWriter(PrintWriter fileWriter) {
-            this.fileWriter = fileWriter;
-        }
-
-        void println(String text) {
-            SimulationLogger.info(text);
-            fileWriter.println(text);
-        }
-
-        void printf(String format, Object... args) {
-            String text = String.format(format, args);
-            System.out.print(text);
-            fileWriter.print(text);
-        }
+        int totalAgents = layers.stream().mapToInt(l -> l.getAgents().size()).sum();
+        return 15000 + (totalAgents / 100) * 50;
     }
 
-    
-    
-    // Clean up all resources
     private void cleanupResources() {
         if (resourcesCleaned.compareAndSet(false, true)) {
-            SimulationLogger.info("\n=== Cleaning up simulation resources ===");
-            
-            // Shutdown executor service
+            SimulationLogger.info("=== Cleaning up simulation resources ===");
             if (simulationExecutor != null && !simulationExecutor.isTerminated()) {
                 try {
-                    SimulationLogger.info("Shutting down executor service...");
-                    boolean terminated = simulationExecutor.gracefulShutdown(30, TimeUnit.SECONDS);
-                    SimulationLogger.info("Executor shutdown: " + (terminated ? "successful" : "timed out"));
-                    
-                    // Print executor statistics
-                    SimulationLogger.info("Executor statistics: " + simulationExecutor.getStatistics());
-                    
+                    simulationExecutor.gracefulShutdown(30, TimeUnit.SECONDS);
                 } catch (InterruptedException e) {
-                    SimulationLogger.warning("Interrupted during executor shutdown");
                     Thread.currentThread().interrupt();
                     simulationExecutor.shutdownNow();
                 }
             }
-            
-            // Clean up agent layers
             if (project != null) {
-                SimulationLogger.info("Cleaning up agent layers...");
-                project.getAgentLayers().forEach(layer -> {
-                    AgentLayer al = (AgentLayer) layer; 
-                    al.shutdown();
-                });
-            }
-            
-            // Clean up spatial registry
-            if (spatialRegistry != null) {
-                SimulationLogger.info("Cleaning up spatial registry...");
-                // Add any spatial registry cleanup if needed
-            }
-            
-            // 4. Clean up raster layers
-            if (project != null) {
-                SimulationLogger.info("Cleaning up raster layers...");
+                project.getAgentLayers().forEach(AgentLayer::shutdown);
                 project.getLayers().forEach(layer -> {
                     if (layer instanceof MemoryMappedRasterLayer mmrl) {
                         mmrl.dispose();
                     }
                 });
             }
-            
-            // 5. Force garbage collection
-            SimulationLogger.info("Requesting garbage collection...");
             System.gc();
-            System.runFinalization();
-            
-            // 6. Print final resource statistics
-            SimulationLogger.info("\n=== Final Resource Statistics ===");
-            Map<String, Object> stats = resourceManager.getStatistics();
-            stats.forEach((key, value) -> SimulationLogger.info("%s: %s%n", key, value));
-            
-            SimulationLogger.info("=== Resource cleanup complete ===");
         }
     }
-    
-    
-    // Get engine statistics including resource usage
-    public Map<String, Object> getDetailedStatistics() {
-        Map<String, Object> stats = getState(); // From previous implementation
-        
-        // Add resource statistics
-        stats.put("resourceManager", resourceManager.getStatistics());
-        stats.put("executorService", simulationExecutor.getStatistics());
-        
-        // Add memory statistics
-        Runtime runtime = Runtime.getRuntime();
-        stats.put("memoryUsedMB", (runtime.totalMemory() - runtime.freeMemory()) / (1024.0 * 1024.0));
-        stats.put("memoryTotalMB", runtime.totalMemory() / (1024.0 * 1024.0));
-        stats.put("memoryMaxMB", runtime.maxMemory() / (1024.0 * 1024.0));
-        
-        // Add file descriptor statistics (if available)
-        try {
-            if (java.lang.management.ManagementFactory.getOperatingSystemMXBean() 
-                    instanceof com.sun.management.UnixOperatingSystemMXBean) {
-                com.sun.management.UnixOperatingSystemMXBean unixBean = 
-                    (com.sun.management.UnixOperatingSystemMXBean) 
-                    java.lang.management.ManagementFactory.getOperatingSystemMXBean();
-                stats.put("openFileDescriptors", unixBean.getOpenFileDescriptorCount());
-                stats.put("maxFileDescriptors", unixBean.getMaxFileDescriptorCount());
-            }
-        } catch (Exception e) {
-            // Not available on this JVM
-        }
-        
-        return stats;
-    }
-    
-    
+
     public void stop() {
         running.set(false);
-        SimulationLogger.info("Stopping simulation with resource cleanup...");
         cleanupResources();
     }
     
-    
     public Map<String, Object> getState() {
         Map<String, Object> state = new HashMap<>();
-        try {
-            state.put("running", running.get());
-            state.put("paused", paused.get());
-            state.put("tick", timeManager.getTickCount());
-            state.put("totalAgents", getTotalAgentCount());
-            state.put("avgTickTime", averageTickTime);
-            // Add timestamp
-            state.put("timestamp", System.currentTimeMillis());
-        } catch (Exception e) {
-            // If we can't get the state, return minimal info
-            state.put("error", "Could not get state: " + e.getMessage());
-            state.put("timestamp", System.currentTimeMillis());
-        }
+        state.put("running", running.get());
+        state.put("paused", paused.get());
+        state.put("tick", timeManager.getTickCount());
+        state.put("totalAgents", getTotalAgentCount());
+        state.put("avgTickTime", averageTickTime);
+        state.put("timestamp", System.currentTimeMillis());
         return state;
     }
     
-    
     private int getTotalAgentCount() {
-        return project.getAgentLayers().stream()
-            .mapToInt(l -> l.getAgents().size())
-            .sum();
+        return project.getAgentLayers().stream().mapToInt(l -> l.getAgents().size()).sum();
     }
     
-    
     private void reportProgress() {
-        // Find the Mosquitoes layer
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
             .filter(l -> l.getName().equalsIgnoreCase("Mosquitoes"))
             .findFirst().orElse(null);
 
-        long adults = 0;
-        long pupae = 0;
+        long adults = 0, pupae = 0;
         if (mosquitoLayer != null) {
             for (Agent agent : mosquitoLayer.getAgents()) {
                 if (agent instanceof LivingAgent la && la.isAlive()) {
-                    LifecycleStage stage = la.getStage();
-                    if (stage == LifecycleStage.ADULT) {
-                        adults++;
-                    } else if (stage == LifecycleStage.PUPA) {
-                        pupae++;
-                    }
+                    if (la.getStage() == LifecycleStage.ADULT) adults++;
+                    else if (la.getStage() == LifecycleStage.PUPA) pupae++;
                 }
             }
         }
 
-        long totalLarvae = 0;
-        long totalEggs = 0;
-        long tanksWithWater = 0;
+        long totalLarvae = 0, totalEggs = 0, tanksWithWater = 0;
         double avgWater = 0;
-        // Sum over all InertAgent (water tanks) across all layers
         for (AgentLayer layer : project.getAgentLayers()) {
             for (Agent agent : layer.getAgents()) {
                 if (agent instanceof InertAgent ia) {
@@ -1637,99 +862,44 @@ public class SimulationEngine implements Runnable {
                 }
             }
         }
-        
-        if (tanksWithWater > 0) {
-            SimulationLogger.info("Avg water volume: %.1f%% across %d tanks", 
-                avgWater / tanksWithWater, tanksWithWater);
-        }
 
         SimulationLogger.info(String.format("Tick: %d | Adults: %d | Pupae: %d | Larvae: %d | Eggs: %d | Memory: %.1f MB",
             timeManager.getTickCount(), adults, pupae, totalLarvae, totalEggs,
             Runtime.getRuntime().totalMemory() / (1024.0 * 1024.0)));
     }
     
-    
     private void adaptiveSleep(long tickDuration) {
-        long targetTickTime = 16_666_667L; // 60 FPS ≈ 16.67ms per tick
-        
+        long targetTickTime = 16_666_667L;
         if (tickDuration < targetTickTime) {
-            long sleepTime = targetTickTime - tickDuration;
             try {
-                TimeUnit.NANOSECONDS.sleep(sleepTime);
+                TimeUnit.NANOSECONDS.sleep(targetTickTime - tickDuration);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
             }
         }
     }
     
-    
-    private void logPerformance() {
-        double fps = 1000.0 / averageTickTime;
-        
-        SimulationLogger.info("[Perf] Tick %d: %.2f ms/tick (avg) | %.1f FPS | Agents: %d%n",
-            timeManager.getTickCount(), averageTickTime, fps, getTotalAgentCount());
-        
-        // Log layer statistics
-        layerStats.forEach((name, count) -> {
-            SimulationLogger.info("  %s: %,d agents%n", name, count.get());
-        });
-    }
-    
-    
     private void updatePerformanceMetrics(long tickDuration) {
         lastTickTime = tickDuration;
-        
-        // Calculate moving average
         if (averageTickTime == 0) {
-            averageTickTime = tickDuration / 1_000_000.0; // Convert to ms
+            averageTickTime = tickDuration / 1_000_000.0;
         } else {
             double alpha = 2.0 / (tickTimeWindow + 1);
-            averageTickTime = (1 - alpha) * averageTickTime + 
-                             alpha * (tickDuration / 1_000_000.0);
+            averageTickTime = (1 - alpha) * averageTickTime + alpha * (tickDuration / 1_000_000.0);
         }
     }
-    
     
     private void printExportStatus() {
-        SimulationLogger.info("[Export Status] Queue: %d, In Progress: %b, Executor Active: %b, Shutdown: %b%n",
-            exportQueue.size(), exportInProgress.get(), 
-            exportExecutor != null && !exportExecutor.isShutdown(),
-            exportExecutor != null && exportExecutor.isShutdown());
-
-        // Check if results directory exists and is writable
-        File resultsDir = new File(outputDir);
-        SimulationLogger.info("[Export Status] Results dir exists: %b, writable: %b%n",
-            resultsDir.exists(), resultsDir.canWrite());
-
-        if (resultsDir.exists()) {
-            File[] snapshotFiles = resultsDir.listFiles((dir, name) -> 
-                name.startsWith("snapshot_tick_") && name.endsWith(".csv"));
-            SimulationLogger.info("[Export Status] Existing snapshots: %d%n", 
-                snapshotFiles != null ? snapshotFiles.length : 0);
-        }
+        SimulationLogger.info("[Export Status] Queue: %d, Active: %b", exportQueue.size(), exportInProgress.get());
     }
 }package com.monadvsim.app.models.engine;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.time.LocalDateTime;
 import java.time.Duration;
 
-
 /**
  * Simulation Time Controller
- *
- * Manages simulation time progression (15-minute ticks)
- *
- * Tracks current date/time, tick count, and total simulation duration
- *
- * Provides frame indexing for climate data interpolation
- *
- * Converts between simulation time and data time steps
- * 
- * 
- * @author void
  */
-
 public class TimeManager {
     
     private final LocalDateTime startDateTime;
@@ -1737,32 +907,24 @@ public class TimeManager {
     private final LocalDateTime endDateTime;
     
     private long tickCount = 0;
-    private final Duration tickDuration;      // Usually 15 minutes
-    private final Duration dataStepDuration;  // Usually 1 hour (for ERA5)
+    private final Duration tickDuration;      
+    private final Duration dataStepDuration;  
     private long totalTicks = 0;
     
     public TimeManager(LocalDateTime start, int totalTicks, int tickMinutes) {
         this.startDateTime = start;
         this.currentDateTime = start;
         this.tickDuration = Duration.ofMinutes(tickMinutes);
-        this.dataStepDuration = Duration.ofHours(1); // Standard for ERA5-Land
+        this.dataStepDuration = Duration.ofHours(1);
         this.totalTicks = totalTicks;
-        // Calculate end date based on total ticks
         this.endDateTime = start.plus(tickDuration.multipliedBy(totalTicks));
     }
 
     public boolean tick() {
-        /*Update current tick and Date time*/
         currentDateTime = currentDateTime.plus(tickDuration);
         tickCount++;
         return currentDateTime.isBefore(endDateTime);
     }
-
-//    public int getCurrentFrameIndex() {
-//        /*Get current frame index*/
-//        Duration elapsed = Duration.between(startDateTime, currentDateTime);
-//        return (int) (elapsed.toHours()); // Simple mapping for hourly data
-//    }
 
     public double getInterpolationFactor() {
         long minutesIntoHour = currentDateTime.getMinute();
@@ -1774,31 +936,19 @@ public class TimeManager {
     public LocalDateTime getStartDateTime() { return startDateTime; }
     public LocalDateTime getEndDateTime() { return endDateTime; }
 
-    public long getTotalTicks() {
-        return totalTicks;
-    }
-
-    public void setTotalTicks(long totalTicks) {
-        this.totalTicks = totalTicks;
-    }
-    
-    public long getTickMinutes() {
-        return tickDuration.toMinutes();
-    }
+    public long getTotalTicks() { return totalTicks; }
+    public void setTotalTicks(long totalTicks) { this.totalTicks = totalTicks; }
+    public long getTickMinutes() { return tickDuration.toMinutes(); }
     
     public int getCurrentFrameIndex() {
-        // Offset the simulation time by 11.5 hours (41400 seconds)
-        // This aligns with the NetCDF data start
         Duration elapsed = Duration.between(startDateTime, currentDateTime);
         long seconds = elapsed.getSeconds();
-        // Add offset to match climate data
-        long offsetSeconds = 41400; // 11.5 hours
+        long offsetSeconds = 41400; // 11.5 hours alignment
         return (int) ((seconds + offsetSeconds) / 3600);
     }
-    
 }package com.monadvsim.app.models.engine;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.utils.SeedManager;
 import org.graalvm.polyglot.Context;
@@ -1810,7 +960,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
 
 public class RuleEngine {
 
@@ -1819,7 +968,6 @@ public class RuleEngine {
 
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
-            // Use a builder with explicit permissions and low resource limits
             return Context.newBuilder("js")
                     .allowAllAccess(true)
                     .allowHostAccess(HostAccess.ALL)
@@ -1836,15 +984,11 @@ public class RuleEngine {
     }
 
     public boolean evaluate(String condition, Agent agent, Project project) {
-        // Create a cache key that includes the condition and a hash of the agent's state
-        // This allows reuse across agents with similar states
         String stateHash = getAgentStateHash(agent);
         String cacheKey = condition + "|" + stateHash;
 
         Boolean cached = evaluationCache.get(cacheKey);
-        if (cached != null) {
-            return cached;
-        }
+        if (cached != null) return cached;
 
         Context context = threadLocalContext.get();
         context.enter();
@@ -1870,18 +1014,15 @@ public class RuleEngine {
 
     private String getAgentStateHash(Agent agent) {
         if (agent instanceof LivingAgent la) {
-            // Only include attributes that matter for rules
             StringBuilder sb = new StringBuilder();
             sb.append(la.getStage()).append("_");
-            sb.append((int)(la.getEnergy() * 10)).append("_"); // Round to 1 decimal
+            sb.append((int)(la.getEnergy() * 10)).append("_");
             sb.append(la.isGravid() ? "1" : "0").append("_");
             sb.append(la.isResting() ? "1" : "0");
-            // Age in buckets (not exact)
             int ageBucket = Math.min(la.getAge() / 10, 100);
             sb.append("_").append(ageBucket);
             return sb.toString();
         } else if (agent instanceof InertAgent ia) {
-            // For inert agents, use water volume bucket
             int waterBucket = (int)(ia.getWaterVolume() / 10);
             return "inert_" + waterBucket;
         }
@@ -1889,8 +1030,6 @@ public class RuleEngine {
     }
     
     private void populateBindings(Value bindings, Agent agent, Project project) {
-        // Reset all common bindings to safe defaults
-        // Agent basic properties
         bindings.putMember("agent", agent);
         
         if (agent instanceof LivingAgent la) {
@@ -1908,7 +1047,6 @@ public class RuleEngine {
             bindings.putMember("larvalCount", ia.getLarvalCount());
             bindings.putMember("capacity", ia.getCapacity());
         } else {
-            // Fallback for any agent type
             bindings.putMember("stage", "UNKNOWN");
             bindings.putMember("age", 0);
             bindings.putMember("energy", 0.0);
@@ -1919,8 +1057,6 @@ public class RuleEngine {
             bindings.putMember("y", agent != null ? agent.getY() : 0);
         }
 
-        // Environmental variables - always define with default 0.0 to avoid undefined
-        // First, get all layer names and tokens safely
         List<String> layerNames = project.getLayerNames();
         List<String> tokens = project.getTokens();
         if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
@@ -1928,33 +1064,18 @@ public class RuleEngine {
                 String token = tokens.get(i);
                 double x = agent != null ? agent.getX() : 0;
                 double y = agent != null ? agent.getY() : 0;
-                double value = getValueAt(project, layerNames.get(i), x, y);
-                bindings.putMember(token, value);
+                bindings.putMember(token, getValueAt(project, layerNames.get(i), x, y));
             }
-        } else {
-            SimulationLogger.warning("Layer names/tokens missing or mismatched; using defaults.");
         }
-        
-        // Also bind raw layer names for compatibility? Not needed.
-        // Ensure common tokens always exist (fallback)
+
         if (!bindings.hasMember("temperature")) {
             bindings.putMember("temperature", getValueAt(project, "t2m", agent.getX(), agent.getY()));
         }
         if (!bindings.hasMember("precipitation")) {
             bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
         }
-        if (!bindings.hasMember("population")) {
-            bindings.putMember("population", getValueAt(project, "Population", agent.getX(), agent.getY()));
-        }
-        if (!bindings.hasMember("building_density")) {
-            bindings.putMember("building_density", getValueAt(project, "Buildings", agent.getX(), agent.getY()));
-        }
-        if (!bindings.hasMember("elevation")) {
-            bindings.putMember("elevation", getValueAt(project, "Elevation", agent.getX(), agent.getY()));
-        }
     }
 
-    // ---------- Actions (unchanged, but ensure no null pointer) ----------
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
         switch (action.toLowerCase()) {
             case "die" -> executeDie(agent, layer);
@@ -1970,24 +1091,32 @@ public class RuleEngine {
             case "stop_resting" -> executeStopResting(agent, layer);
             case "die_exhaustion" -> executeDieExhaustion(agent, layer);
             case "rest_in_building" -> executeRestInBuilding(agent, project, layer);
-            case "pupate" -> executePupate(agent, layer);
-            case "emerge" -> executeEmerge(agent, layer);
+            case "pupate" -> executePupate(agent, project, layer);
+            case "emerge" -> executeEmerge(agent, project, layer);
         }
     }
     
-    private void executeEmerge(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
-            la.setStage(LifecycleStage.ADULT);
-            la.setEnergy(0.9);
-            SimulationLogger.info("[ACTION] %s PUPA → ADULT (forced)", la.getId());
-        }
-    }
-    
-    private void executePupate(Agent agent, AgentLayer layer) {
+    private void executePupate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.LARVA) {
-            la.setStage(LifecycleStage.PUPA);
-            la.setEnergy(0.6);
-            SimulationLogger.info("[ACTION] %s LARVA → PUPA (forced)", la.getId());
+            if (project != null) {
+                LifecycleModel model = project.getLifecycleModel();
+                if (model != null) {
+                    double tempKelvin = getValueAt(project, "t2m", agent.getX(), agent.getY());
+                    model.tryAdvanceFromLarva(la, tempKelvin);
+                }
+            }
+        }
+    }
+
+    private void executeEmerge(Agent agent, Project project, AgentLayer layer) {
+        if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.PUPA) {
+            if (project != null) {
+                LifecycleModel model = project.getLifecycleModel();
+                if (model != null) {
+                    double tempKelvin = getValueAt(project, "t2m", agent.getX(), agent.getY());
+                    model.tryAdvanceFromPupa(la, tempKelvin);
+                }
+            }
         }
     }
 
@@ -2000,9 +1129,7 @@ public class RuleEngine {
     }
 
     private void executeStopResting(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la) {
-            la.setResting(false);
-        }
+        if (agent instanceof LivingAgent la) la.setResting(false);
     }
 
     private void executeDieExhaustion(Agent agent, AgentLayer layer) {
@@ -2060,14 +1187,8 @@ public class RuleEngine {
     private void executeFeed(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
             Layer populationLayer = project.getLayerByName("Population");
-            if (populationLayer != null) {
-                double popDensity = populationLayer.getValueAt(agent.getX(), agent.getY());
-                if (popDensity > 0.01) {
-                    la.setEnergy(Math.min(1.0, la.getEnergy() + 0.2));
-                }
-            } else {
-                la.setEnergy(Math.min(1.0, la.getEnergy() + 0.1));
-            }
+            double popDensity = populationLayer != null ? populationLayer.getValueAt(agent.getX(), agent.getY()) : 0.0;
+            la.setEnergy(Math.min(1.0, la.getEnergy() + (popDensity > 0.01 ? 0.2 : 0.1)));
         }
     }
 
@@ -2075,8 +1196,7 @@ public class RuleEngine {
         if (agent instanceof LivingAgent la) {
             double step = project.getDefaultAgentStep();
             Random rng = SeedManager.getRandom();
-            la.move((rng.nextDouble() - 0.5) * step,
-                    (rng.nextDouble() - 0.5) * step);
+            la.move((rng.nextDouble() - 0.5) * step, (rng.nextDouble() - 0.5) * step);
             layer.updateAgentPositionImmediately(la);
         }
     }
@@ -2100,12 +1220,8 @@ public class RuleEngine {
     }
 
     private void executeDie(Agent agent, AgentLayer layer) {
-        if (agent instanceof LivingAgent la) {
-            la.setAlive(false);
-            layer.killAgentImmediately(agent.getId());
-        } else if (agent instanceof InertAgent) {
-            layer.killAgentImmediately(agent.getId());
-        }
+        if (agent instanceof LivingAgent la) la.setAlive(false);
+        layer.killAgentImmediately(agent.getId());
     }
 
     private void executeDryOut(Agent agent, AgentLayer layer) {
@@ -2127,24 +1243,20 @@ public class RuleEngine {
     }
 
     private void executeGetGravid(Agent agent) {
-        if (agent instanceof LivingAgent la) {
-            la.setGravid(true);
-        }
+        if (agent instanceof LivingAgent la) la.setGravid(true);
     }
 
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
-        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) {
-            return;
-        }
+        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
         double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
         double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
-        if (livestock <= 0) {
-            livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
-        }
+        if (livestock <= 0) livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
+        
         LifecycleModel model = project.getLifecycleModel();
         if (model == null) return;
         int eggsToLay = model.eggsToLay(temperature, livestock);
         if (eggsToLay <= 0) return;
+
         List<Agent> nearby = project.getSpatialRegistry()
                 .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
         for (Agent n : nearby) {
@@ -2156,7 +1268,6 @@ public class RuleEngine {
             }
         }
     }
-    
     
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
@@ -2171,11 +1282,9 @@ public class RuleEngine {
             double refillRate = Math.min(15.0, precipMm * 0.5);
 
             double oldWater = ia.getWaterVolume();
-            double newWater = oldWater - evaporationRate + refillRate;
-            double clampedWater = Math.max(0, Math.min(100, newWater));
+            double clampedWater = Math.max(0, Math.min(100, oldWater - evaporationRate + refillRate));
             ia.setWaterVolume(clampedWater);
 
-            // Only log if change > 5% (was 0.1%)
             if (Math.abs(clampedWater - oldWater) > 5.0) {
                 SimulationLogger.fine("[TANK] Water: %.1f%% -> %.1f%% at (%.6f, %.6f)",
                         oldWater, clampedWater, ia.getX(), ia.getY());
@@ -2193,26 +1302,13 @@ public class RuleEngine {
         evaluationCache.clear();
     }
 }package com.monadvsim.app.models.engine;
+
 import com.monadvsim.app.models.utils.SimulationLogger;
-
-
 import java.util.concurrent.atomic.AtomicLong;
-
 
 /**
  * Performance Metrics Tracker
- *
- * Records simulation performance statistics
- *
- * Tracks agents processed, rules evaluated, spatial queries, births/deaths
- *
- * Provides performance reporting functionality
- * 
- * 
- * @author void
  */
-
-
 public class SimulationMetrics {
     private final AtomicLong agentsProcessed = new AtomicLong(0);
     private final AtomicLong rulesEvaluated = new AtomicLong(0);
@@ -2225,36 +1321,18 @@ public class SimulationMetrics {
         this.startTime = System.currentTimeMillis();
     }
     
-    public void recordAgentProcessed() {
-        agentsProcessed.incrementAndGet();
-    }
-    
-    public void recordRuleEvaluated() {
-        rulesEvaluated.incrementAndGet();
-    }
-    
-    public void recordSpatialQuery() {
-        spatialQueries.incrementAndGet();
-    }
-    
-    public void recordBirth() {
-        births.incrementAndGet();
-    }
-    
-    public void recordDeath() {
-        deaths.incrementAndGet();
-    }
+    public void recordAgentProcessed() { agentsProcessed.incrementAndGet(); }
+    public void recordRuleEvaluated() { rulesEvaluated.incrementAndGet(); }
+    public void recordSpatialQuery() { spatialQueries.incrementAndGet(); }
+    public void recordBirth() { births.incrementAndGet(); }
+    public void recordDeath() { deaths.incrementAndGet(); }
     
     public void printReport() {
-        long currentTime = System.currentTimeMillis();
-        double elapsedSeconds = (currentTime - startTime) / 1000.0;
-        
+        double elapsedSeconds = (System.currentTimeMillis() - startTime) / 1000.0;
         SimulationLogger.info("\n=== SIMULATION METRICS ===");
         SimulationLogger.info("Elapsed Time: %.2f seconds%n", elapsedSeconds);
-        SimulationLogger.info("Agents Processed: %,d (%.0f/sec)%n", 
-            agentsProcessed.get(), agentsProcessed.get() / elapsedSeconds);
-        SimulationLogger.info("Rules Evaluated: %,d (%.0f/sec)%n", 
-            rulesEvaluated.get(), rulesEvaluated.get() / elapsedSeconds);
+        SimulationLogger.info("Agents Processed: %,d (%.0f/sec)%n", agentsProcessed.get(), agentsProcessed.get() / elapsedSeconds);
+        SimulationLogger.info("Rules Evaluated: %,d (%.0f/sec)%n", rulesEvaluated.get(), rulesEvaluated.get() / elapsedSeconds);
         SimulationLogger.info("Spatial Queries: %,d%n", spatialQueries.get());
         SimulationLogger.info("Births: %,d | Deaths: %,d%n", births.get(), deaths.get());
         SimulationLogger.info("=========================\n");
@@ -2267,61 +1345,40 @@ public class SimulationMetrics {
         births.set(0);
         deaths.set(0);
     }
-}
-package com.monadvsim.app.models.engine;
-import com.monadvsim.app.models.utils.SimulationLogger;
+}package com.monadvsim.app.models.engine;
 
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.LivingAgent;
+
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Agent LifeCycle Controller
- *
- * Manages agent birth, death, and movement events in batches
- *
- * Implements object pooling for agent reuse (reduces GC pressure)
- *
- * Processes lifeCycle events asynchronously using executor service
- *
- * Coordinates with SpatialRegistry for spatial updates
- *
- * Provides statistics on agent lifeCycle events
- * 
- * @author void
  */
-
-
-
 public class AgentLifeCycleManager {
     private final SpatialRegistry spatialRegistry;
     
-    // Lifecycle queues
     private final Queue<Agent> birthQueue = new ConcurrentLinkedQueue<>();
     private final Queue<String> deathQueue = new ConcurrentLinkedQueue<>();
     private final Queue<Agent> moveQueue = new ConcurrentLinkedQueue<>();
     
-    // Agent pools for object reuse (reduces GC)
     private final Map<Class<?>, Queue<Agent>> agentPools = new ConcurrentHashMap<>();
     private final int maxPoolSize = 10000;
     
-    // Statistics
     private final AtomicInteger totalBirths = new AtomicInteger(0);
     private final AtomicInteger totalDeaths = new AtomicInteger(0);
     private final AtomicInteger totalMoves = new AtomicInteger(0);
     private final AtomicInteger poolHits = new AtomicInteger(0);
     private final AtomicInteger poolMisses = new AtomicInteger(0);
     
-    // Batch processing
     private final int batchSize = 1000;
     private final ExecutorService lifecycleExecutor;
     
     public AgentLifeCycleManager(SpatialRegistry spatialRegistry) {
         this.spatialRegistry = spatialRegistry;
-        
-        // Create executor for lifecycle processing
         int processors = Runtime.getRuntime().availableProcessors();
         this.lifecycleExecutor = Executors.newFixedThreadPool(
             Math.max(2, processors / 2),
@@ -2331,96 +1388,54 @@ public class AgentLifeCycleManager {
                 public Thread newThread(Runnable r) {
                     Thread t = new Thread(r, "Lifecycle-" + count.getAndIncrement());
                     t.setDaemon(true);
-                    t.setPriority(Thread.NORM_PRIORITY);
                     return t;
                 }
             }
         );
-        
-        // Initialize agent pools
         initializeAgentPools();
     }
     
     private void initializeAgentPools() {
-        // Initialize pools for common agent types
         agentPools.put(LivingAgent.class, new ConcurrentLinkedQueue<>());
-        // Add more agent types as needed
     }
     
-    /**
-     * Schedule an agent for birth (creation)
-     */
     public void scheduleBirth(Agent agent) {
         if (agent == null) return;
-        
         birthQueue.offer(agent);
         totalBirths.incrementAndGet();
     }
     
-    /**
-     * Schedule multiple agents for birth
-     */
     public void scheduleBirths(Collection<Agent> agents) {
         if (agents == null || agents.isEmpty()) return;
-        
         birthQueue.addAll(agents);
         totalBirths.addAndGet(agents.size());
     }
     
-    /**
-     * Schedule an agent for death (removal)
-     */
     public void scheduleDeath(String agentId) {
         if (agentId == null) return;
-        
         deathQueue.offer(agentId);
         totalDeaths.incrementAndGet();
     }
     
-    /**
-     * Schedule an agent for position update
-     */
     public void scheduleMove(Agent agent) {
         if (agent == null) return;
-        
         moveQueue.offer(agent);
         totalMoves.incrementAndGet();
     }
     
-    /**
-     * Process all scheduled lifecycle events
-     * Called at the end of each simulation tick
-     */
     public void processLifecycleEvents() {
-        // Process in parallel batches for performance
         List<CompletableFuture<Void>> futures = new ArrayList<>();
+        if (!birthQueue.isEmpty()) futures.add(processBirthsBatch());
+        if (!deathQueue.isEmpty()) futures.add(processDeathsBatch());
+        if (!moveQueue.isEmpty()) futures.add(processMovesBatch());
         
-        // Process births
-        if (!birthQueue.isEmpty()) {
-            futures.add(processBirthsBatch());
-        }
-        
-        // Process deaths
-        if (!deathQueue.isEmpty()) {
-            futures.add(processDeathsBatch());
-        }
-        
-        // Process moves
-        if (!moveQueue.isEmpty()) {
-            futures.add(processMovesBatch());
-        }
-        
-        // Wait for all processing to complete
         try {
             CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            SimulationLogger.severe("Lifecycle processing interrupted");
         } catch (ExecutionException e) {
             SimulationLogger.severe("Error in lifecycle processing: " + e.getCause().getMessage());
         }
-        
-        // Apply pending changes to spatial registry
         spatialRegistry.applyPendingChanges();
     }
     
@@ -2428,15 +1443,11 @@ public class AgentLifeCycleManager {
         return CompletableFuture.runAsync(() -> {
             List<Agent> batch = new ArrayList<>(batchSize);
             Agent agent;
-            
             while ((agent = birthQueue.poll()) != null && batch.size() < batchSize) {
                 batch.add(agent);
             }
-            
             if (!batch.isEmpty()) {
                 spatialRegistry.registerAgents(batch);
-                
-                // Return agents to pool if they die immediately (edge case)
                 for (Agent a : batch) {
                     if (a instanceof LivingAgent la && !la.isAlive()) {
                         returnToPool(a);
@@ -2448,126 +1459,82 @@ public class AgentLifeCycleManager {
     
     private CompletableFuture<Void> processDeathsBatch() {
         return CompletableFuture.runAsync(() -> {
-            List<String> batch = new ArrayList<>(batchSize * 10); // Larger batch
+            List<String> batch = new ArrayList<>(batchSize * 10);
             String agentId;
-
             while ((agentId = deathQueue.poll()) != null && batch.size() < batchSize * 10) {
                 batch.add(agentId);
             }
-
             if (!batch.isEmpty()) {
-                // Use bulk unregister instead of individual calls
                 spatialRegistry.unregisterAgents(batch);
             }
         }, lifecycleExecutor);
     }
     
-    
     private CompletableFuture<Void> processMovesBatch() {
         return CompletableFuture.runAsync(() -> {
             List<Agent> batch = new ArrayList<>(batchSize);
             Agent agent;
-            
             while ((agent = moveQueue.poll()) != null && batch.size() < batchSize) {
                 batch.add(agent);
             }
-            
             for (Agent a : batch) {
                 spatialRegistry.updateAgentPosition(a);
             }
         }, lifecycleExecutor);
     }
     
-    /**
-     * Create a new agent using object pool
-     */
     public <T extends Agent> T createAgent(Class<T> agentClass, double x, double y) {
         Queue<Agent> pool = agentPools.get(agentClass);
-        
         if (pool != null && !pool.isEmpty()) {
-            // Reuse agent from pool
             T agent = agentClass.cast(pool.poll());
             if (agent != null) {
-                // Reset agent state
                 resetAgent(agent, x, y);
                 poolHits.incrementAndGet();
                 return agent;
             }
         }
-        
         poolMisses.incrementAndGet();
-        
-        // Create new agent
         return createNewAgent(agentClass, x, y);
     }
     
     @SuppressWarnings("unchecked")
     private <T extends Agent> T createNewAgent(Class<T> agentClass, double x, double y) {
-        // Create new instance based on class
         if (agentClass.equals(LivingAgent.class)) {
             return (T) new LivingAgent(x, y);
         }
-        // Add more agent types as needed
-        
         throw new IllegalArgumentException("Unsupported agent class: " + agentClass);
     }
     
     private void resetAgent(Agent agent, double x, double y) {
         agent.setX(x);
         agent.setY(y);
-        
         if (agent instanceof LivingAgent la) {
             la.setAlive(true);
             la.setAge(0);
             la.setGravid(false);
             la.setEnergy(1.0);
         }
-        // Reset other agent types as needed
     }
     
-    /**
-     * Return agent to pool for reuse
-     */
     public void returnToPool(Agent agent) {
         if (agent == null) return;
-        
-        Class<?> agentClass = agent.getClass();
-        Queue<Agent> pool = agentPools.get(agentClass);
-        
+        Queue<Agent> pool = agentPools.get(agent.getClass());
         if (pool != null && pool.size() < maxPoolSize) {
             pool.offer(agent);
         }
     }
     
-    /**
-     * Immediate birth (for time-critical operations)
-     */
     public Agent immediateBirth(Class<? extends Agent> agentClass, double x, double y) {
         Agent agent = createAgent(agentClass, x, y);
         spatialRegistry.registerAgent(agent);
         return agent;
     }
     
-    /**
-     * Immediate death
-     */
-    public void immediateDeath(String agentId) {
-        spatialRegistry.unregisterAgent(agentId);
-    }
+    public void immediateDeath(String agentId) { spatialRegistry.unregisterAgent(agentId); }
+    public void immediateMove(Agent agent) { spatialRegistry.updateAgentPosition(agent); }
     
-    /**
-     * Immediate move update
-     */
-    public void immediateMove(Agent agent) {
-        spatialRegistry.updateAgentPosition(agent);
-    }
-    
-    /**
-     * Get statistics
-     */
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
-        
         stats.put("pendingBirths", birthQueue.size());
         stats.put("pendingDeaths", deathQueue.size());
         stats.put("pendingMoves", moveQueue.size());
@@ -2576,27 +1543,14 @@ public class AgentLifeCycleManager {
         stats.put("totalMoves", totalMoves.get());
         stats.put("poolHits", poolHits.get());
         stats.put("poolMisses", poolMisses.get());
-        
-        // Pool statistics
-        Map<String, Integer> poolStats = new HashMap<>();
-        for (Map.Entry<Class<?>, Queue<Agent>> entry : agentPools.entrySet()) {
-            poolStats.put(entry.getKey().getSimpleName(), entry.getValue().size());
-        }
-        stats.put("agentPools", poolStats);
-        
         return stats;
     }
     
-    /**
-     * Clear all queues and pools
-     */
     public void clear() {
         birthQueue.clear();
         deathQueue.clear();
         moveQueue.clear();
-        
         agentPools.values().forEach(Queue::clear);
-        
         totalBirths.set(0);
         totalDeaths.set(0);
         totalMoves.set(0);
@@ -2604,9 +1558,6 @@ public class AgentLifeCycleManager {
         poolMisses.set(0);
     }
     
-    /**
-     * Shutdown lifecycle executor
-     */
     public void shutdown() {
         lifecycleExecutor.shutdown();
         try {
@@ -2624,15 +1575,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 
 /**
- * Species‑specific parameters for the temperature‑dependent
- * life‑cycle model (Komi et al. 2025 ODE formulation).
- * All rates are per day, temperature in Celsius.
+ * Species‑specific parameters for the temperature‑dependent life‑cycle model.
  */
 public class SpeciesParameters implements Serializable {
 
     private static final long serialVersionUID = 20250501L;
 
-    // ---------- Egg development (exponential) ----------
     @JsonProperty("egg_dev_rho")
     public double eggDev_rho = 0.01107;
     @JsonProperty("egg_dev_k")
@@ -2642,7 +1590,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("egg_dev_lambda")
     public double eggDev_lambda = -1.14079;
 
-    // ---------- Larva development (Brière) ----------
     @JsonProperty("larva_dev_a")
     public double larvaDev_a = 3.285e-5;
     @JsonProperty("larva_dev_Tmin")
@@ -2652,7 +1599,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("larva_dev_m")
     public double larvaDev_m = 2.169;
 
-    // ---------- Pupa development (exponential) ----------
     @JsonProperty("pupa_dev_rho")
     public double pupaDev_rho = 0.0096287;
     @JsonProperty("pupa_dev_k")
@@ -2662,7 +1608,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("pupa_dev_lambda")
     public double pupaDev_lambda = -1.1507102;
 
-    // ---------- Egg mortality (exp‑quadratic) ----------
     @JsonProperty("egg_mort_b1")
     public double eggMort_b1 = 3.572876;
     @JsonProperty("egg_mort_b2")
@@ -2670,7 +1615,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("egg_mort_b3")
     public double eggMort_b3 = 0.004941;
 
-    // ---------- Larva mortality (exp‑quadratic) ----------
     @JsonProperty("larva_mort_b1")
     public double larvaMort_b1 = 3.572876;
     @JsonProperty("larva_mort_b2")
@@ -2678,7 +1622,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("larva_mort_b3")
     public double larvaMort_b3 = 0.004941;
 
-    // ---------- Pupa mortality (exp‑quadratic) ----------
     @JsonProperty("pupa_mort_b1")
     public double pupaMort_b1 = 5.882576;
     @JsonProperty("pupa_mort_b2")
@@ -2686,7 +1629,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("pupa_mort_b3")
     public double pupaMort_b3 = 0.009458;
 
-    // ---------- Fecundity (eggs/female/day) ----------
     @JsonProperty("fecundity_rmax")
     public double fecundity_rmax = 1.571304;
     @JsonProperty("fecundity_Topt")
@@ -2694,23 +1636,17 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("fecundity_c")
     public double fecundity_c = -0.007832;
 
-    // ---------- Adult mortality (constant 1/day) ----------
     @JsonProperty("adult_mortality_per_day")
     public double adultMortalityPerDay = 1.0 / 240.0;
-    // for temperature driven adult mortality
-    @JsonProperty("adult_mort_b1") public double adultMort_b1;
-    @JsonProperty("adult_mort_b2") public double adultMort_b2;
-    @JsonProperty("adult_mort_b3") public double adultMort_b3;
+    @JsonProperty("adult_mort_b1") public double adultMort_b1 = 0;
+    @JsonProperty("adult_mort_b2") public double adultMort_b2 = 0;
+    @JsonProperty("adult_mort_b3") public double adultMort_b3 = 0;
 
-    // ---------- Sex ratio (proportion females) ----------
     @JsonProperty("sex_ratio")
     public double sexRatio = 0.5;
 
-    // ---------- Host carrying capacity scaling (optional) ----------
     @JsonProperty("host_carrying_capacity_base")
     public double hostCarryingCapacityBase = 1.0;
-    
-
 
     public SpeciesParameters() {}
 }package com.monadvsim.app.models.services;
@@ -2731,7 +1667,6 @@ import java.util.logging.Logger;
 
 /**
  * Factory for creating layers from files based on file type detection.
- * Supports: GeoTIFF, NetCDF, Shapefile, CSV
  */
 public class LayerFactory {
     
@@ -2743,17 +1678,10 @@ public class LayerFactory {
         this.persistenceService = new ProjectPersistenceService();
     }
     
-    /**
-     * Create a layer from a file path.
-     * Automatically detects file type and returns appropriate layer.
-     */
     public Layer createLayer(String filePath, String layerName) throws IOException {
         return createLayer(filePath, layerName, null);
     }
     
-    /**
-     * Create a layer from a file path with optional variable name for NetCDF.
-     */
     public Layer createLayer(String filePath, String layerName, String variableName) throws IOException {
         File file = new File(filePath);
         if (!file.exists()) {
@@ -2761,92 +1689,55 @@ public class LayerFactory {
         }
         
         String extension = getFileExtension(filePath).toLowerCase();
-        
-        SimulationLogger.info("Creating layer '%s' from %s (type: %s)", 
-            layerName, filePath, extension);
+        SimulationLogger.info("Creating layer '%s' from %s (type: %s)", layerName, filePath, extension);
         
         switch (extension) {
             case "tif":
             case "tiff":
             case "geotiff":
                 return createRasterLayer(filePath, layerName);
-                
             case "nc":
             case "netcdf":
                 return createNetCDFLayer(filePath, layerName, variableName);
-                
             case "shp":
                 return createVectorLayer(filePath, layerName);
-                
             case "csv":
                 return createOccurrenceLayer(filePath, layerName);
-                
             default:
                 throw new IOException("Unsupported file type: " + extension);
         }
     }
     
-    /**
-     * Create multiple layers from a NetCDF file.
-     * Detects all climate variables and creates InterpolatedRasterLayer for each.
-     */
     public List<Layer> createLayersFromNetCDF(String filePath) throws IOException {
         List<Layer> layers = new ArrayList<>();
         
         try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
             for (Variable var : ncfile.getVariables()) {
                 String varName = var.getShortName();
+                if (isCoordinateVariable(varName)) continue;
                 
-                // Skip coordinate variables
-                if (isCoordinateVariable(varName)) {
-                    continue;
-                }
-                
-                String layerName = varName;
-                SimulationLogger.info("Detected NetCDF variable: %s", varName);
-                
-                // Map to readable names
-                switch (varName) {
-                    case "t2m":
-                        layerName = "Temperature";
-                        break;
-                    case "tp":
-                        layerName = "Precipitation";
-                        break;
-                    case "sp":
-                        layerName = "SurfacePressure";
-                        break;
-                    case "u10":
-                        layerName = "WindU";
-                        break;
-                    case "v10":
-                        layerName = "WindV";
-                        break;
-                }
+                String layerName = switch (varName) {
+                    case "t2m" -> "Temperature";
+                    case "tp" -> "Precipitation";
+                    case "sp" -> "SurfacePressure";
+                    case "u10" -> "WindU";
+                    case "v10" -> "WindV";
+                    default -> varName;
+                };
                 
                 InterpolatedRasterLayer layer = new InterpolatedRasterLayer(layerName, timeManager);
                 layer.loadFromNetCDF(filePath, varName);
                 layers.add(layer);
-                SimulationLogger.info("  Created layer: %s from variable %s", layerName, varName);
             }
         }
-        
         return layers;
     }
     
-    /**
-     * Load multiple NetCDF files (e.g., for different years).
-     * Each file can have multiple variables.
-     */
     public List<Layer> createLayersFromMultipleNetCDF(List<String> filePaths) throws IOException {
         List<Layer> allLayers = new ArrayList<>();
-        
         for (String filePath : filePaths) {
-            SimulationLogger.info("Loading NetCDF: %s", filePath);
-            List<Layer> layers = createLayersFromNetCDF(filePath);
-            allLayers.addAll(layers);
+            allLayers.addAll(createLayersFromNetCDF(filePath));
         }
-        
         return allLayers;
     }
     
@@ -2862,17 +1753,14 @@ public class LayerFactory {
     
     private Layer createNetCDFLayer(String filePath, String layerName, String variableName) throws IOException {
         if (variableName == null) {
-            // If no variable specified, try to detect
             try (NetcdfFile ncfile = NetcdfFiles.open(filePath)) {
                 for (Variable var : ncfile.getVariables()) {
                     if (!isCoordinateVariable(var.getShortName())) {
                         variableName = var.getShortName();
-                        SimulationLogger.info("Auto-detected variable: %s", variableName);
                         break;
                     }
                 }
             }
-            
             if (variableName == null) {
                 throw new IOException("No climate variable found in NetCDF file");
             }
@@ -2883,20 +1771,12 @@ public class LayerFactory {
         return layer;
     }
     
-    private Layer createVectorLayer(String filePath, String layerName) throws IOException {
-        VectorLayer layer = new VectorLayer(layerName);
-        // Load shapefile geometry
-        // Implementation depends on your VectorLayer implementation
-        SimulationLogger.info("Vector layer loaded: %s", layerName);
-        return layer;
+    private Layer createVectorLayer(String filePath, String layerName) {
+        return new VectorLayer(layerName);
     }
     
-    private Layer createOccurrenceLayer(String filePath, String layerName) throws IOException {
-        // For occurrence points - could be a special layer type
-        SimulationLogger.info("Occurrence data loaded: %s", layerName);
-        // Return a VectorLayer or custom OccurrenceLayer
-        VectorLayer layer = new VectorLayer(layerName);
-        return layer;
+    private Layer createOccurrenceLayer(String filePath, String layerName) {
+        return new VectorLayer(layerName);
     }
     
     private String getFileExtension(String path) {
@@ -2911,14 +1791,12 @@ public class LayerFactory {
                varName.equals("step") || varName.equals("valid_time");
     }
 }package com.monadvsim.app.models.services;
-import com.monadvsim.app.models.utils.SimulationLogger;
 
-import com.monadvsim.app.models.engine.SpatialRegistry;
-import com.monadvsim.app.models.engine.TimeManager;
+import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.*;
-import com.monadvsim.app.models.utils.ClimateDatasetManager;
 import com.monadvsim.app.models.utils.ResourceManager;
 import com.monadvsim.app.models.utils.ResourceManager.GridCoverageWrapper;
+
 import java.awt.image.RenderedImage;
 import java.io.*;
 import java.util.ArrayList;
@@ -2929,30 +1807,13 @@ import org.geotools.coverage.grid.io.GridCoverage2DReader;
 import org.geotools.coverage.grid.io.GridFormatFinder;
 import org.geotools.geometry.jts.ReferencedEnvelope;
 
-
 /**
  * Data Loading/Export Service
- *
- * Loads raster data (TIFF/GeoTIFF) using GeoTools
- *
- * Loads climate data from NetCDF files
- *
- * Exports simulation snapshots to CSV with comprehensive agent data
- *
- * Handles coordinate transformations and data formatting
- *
- * Manages file I/O for simulation results
- * 
- * 
- * @author void
  */
-
-
 public class ProjectPersistenceService {
     
     private final ResourceManager resourceManager = ResourceManager.getInstance();
 
-    // Helper to initialize any TIFF (Population, Buildings, Elevation)
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
         SimulationLogger.info("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
         
@@ -2962,356 +1823,72 @@ public class ProjectPersistenceService {
         }
         
         try {
-            // Find appropriate reader for the raster format
             AbstractGridFormat format = GridFormatFinder.findFormat(file);
-            if (format == null) {
-                throw new IOException("No suitable raster format found for: " + filePath);
-            }
+            if (format == null) throw new IOException("No suitable raster format found for: " + filePath);
             
             GridCoverage2DReader reader = format.getReader(file);
-            if (reader == null) {
-                throw new IOException("Unable to create reader for: " + filePath);
-            }
+            if (reader == null) throw new IOException("Unable to create reader for: " + filePath);
             
-            // Read the coverage
             GridCoverage2D coverage = reader.read(null);
-            if (coverage == null) {
-                throw new IOException("Unable to read coverage from: " + filePath);
-            }
+            if (coverage == null) throw new IOException("Unable to read coverage from: " + filePath);
             
-            // Get the raster dimensions
             RenderedImage image = coverage.getRenderedImage();
             int width = image.getWidth();
             int height = image.getHeight();
             
-            SimulationLogger.info("  Raster dimensions: %d x %d%n", width, height);
-            
-            // Get the geographic bounds
             ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
-            double minX = envelope.getMinX();
-            double maxX = envelope.getMaxX();
-            double minY = envelope.getMinY();
-            double maxY = envelope.getMaxY();
+            layer.initialize(width, height, 1);
+            layer.setBounds(envelope.getMinX(), envelope.getMaxX(), envelope.getMinY(), envelope.getMaxY());
             
-            SimulationLogger.info("  Bounds: [%.6f, %.6f, %.6f, %.6f]%n", 
-                minX, minY, maxX, maxY);
-            
-            // Initialize the layer with correct dimensions
-            layer.initialize(width, height, 1); // Static raster has 1 frame
-            layer.setBounds(minX, maxX, minY, maxY);
-            
-            // Read the raster data
             readRasterData(layer, image, width, height);
             
             GridCoverageWrapper wrapper = new GridCoverageWrapper(coverage, filePath);
-            // Track resource for cleanup
             resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
             
             SimulationLogger.info("✅ Successfully loaded raster: " + layer.getName());
-            
         } catch (Exception e) {
             SimulationLogger.severe("❌ Error loading raster: " + filePath + " - " + e.getMessage());
-            e.printStackTrace();
-            
-            // Fallback: create a 100x100 grid with default values
-            SimulationLogger.info("⚠️ Using fallback 100x100 grid for: " + layer.getName());
             fallbackRaster(layer);
         }
     }
     
-    
     private void fallbackRaster(RasterLayer layer) {
-        // Create a simple 100x100 grid with some variation
         layer.initialize(100, 100, 1);
-        layer.setBounds(-180, 180, -90, 90); // World bounds
-        
+        layer.setBounds(-180, 180, -90, 90);
         for (int x = 0; x < 100; x++) {
             for (int y = 0; y < 100; y++) {
-                // Create some artificial data pattern
                 double value = 1.0 + Math.sin(x * 0.1) * Math.cos(y * 0.1) * 0.5;
                 layer.setData(0, x, y, value);
             }
         }
     }
 
-    
     private void readRasterData(RasterLayer layer, RenderedImage image, int width, int height) {
-        // Get the raster data
         java.awt.image.Raster raster = image.getData();
-        
-        // Read pixel values
-        double[] pixel = new double[1]; // Assuming single band for now
+        double[] pixel = new double[1];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 try {
                     raster.getPixel(x, y, pixel);
                     layer.setData(0, x, y, pixel[0]);
                 } catch (Exception e) {
-                    // If there's an error reading a pixel, use 0.0
                     layer.setData(0, x, y, 0.0);
                 }
             }
         }
-        
-        // Print sample values for verification
-        SimulationLogger.info("  Sample values at corners: [%.2f, %.2f, %.2f, %.2f]%n",
-            layer.getDataGrid()[0][0][0],
-            layer.getDataGrid()[0][width-1][0],
-            layer.getDataGrid()[0][0][height-1],
-            layer.getDataGrid()[0][width-1][height-1]
-        );
     }
-    
-    
-    // New method to handle dual-variable NetCDF (Temp + Rain)
-    public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) throws Exception {
-        // This method should map '2m_temperature' -> tempLayer
-        // and 'total_precipitation' -> rainLayer
+
+    public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) {
         SimulationLogger.info("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
-        
-        // Fallback to 22C and 0.0mm rain if file read fails
         for (int f = 0; f < 3000; f++) {
             for (int x = 0; x < 100; x++) {
                 for (int y = 0; y < 100; y++) {
-                    tempLayer.setData(f, x, y, 295.15); // 22 Celsius
-                    rainLayer.setData(f, x, y, 0.001);  // Trace rain
+                    tempLayer.setData(f, x, y, 295.15);
+                    rainLayer.setData(f, x, y, 0.001);
                 }
             }
         }
     }
-
-    public boolean exportToCSVSimple(Project project, String outputPath, long tickCount) {
-        try {
-            File dir = new File("results");
-            if (!dir.exists()) {
-                if (!dir.mkdirs()) {
-                    SimulationLogger.severe("[Export] ERROR: Could not create results directory");
-                    return false;
-                }
-            }
-
-            File file = new File(outputPath);
-            if (file.exists()) {
-                SimulationLogger.info("[Export] WARNING: File already exists, overwriting: " + outputPath);
-            }
-
-            try (PrintWriter writer = new PrintWriter(new FileWriter(file))) {
-                // Write header
-                writer.println("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid");
-
-                // Write data
-                for (AgentLayer layer : project.getAgentLayers()) {
-                    String layerName = layer.getName();
-                    // Get a thread-safe copy of agents
-                    List<Agent> agents;
-                    synchronized (layer) {
-                        agents = new ArrayList<>(layer.getAgents());
-                    }
-
-                    for (Agent agent : agents) {
-                        StringBuilder row = new StringBuilder();
-                        row.append(tickCount).append(",");
-                        row.append(agent.getId()).append(",");
-                        row.append(layerName).append(",");
-                        row.append(agent.getClass().getSimpleName()).append(",");
-                        row.append(String.format("%.6f", agent.getX())).append(",");
-                        row.append(String.format("%.6f", agent.getY())).append(",");
-
-                        if (agent instanceof LivingAgent la) {
-                            row.append(la.isAlive()).append(",");
-                            row.append(la.getAge()).append(",");
-                            row.append(la.getStage()).append(",");
-                            row.append(String.format("%.3f", la.getEnergy())).append(",");
-                            row.append(la.isGravid());
-                        } else if (agent instanceof InertAgent ia) {
-                            row.append("true,"); // Alive placeholder
-                            row.append("0,"); // Age
-                            row.append("INERT,");
-                            row.append("0,"); // Energy
-                            row.append("false");
-                        } else {
-                            row.append("true,0,UNKNOWN,0,false");
-                        }
-
-                        writer.println(row.toString());
-                    }
-                }
-
-                writer.flush();
-                System.out.println("[Export] SUCCESS: Exported " + file.getAbsolutePath() + 
-                                 " (" + file.length() + " bytes)");
-                return true;
-
-            } catch (IOException e) {
-                SimulationLogger.severe("[Export] ERROR writing CSV: " + e.getMessage());
-                return false;
-            }
-
-        } catch (Exception e) {
-            SimulationLogger.severe("[Export] CRITICAL ERROR: " + e.getMessage());
-            e.printStackTrace();
-            return false;
-        }
-    }
-    
-    
-//    public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
-//        SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d%n", outputPath, tickCount);
-//        SimulationLogger.info("[Export-CSV] Project has %d agent layers%n", project.getAgentLayers().size());
-//    
-//        long startTime = System.currentTimeMillis();
-//    
-//        try (PrintWriter writer = new PrintWriter(new FileWriter(outputPath))) {
-//            SimulationLogger.info("[Export-CSV] File writer created successfully");
-//        
-//            // Collect all layers
-//            List<Layer> allLayers = project.getLayers();
-//            List<AgentLayer> agentLayers = project.getAgentLayers();
-//
-//         
-//            // Build header dynamically
-//            StringBuilder header = new StringBuilder();
-//            header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,"
-//                    + "Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
-//
-//            // Add raster layer columns
-//            for (Layer layer : allLayers) {
-//                if (layer instanceof RasterLayer || layer instanceof InterpolatedRasterLayer) {
-//                    header.append(",").append(layer.getName());
-//                }
-//            }
-//
-//            // Add agent layer statistics (nearby counts)
-////            for (AgentLayer agentLayer : agentLayers) {
-////                header.append(",Nearby_").append(agentLayer.getName().replace(" ", "_"));
-////            }
-//
-//            writer.println(header.toString());
-//
-//            // Write data for each agent
-//            for (AgentLayer layer : agentLayers) {
-//                String layerName = layer.getName();
-//
-//                for (Agent agent : layer.getAgents()) {
-//                    StringBuilder row = new StringBuilder();
-//
-//                    // Basic agent info
-//                    row.append(tickCount).append(",");
-//                    row.append(agent.getId()).append(",");
-//                    row.append(layerName).append(",");
-//                    row.append(agent.getClass().getSimpleName()).append(",");
-//                    row.append(String.format("%.6f", agent.getX())).append(",");
-//                    row.append(String.format("%.6f", agent.getY())).append(",");
-//
-//                    // Agent-specific attributes
-//                    if (agent instanceof LivingAgent la) {
-//                        row.append(la.isAlive()? "1":"0").append(",");
-//                        row.append(la.getAge()).append(",");
-//                        row.append(la.getStage()).append(",");
-//                        row.append(String.format("%.3f", la.getEnergy())).append(",");
-//                        row.append(la.isGravid() ? "1":"0").append(",");
-//                        // place older for other fields
-//                        row.append("0,");
-//                        row.append("0,");
-//                        row.append("0,");
-//                        row.append(la.isResting() ? "1":"0").append(",");  // Add resting
-//                        row.append(la.getRestingDuration()).append(",");  // Add resting duration
-//                        row.append(la.getTimeWithoutRest());  // Add time without rest
-//                    } else if (agent instanceof InertAgent ia) {
-//                        row.append("-1,"); // Alive placeholder for InertAgent
-//                        row.append("0,"); // Age
-//                        row.append("INERT,");
-//                        row.append("0,"); // Energy
-//                        row.append("0,");
-//                        // Add InertAgent specific fields
-//                        row.append(ia.getEggCount()).append(",");
-//                        row.append(ia.getLarvalCount()).append(",");
-//                        row.append(String.format("%.2f", ia.getWaterVolume())).append(",");
-//                        row.append("0,");
-//                        row.append("0,");
-//                        row.append("0");
-//                    }
-//
-//                    // Add raster layer values
-//                    for (Layer envLayer : allLayers) {
-//                        if (envLayer instanceof RasterLayer || envLayer instanceof InterpolatedRasterLayer) {
-//                            double value = envLayer.getValueAt(agent.getX(), agent.getY());
-//
-//                            // Format based on layer type
-//                            String layerNameLower = envLayer.getName().toLowerCase();
-//                            if (layerNameLower.contains("temp") || layerNameLower.contains("t2m")) {
-//                                // Temperature: convert Kelvin to Celsius
-//                                value = value - 273.15;
-//                                row.append(String.format(",%.2f", value));
-//                            } else if (layerNameLower.contains("rain") || layerNameLower.contains("precip") || 
-//                                      layerNameLower.contains("tp")) {
-//                                // Precipitation: convert m to mm
-//                                value = value * 1000;
-//                                row.append(String.format(",%.4f", value));
-//                            } else if (layerNameLower.contains("pop")) {
-//                                // Population density
-//                                row.append(String.format(",%.2f", value));
-//                            } else {
-//                                // Other layers
-//                                row.append(String.format(",%.4f", value));
-//                            }
-//                        }
-//                    }
-//
-////                    // Add nearby agent counts
-////                    SpatialRegistry spatialRegistry = project.getSpatialRegistry();
-////                    if (spatialRegistry != null) {
-////                        for (AgentLayer otherLayer : agentLayers) {
-////                            // Get agents from this layer that are nearby
-////                            List<Agent> nearbyAgents = spatialRegistry.getNearbyAgents(
-////                                agent.getX(), agent.getY(), 
-////                                project.getDefaultAgentSearchRadius());
-////
-////                            // Count agents from the specific layer
-////                            long count = nearbyAgents.stream()
-////                                .filter(a -> {
-////                                    // Check which layer this agent belongs to
-////                                    for (AgentLayer al : agentLayers) {
-////                                        if (al.getAgents().contains(a)) {
-////                                            return al.getName().equals(otherLayer.getName());
-////                                        }
-////                                    }
-////                                    return false;
-////                                })
-////                                .count();
-////
-////                            row.append(",").append(count);
-////                        }
-////                    } else {
-////                        // If no spatial registry, add zeros
-////                        for (int i = 0; i < agentLayers.size(); i++) {
-////                            row.append(",0");
-////                        }
-////                    }
-//
-//                    writer.println(row.toString());
-//                }
-//            }
-//
-//            SimulationLogger.info("Results exported with Environmental Context to: " + outputPath);
-//            System.out.println("Included " + allLayers.size() + " layers and " + 
-//                                  agentLayers.size() + " agent layers");
-//            return true;
-//        } catch (IOException e) {
-//            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
-//            return false;
-//        } catch (Exception e) {
-//            SimulationLogger.severe("[Export-CSV] ERROR writing CSV: " + e.getMessage());
-//            return false;
-//        } finally {
-//            long endTime = System.currentTimeMillis();
-//            SimulationLogger.info("[Export-CSV] Export completed in %d ms%n", endTime - startTime);
-//        }
-//    }
-    
-    
-    // Inside ProjectPersistenceService.java – replace exportToCSV with this corrected version.
-    // Only the method that writes the CSV is changed to ensure environmental values are correctly retrieved.
 
     public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
         SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d", outputPath, tickCount);
@@ -3321,7 +1898,6 @@ public class ProjectPersistenceService {
             List<Layer> allLayers = project.getLayers();
             List<AgentLayer> agentLayers = project.getAgentLayers();
 
-            // Build header
             StringBuilder header = new StringBuilder();
             header.append("TickCount,AgentID,Layer,AgentType,X,Y,Alive,Age,Stage,Energy,Gravid,EggCount,LarvaCount,waterVolume,Resting,RestingDuration,TimeWithoutRest");
             for (Layer layer : allLayers) {
@@ -3331,10 +1907,8 @@ public class ProjectPersistenceService {
             }
             writer.println(header.toString());
 
-            // Write data for each agent
             for (AgentLayer layer : agentLayers) {
                 String layerName = layer.getName();
-                // Snapshot agents to avoid concurrent modification
                 List<Agent> agentsCopy;
                 synchronized (layer) {
                     agentsCopy = new ArrayList<>(layer.getAgents());
@@ -3355,7 +1929,6 @@ public class ProjectPersistenceService {
                         row.append(la.getStage()).append(",");
                         row.append(String.format("%.3f", la.getEnergy())).append(",");
                         row.append(la.isGravid() ? "1" : "0").append(",");
-                        // Inert agent fields (placeholders)
                         row.append("0,0,0,");
                         row.append(la.isResting() ? "1" : "0").append(",");
                         row.append(la.getRestingDuration()).append(",");
@@ -3367,22 +1940,17 @@ public class ProjectPersistenceService {
                         row.append(String.format("%.2f", ia.getWaterVolume())).append(",");
                         row.append("0,0,0");
                     } else {
-                        // Fallback for unknown agent type
                         row.append("-1,0,UNKNOWN,0,0,0,0,0,0,0,0");
                     }
 
-                    // Append environmental values (all raster layers)
                     for (Layer envLayer : allLayers) {
                         if (envLayer instanceof RasterLayer || envLayer instanceof InterpolatedRasterLayer) {
                             double rawValue = envLayer.getValueAt(agent.getX(), agent.getY());
                             String formatted;
                             String name = envLayer.getName().toLowerCase();
                             if (name.contains("temp") || name.contains("t2m")) {
-                                // Convert Kelvin to Celsius for readability
-                                double celsius = rawValue - 273.15;
-                                formatted = String.format("%.2f", celsius);
+                                formatted = String.format("%.2f", rawValue - 273.15);
                             } else if (name.contains("precip") || name.contains("tp") || name.contains("rain")) {
-                                // Convert m to mm
                                 formatted = String.format("%.4f", rawValue * 1000.0);
                             } else {
                                 formatted = String.format("%.4f", rawValue);
@@ -3400,109 +1968,6 @@ public class ProjectPersistenceService {
             SimulationLogger.severe("[Export-CSV] Error: " + e.getMessage());
             throw e;
         }
-    }
-    
-    
-    /**
-     * Load climate data from NetCDF file into the project
-     */
-    public ClimateDatasetManager loadClimateData(Project project, String netcdfFilePath, 
-                                                TimeManager timeManager) throws Exception {
-        SimulationLogger.info("Loading climate data from: " + netcdfFilePath);
-        
-        ClimateDatasetManager climateManager = new ClimateDatasetManager(timeManager);
-        
-        try {
-            // Load available variables (t2m, tp, etc.) – now uses revised InterpolatedRasterLayer
-            climateManager.loadAvailableVariables(netcdfFilePath);
-            
-            // Add layers to project
-            for (InterpolatedRasterLayer layer : climateManager.getLayers().values()) {
-                project.addLayer(layer);
-                if (project.getTokens() == null) {
-                    project.setTokens(new ArrayList<>());
-                }
-                if (project.getLayerNames() == null) {
-                    project.setLayerNames(new ArrayList<>());
-                }
-                String token = ProjectPersistenceService.getTokenForVariable(layer.getName());
-                project.getTokens().add(token);
-                project.getLayerNames().add(layer.getName());
-            }
-            
-            climateManager.printStatistics();
-            
-            // ---- SANITY CHECK for temperature (t2m) ----
-            Layer t2mLayer = project.getLayerByName("t2m");
-            if (t2mLayer != null && t2mLayer instanceof InterpolatedRasterLayer) {
-                // Use the layer's own bounds if available, otherwise fallback to a central point
-                double testLon = 41.85;   // approximate center of Dire Dawa
-                double testLat = 9.60;
-                if (t2mLayer instanceof RasterLayer rl) {
-                    testLon = (rl.getMinLon() + rl.getMaxLon()) / 2;
-                    testLat = (rl.getMinLat() + rl.getMaxLat()) / 2;
-                }
-                double sampleTemp = t2mLayer.getValueAt(testLon, testLat);
-                if (!Double.isNaN(sampleTemp)) {
-                    if (sampleTemp < 250 || sampleTemp > 330) {
-                        SimulationLogger.warning("WARNING: Temperature layer 't2m' returned suspicious value %.2f K (expected 250-330). Check NetCDF loading.\n", sampleTemp);
-                    } else {
-                        SimulationLogger.info("Temperature sanity check passed: %.2f K (%.2f °C)\n", sampleTemp, sampleTemp - 273.15);
-                    }
-                } else {
-                    SimulationLogger.severe("WARNING: Temperature layer returned NaN – NetCDF may contain missing values.");
-                }
-            } else {
-                SimulationLogger.severe("WARNING: No 't2m' layer found in climate data.");
-            }
-            
-            SimulationLogger.info("Climate data loaded successfully");
-            return climateManager;
-            
-        } catch (IOException e) {
-            SimulationLogger.severe("Error loading NetCDF file: " + e.getMessage());
-            throw new Exception("Failed to load climate data", e);
-        }
-    }
-    
-    
-    public static String getTokenForVariable(String variableName) {
-        // Map NetCDF variable names to tokens used in rules
-        switch (variableName.toLowerCase()) {
-            case "t2m":
-                return "temperature";
-            case "tp":
-                return "precipitation";
-            case "sp":
-                return "pressure";
-            case "u10":
-                return "wind_u";
-            case "v10":
-                return "wind_v";
-            case "r":
-                return "humidity";
-            case "d2m":
-                return "dewpoint";
-            default:
-                return variableName;
-        }
-    }
-    
-    /**
-     * Load multiple climate files (e.g., different time periods)
-     */
-    public List<ClimateDatasetManager> loadClimateTimeSeries(Project project, 
-                                                            List<String> netcdfFiles,
-                                                            TimeManager timeManager) throws Exception {
-        List<ClimateDatasetManager> managers = new ArrayList<>();
-        
-        for (String filePath : netcdfFiles) {
-            SimulationLogger.info("Loading: " + filePath);
-            ClimateDatasetManager manager = loadClimateData(project, filePath, timeManager);
-            managers.add(manager);
-        }
-        
-        return managers;
     }
 }package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
@@ -5806,7 +4271,6 @@ public class AgentLayer extends Layer {
                         if (la.getRestingDuration() > la.getMaxRestingDuration()) {
                             la.setResting(false);
                         }
-                        return;
                     } else {
                         la.incrementTimeWithoutRest();
                         if (la.getTimeWithoutRest() > 96) {
@@ -7848,10 +6312,34 @@ public class InertAgent extends Agent {
 //        return eggsHatched;
 //    }
 
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int current = eggCount.get();
+//        if (current == 0) return 0;
+//        int hatched = model.tryHatchEggs(current, temperature);
+//        if (hatched > 0) {
+//            eggCount.addAndGet(-hatched);
+//            larvalCount.addAndGet(hatched);
+//            updateCapacityFromVolume();
+//        }
+//        return hatched;
+//    }
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
         if (current == 0) return 0;
-        int hatched = model.tryHatchEggs(current, temperature);
+
+        // Check capacity first
+        double cap = capacity.get();
+        int currentLarvae = larvalCount.get();
+        if (currentLarvae >= cap) {
+            // Too many larvae, no more can hatch
+            return 0;
+        }
+
+        // Limit how many can hatch based on remaining capacity
+        int maxHatch = (int)(cap - currentLarvae);
+        int hatched = model.tryHatchEggs(Math.min(current, maxHatch), temperature);
+
         if (hatched > 0) {
             eggCount.addAndGet(-hatched);
             larvalCount.addAndGet(hatched);
@@ -8055,6 +6543,15 @@ public class LivingAgent extends Agent {
     private final AtomicInteger restingDuration = new AtomicInteger(0);
     private final AtomicInteger timeWithoutRest = new AtomicInteger(0);
     private final AtomicInteger maxRestingDuration = new AtomicInteger(4); // 1 hour
+    private double developmentProgress = 0.0;
+
+    public double getDevelopmentProgress() {
+        return developmentProgress;
+    }
+
+    public void setDevelopmentProgress(double developmentProgress) {
+        this.developmentProgress = developmentProgress;
+    }
 
     public LivingAgent(double x, double y) {
         super(x, y);

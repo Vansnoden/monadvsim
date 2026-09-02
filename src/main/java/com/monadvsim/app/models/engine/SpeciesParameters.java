@@ -4,15 +4,12 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
 
 /**
- * Species‑specific parameters for the temperature‑dependent
- * life‑cycle model (Komi et al. 2025 ODE formulation).
- * All rates are per day, temperature in Celsius.
+ * Species‑specific parameters for the temperature‑dependent life‑cycle model.
  */
 public class SpeciesParameters implements Serializable {
 
     private static final long serialVersionUID = 20250501L;
 
-    // ---------- Egg development (exponential) ----------
     @JsonProperty("egg_dev_rho")
     public double eggDev_rho = 0.01107;
     @JsonProperty("egg_dev_k")
@@ -22,7 +19,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("egg_dev_lambda")
     public double eggDev_lambda = -1.14079;
 
-    // ---------- Larva development (Brière) ----------
     @JsonProperty("larva_dev_a")
     public double larvaDev_a = 3.285e-5;
     @JsonProperty("larva_dev_Tmin")
@@ -32,7 +28,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("larva_dev_m")
     public double larvaDev_m = 2.169;
 
-    // ---------- Pupa development (exponential) ----------
     @JsonProperty("pupa_dev_rho")
     public double pupaDev_rho = 0.0096287;
     @JsonProperty("pupa_dev_k")
@@ -42,7 +37,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("pupa_dev_lambda")
     public double pupaDev_lambda = -1.1507102;
 
-    // ---------- Egg mortality (exp‑quadratic) ----------
     @JsonProperty("egg_mort_b1")
     public double eggMort_b1 = 3.572876;
     @JsonProperty("egg_mort_b2")
@@ -50,7 +44,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("egg_mort_b3")
     public double eggMort_b3 = 0.004941;
 
-    // ---------- Larva mortality (exp‑quadratic) ----------
     @JsonProperty("larva_mort_b1")
     public double larvaMort_b1 = 3.572876;
     @JsonProperty("larva_mort_b2")
@@ -58,7 +51,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("larva_mort_b3")
     public double larvaMort_b3 = 0.004941;
 
-    // ---------- Pupa mortality (exp‑quadratic) ----------
     @JsonProperty("pupa_mort_b1")
     public double pupaMort_b1 = 5.882576;
     @JsonProperty("pupa_mort_b2")
@@ -66,7 +58,6 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("pupa_mort_b3")
     public double pupaMort_b3 = 0.009458;
 
-    // ---------- Fecundity (eggs/female/day) ----------
     @JsonProperty("fecundity_rmax")
     public double fecundity_rmax = 1.571304;
     @JsonProperty("fecundity_Topt")
@@ -74,23 +65,17 @@ public class SpeciesParameters implements Serializable {
     @JsonProperty("fecundity_c")
     public double fecundity_c = -0.007832;
 
-    // ---------- Adult mortality (constant 1/day) ----------
     @JsonProperty("adult_mortality_per_day")
     public double adultMortalityPerDay = 1.0 / 240.0;
-    // for temperature driven adult mortality
-    @JsonProperty("adult_mort_b1") public double adultMort_b1;
-    @JsonProperty("adult_mort_b2") public double adultMort_b2;
-    @JsonProperty("adult_mort_b3") public double adultMort_b3;
+    @JsonProperty("adult_mort_b1") public double adultMort_b1 = 0;
+    @JsonProperty("adult_mort_b2") public double adultMort_b2 = 0;
+    @JsonProperty("adult_mort_b3") public double adultMort_b3 = 0;
 
-    // ---------- Sex ratio (proportion females) ----------
     @JsonProperty("sex_ratio")
     public double sexRatio = 0.5;
 
-    // ---------- Host carrying capacity scaling (optional) ----------
     @JsonProperty("host_carrying_capacity_base")
     public double hostCarryingCapacityBase = 1.0;
-    
-
 
     public SpeciesParameters() {}
 }

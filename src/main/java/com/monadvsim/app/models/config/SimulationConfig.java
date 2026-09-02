@@ -26,6 +26,11 @@ public class SimulationConfig {
     
     // Tokens for rule engine (maps token name to layer name)
     public List<TokenMapping> tokens;
+    
+    public double maxAgeMultiplierEgg = 0.05;
+    public double maxAgeMultiplierLarva = 0.45;
+    public double maxAgeMultiplierPupa = 0.15;
+    public double maxAgeMultiplierAdult = 0.35;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"
@@ -85,6 +90,7 @@ public class SimulationConfig {
 
         // Sex ratio (proportion females)
         public double sex_ratio;
+        public double hostCarryingCapacityBase = 1.0;
     }
 
     
