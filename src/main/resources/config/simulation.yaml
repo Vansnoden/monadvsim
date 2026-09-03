@@ -1,10 +1,11 @@
 # ================================================================
-# SIMULATION CONFIGURATION - REVISED FOR STABLE POPULATION DYNAMICS
+# SIMULATION CONFIGURATION - REVISED FOR ACTIVE POPULATION DYNAMICS
 # ================================================================
+# 35040   
 
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 3000        
+  totalTicks: 3000      
   tickMinutes: 15
 
 files:
@@ -13,62 +14,65 @@ files:
 gridCellSizeDegrees: 0.001
 
 # ================================================================
-# SPECIES PARAMETERS - REVISED FOR REALISTIC DEVELOPMENT
+# SPECIES PARAMETERS - OPTIMIZED FOR EGG DEVELOPMENT
 # ================================================================
 species:
   # ==============================================================
-  # EGG DEVELOPMENT (exponential)
+  # EGG DEVELOPMENT - SIGNIFICANTLY INCREASED
   # ==============================================================
-  egg_dev_rho: 0.005000000000000001
+  egg_dev_rho: 0.02                     # WAS: 0.005 (4x faster)
   egg_dev_k: 39.20841161317061
-  egg_dev_Delta: 1.9999999999999998
+  egg_dev_Delta: 2.0
   egg_dev_lambda: -0.854916887158478
 
   # ==============================================================
-  # LARVA DEVELOPMENT (Brière) - SIGNIFICANTLY INCREASED
+  # LARVA DEVELOPMENT (Brière)
   # ==============================================================
-  larva_dev_a: 1.0e-4                    # WAS: 2.7e-5 (3.7x faster)
+  larva_dev_a: 3.0e-3                    # WAS: 2.0e-3 (50% faster)
   larva_dev_Tmin: 5.123026541348266
   larva_dev_Tmax: 44.999999999835175
   larva_dev_m: 1.663077023745059
 
   # ==============================================================
-  # PUPA DEVELOPMENT (exponential) - INCREASED
+  # PUPA DEVELOPMENT (exponential)
   # ==============================================================
-  pupa_dev_rho: 0.015                    # WAS: 0.0051 (3x faster)
+  pupa_dev_rho: 0.02                     # WAS: 0.015 (33% faster)
   pupa_dev_k: 39.940257466039114
-  pupa_dev_Delta: 1.9999999999999998
+  pupa_dev_Delta: 2.0
   pupa_dev_lambda: -0.9081661833839708
 
   # ==============================================================
-  # MORTALITY RATES - REDUCED FOR BETTER SURVIVAL
+  # MORTALITY RATES - BALANCED FOR SUSTAINABLE POPULATION
   # ==============================================================
-  egg_mort_b1: 2.0                       # WAS: 3.57 (lower mortality)
-  egg_mort_b2: -0.20                     # WAS: -0.323
-  egg_mort_b3: 0.0035                    # WAS: 0.00494
+  # Egg mortality - REDUCED to improve hatching
+  egg_mort_b1: 1.8                      # WAS: 2.5 (reduced)
+  egg_mort_b2: -0.18                    # WAS: -0.25 (reduced)
+  egg_mort_b3: 0.0030                   # WAS: 0.0040 (reduced)
 
-  larva_mort_b1: 1.5                     # WAS: 2.0 (lower mortality)
-  larva_mort_b2: -0.60                   # WAS: -0.739
-  larva_mort_b3: 0.014                   # WAS: 0.01749
+  # Larva mortality - BALANCED for survival
+  larva_mort_b1: 1.2                    # WAS: 1.5 (reduced)
+  larva_mort_b2: -0.60                  # WAS: -0.70
+  larva_mort_b3: 0.014                  # WAS: 0.016
 
-  pupa_mort_b1: 4.5                      # WAS: 5.88 (lower mortality)
-  pupa_mort_b2: -0.45                    # WAS: -0.578
-  pupa_mort_b3: 0.0075                   # WAS: 0.009458
+  # Pupa mortality - MODERATE
+  pupa_mort_b1: 4.0                     # WAS: 4.5 (reduced)
+  pupa_mort_b2: -0.40                   # WAS: -0.45
+  pupa_mort_b3: 0.0065                  # WAS: 0.0075
 
   # ==============================================================
-  # FECUNDITY - INCREASED EGG PRODUCTION
+  # FECUNDITY - INCREASED FOR BETTER REPRODUCTION
   # ==============================================================
-  fecundity_rmax: 2.8                    # WAS: 1.602 (more eggs)
+  fecundity_rmax: 2.5                    # WAS: 2.0 (increased)
   fecundity_Topt: 30.634033187663604
   fecundity_c: -0.0052723551194922445
 
   # ==============================================================
-  # ADULT MORTALITY - DRAMATICALLY REDUCED
+  # ADULT MORTALITY - BALANCED FOR ADULT LIFESPAN
   # ==============================================================
-  adult_mort_b1: -3.5                    # WAS: -1.4775 (much lower)
-  adult_mort_b2: -0.10                   # WAS: -0.1377
-  adult_mort_b3: 0.0030                  # WAS: 0.003908
-  adult_mortality_per_day: 0.04          # WAS: 0.1198 (25 days lifespan)
+  adult_mort_b1: -3.0                   # WAS: -3.5 (reduced mortality)
+  adult_mort_b2: -0.08                  # WAS: -0.10
+  adult_mort_b3: 0.0025                 # WAS: 0.0030
+  adult_mortality_per_day: 0.035        # WAS: 0.04 (slightly reduced)
   
   # ==============================================================
   # SEX RATIO
@@ -78,7 +82,7 @@ species:
   # ==============================================================
   # HOST CARRYING CAPACITY
   # ==============================================================
-  host_carrying_capacity_base: 5.0       # WAS: 1.0 (more egg capacity)
+  host_carrying_capacity_base: 2.0      # WAS: 1.5 (increased)
 
 # ================================================================
 # LAYER DEFINITIONS
@@ -122,47 +126,55 @@ tokens:
     layer: "Elevation"
 
 # ================================================================
-# AGENT LAYERS WITH REVISED RULES
+# AGENT LAYERS WITH ENHANCED RULES
 # ================================================================
 agentLayers:
   - name: "Mosquitoes"
     rules:
       # ==============================================================
-      # DEVELOPMENT TRANSITIONS (Emergency fallbacks only)
+      # DEVELOPMENT TRANSITIONS (Automatic + Emergency)
       # ==============================================================
       
-      # Larva → Pupa: Emergency if automatic development fails
-      - condition: "stage == 'LARVA' && age > 384 && energy > 0.5"
+      # Larva → Pupa: Normal development (automatic in LifecycleModel)
+      # Emergency fallback if automatic development fails
+      - condition: "stage == 'LARVA' && age > 200 && energy > 0.4"
         action: "pupate"
         priority: 5
         
-      # Pupa → Adult: Emergency if automatic development fails
-      - condition: "stage == 'PUPA' && age > 384"
+      # Pupa → Adult: Emergency fallback
+      - condition: "stage == 'PUPA' && age > 150"
         action: "emerge"
         priority: 5
       
       # ==============================================================
-      # FEEDING - More aggressive
+      # EMERGENCY PUPATION - PREVENT OVERCROWDING
       # ==============================================================
-      - condition: "stage == 'ADULT' && energy < 0.5 && !resting"
+      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && age > 100"
+        action: "pupate"
+        priority: 6
+      
+      # ==============================================================
+      # FEEDING - IMPROVED ENERGY MANAGEMENT
+      # ==============================================================
+      - condition: "stage == 'ADULT' && energy < 0.6 && !resting"
         action: "feed"
         priority: 9
         
-      - condition: "stage == 'ADULT' && energy < 0.7 && resting"
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
         action: "rest"
-        priority: 7
+        priority: 8
       
       # ==============================================================
-      # REPRODUCTION - Much more aggressive
+      # REPRODUCTION - OPTIMIZED FOR CONTINUOUS BREEDING
       # ==============================================================
       
-      # Get gravid as soon as energy is sufficient
+      # Get gravid at lower energy threshold (more breeding)
       - condition: "stage == 'ADULT' && energy > 0.5 && !gravid"
         action: "get_gravid"
         priority: 8
       
-      # Lay eggs ASAP when gravid (lower temperature threshold)
-      - condition: "gravid == true && temperature > 278.15"
+      # Lay eggs - more permissive conditions
+      - condition: "gravid == true && temperature > 280.15 && getTotalLarvae < 30000"
         action: "lay_eggs"
         priority: 7
       
@@ -183,7 +195,7 @@ agentLayers:
       # ==============================================================
       # MOVEMENT
       # ==============================================================
-      - condition: "stage == 'ADULT' && !resting"
+      - condition: "stage == 'ADULT' && !resting && age < 2000"
         action: "move_random"
         priority: 3
       
@@ -196,21 +208,55 @@ agentLayers:
 
   - name: "WaterTanks"
     rules:
+      # ==============================================================
+      # WATER DYNAMICS
+      # ==============================================================
       - condition: "true"
         action: "evaporate"
         priority: 1
+      
+      # ==============================================================
+      # DENSITY-DEPENDENT MORTALITY - THINNING
+      # ==============================================================
+      - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
+        action: "thin_larvae"
+        priority: 5
+      
+      # ==============================================================
+      # FORCE HATCHING - PREVENT EGG ACCUMULATION
+      # ==============================================================
+      - condition: "eggCount > 150 && waterVolume > 15"
+        action: "hatch_eggs"
+        priority: 6
+      
+      # ==============================================================
+      # EXTREME CONDITIONS
+      # ==============================================================
       - condition: "waterVolume <= 5 && waterVolume > 0"
         action: "dry_out"
-        priority: 3
+        priority: 4
+        
       - condition: "temperature < 273.15 && waterVolume > 0"
         action: "freeze"
-        priority: 2
-      - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
+        priority: 3
+        
+      - condition: "waterVolume == 0 && eggCount < 10 && larvalCount < 10"
         action: "die"
         priority: 4
 
 # ================================================================
-# SEEDING CONFIGURATION
+# NEW: InertAgent (Water Tank) Configuration
+# ================================================================
+inert_agent:
+  max_larvae_capacity: 300        # Maximum larvae per tank before density-dependent mortality
+  mortality_intensity: 0.4        # Fraction of excess larvae to kill (0.0 - 1.0)
+  min_larvae_retain: 20           # Minimum larvae to keep after thinning
+  max_water_volume: 100.0         # Maximum water volume (%)
+  hatch_fraction_min: 0.1         # Minimum fraction of eggs to hatch per tick
+  hatch_fraction_max: 0.6         # Maximum fraction of eggs to hatch per tick
+
+# ================================================================
+# SEEDING CONFIGURATION - OPTIMIZED FOR STABLE POPULATION
 # ================================================================
 seeding:
   seedAcrossFullStudySite: false
@@ -219,24 +265,25 @@ seeding:
   occurrenceYearStart: 2016      
   occurrenceYearEnd: 2023
   occurrenceBufferKm: 0.05
-  tanksToSeed: 1000                     # WAS: 500 (more breeding sites)
-  mosquitoesToSeed: 2000                # WAS: 1000 (more initial adults)
+  tanksToSeed: 800                      
+  mosquitoesToSeed: 1500                
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  tankBuildingThreshold: 0.000001       # WAS: 0.00001 (even more permissive)
-  tankPopulationThreshold: 0.000001     # WAS: 0.00001 (even more permissive)
+  tankBuildingThreshold: 0.000001
+  tankPopulationThreshold: 0.000001
   mosquitoBuildingThreshold: 0.0001
   mosquitoPopulationThreshold: 0.0001
 
 # ================================================================
-# PROJECT DEFAULTS
+# PROJECT DEFAULTS - INCREASED AGE LIMITS
 # ================================================================
 project:
   defaultAgentSearchRadius: 0.005
   defaultAgentStep: 0.00005
-  defaultMaxAgentAge: 2880
-  # Stage-specific max age multipliers
-  maxAgeMultiplierEgg: 0.05      # 5% = 144 ticks (36 hours)
-  maxAgeMultiplierLarva: 0.45    # 45% = 1296 ticks (13.5 days) 
-  maxAgeMultiplierPupa: 0.15     # 15% = 432 ticks (4.5 days)
-  maxAgeMultiplierAdult: 0.35    # 35% = 1008 ticks (10.5 days)
+  defaultMaxAgentAge: 5760              # WAS: 2880 (60 days instead of 30)
+  
+  # Stage-specific max age multipliers - OPTIMIZED
+  maxAgeMultiplierEgg: 0.05             # 5% = 288 ticks (72 hours)
+  maxAgeMultiplierLarva: 0.85           # WAS: 0.80 (85% = 4896 ticks, 51 days)
+  maxAgeMultiplierPupa: 0.15            # 15% = 864 ticks (9 days)
+  maxAgeMultiplierAdult: 0.40           # WAS: 0.35 (40% = 2304 ticks, 24 days)

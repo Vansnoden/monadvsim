@@ -31,6 +31,7 @@ public class SimulationConfig {
     public double maxAgeMultiplierLarva = 0.45;
     public double maxAgeMultiplierPupa = 0.15;
     public double maxAgeMultiplierAdult = 0.35;
+    public InertAgentParams inertAgent;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"
@@ -90,7 +91,7 @@ public class SimulationConfig {
 
         // Sex ratio (proportion females)
         public double sex_ratio;
-        public double hostCarryingCapacityBase = 1.0;
+        public double host_carrying_capacity_base = 1.0;
     }
 
     
@@ -126,10 +127,23 @@ public class SimulationConfig {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
+        public double maxAgeMultiplierEgg = 0.05;
+        public double maxAgeMultiplierLarva = 0.45;
+        public double maxAgeMultiplierPupa = 0.15;
+        public double maxAgeMultiplierAdult = 0.35;
     }
 
     public static class TokenMapping {
         public String token;
         public String layer;
+    }
+    
+    public static class InertAgentParams {
+        public int max_larvae_capacity = 500;
+        public double mortality_intensity = 0.5;
+        public int min_larvae_retain = 50;
+        public double max_water_volume = 100.0;
+        public double hatch_fraction_min = 0.1;
+        public double hatch_fraction_max = 0.6;
     }
 }

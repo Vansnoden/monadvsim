@@ -682,6 +682,13 @@ public class App {
 
         SimulationLogger.info("Seeding %s across the study area",
             isUniform ? "uniformly" : "using weighted habitat selection");
+        
+        // Get InertAgent parameters from config
+        SimulationConfig.InertAgentParams inertParams = config.inertAgent;
+        if (inertParams == null) {
+            inertParams = new SimulationConfig.InertAgentParams();
+            SimulationLogger.info("Using default InertAgent parameters");
+        }
 
         // Point generator
         java.util.function.Supplier<double[]> pointGenerator;
@@ -716,17 +723,19 @@ public class App {
 
             if (buildingDensity > seeding.tankBuildingThreshold &&
                 popDensity > seeding.tankPopulationThreshold) {
-                InertAgent tank = new InertAgent(rx, ry);
+                // Pass the config parameters to the constructor
+                InertAgent tank = new InertAgent(rx, ry, inertParams);
                 tank.setWaterVolume(70 + rand.nextDouble() * 30);
                 tank.setLarvalCount(rand.nextInt(30) + 10);
                 tank.setEggCount(rand.nextInt(80) + 20);
-                tank.setCapacity(300 + rand.nextDouble() * 200);
+                tank.updateCapacityFromVolume(); // Now uses config values
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
             }
         }
         SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
+
 
         // Seed mosquitoes
         int mosquitoesPlaced = 0;
@@ -737,6 +746,9 @@ public class App {
             if (!isUniform) {
                 double buildingDensity = buildings.getValueAt(rx, ry);
                 double popDensity = population.getValueAt(rx, ry);
+                if (Double.isNaN(popDensity) || popDensity < 0) {
+                    popDensity = 0.0;
+                }
                 if (!(buildingDensity > seeding.mosquitoBuildingThreshold ||
                       popDensity > seeding.mosquitoPopulationThreshold)) {
                     i--;
@@ -782,6 +794,9 @@ public class App {
         for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
             double b = buildings.getValueAt(p.longitude, p.latitude);
             double pop = population.getValueAt(p.longitude, p.latitude);
+            if (Double.isNaN(pop) || pop < 0) {
+                pop = 0.0;
+            }
             SimulationLogger.info("Occurrence at (%.6f, %.6f): building=%.6f, pop=%.6f", 
                 p.longitude, p.latitude, b, pop);
         }

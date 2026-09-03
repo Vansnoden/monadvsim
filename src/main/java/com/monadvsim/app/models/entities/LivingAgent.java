@@ -32,7 +32,7 @@ public class LivingAgent extends Agent {
     // These represent the maximum age an agent can reach in each stage
     // before dying of old age
     public static final double MAX_AGE_MULTIPLIER_EGG = 0.05;    // 5% of global max
-    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.45;  // 45% of global max
+    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.80;  // 45% of global max
     public static final double MAX_AGE_MULTIPLIER_PUPA = 0.15;   // 15% of global max
     public static final double MAX_AGE_MULTIPLIER_ADULT = 0.35;  // 35% of global max
     

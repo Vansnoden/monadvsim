@@ -126,6 +126,16 @@ public class RuleEngine {
         if (!bindings.hasMember("precipitation")) {
             bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
         }
+        
+        int totalLarvae = 0;
+        for (AgentLayer layer : project.getAgentLayers()) {
+            for (Agent a : layer.getAgents()) {
+                if (a instanceof InertAgent ia) {
+                    totalLarvae += ia.getLarvalCount();
+                }
+            }
+        }
+        bindings.putMember("getTotalLarvae", totalLarvae);
     }
 
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
@@ -145,6 +155,20 @@ public class RuleEngine {
             case "rest_in_building" -> executeRestInBuilding(agent, project, layer);
             case "pupate" -> executePupate(agent, project, layer);
             case "emerge" -> executeEmerge(agent, project, layer);
+            case "thin_larvae" -> executeThinLarvae(agent, layer);
+        }
+    }
+    
+    private void executeThinLarvae(Agent agent, AgentLayer layer) {
+        if (agent instanceof InertAgent ia) {
+            double cap = ia.getCapacity();
+            int current = ia.getLarvalCount();
+            if (current > cap * 0.8) {
+                int target = (int)(cap * 0.8);
+                int toKill = current - target;
+                ia.setLarvalCount(target);
+                SimulationLogger.fine("[TANK] Killed %d excess larvae, capacity=%.1f", toKill, cap);
+            }
         }
     }
     

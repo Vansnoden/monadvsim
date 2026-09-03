@@ -46,10 +46,18 @@ public class TimeManager {
     public void setTotalTicks(long totalTicks) { this.totalTicks = totalTicks; }
     public long getTickMinutes() { return tickDuration.toMinutes(); }
     
+//    public int getCurrentFrameIndex() {
+//        Duration elapsed = Duration.between(startDateTime, currentDateTime);
+//        long seconds = elapsed.getSeconds();
+//        long offsetSeconds = 41400; // 11.5 hours alignment
+//        return (int) ((seconds + offsetSeconds) / 3600);
+//    }
+    
+    // In TimeManager
     public int getCurrentFrameIndex() {
         Duration elapsed = Duration.between(startDateTime, currentDateTime);
         long seconds = elapsed.getSeconds();
-        long offsetSeconds = 41400; // 11.5 hours alignment
-        return (int) ((seconds + offsetSeconds) / 3600);
+        // Use the actual data step duration (1 hour) and align to the data start
+        return (int) (seconds / 3600);
     }
 }

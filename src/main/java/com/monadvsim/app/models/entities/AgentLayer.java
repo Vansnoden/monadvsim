@@ -328,6 +328,9 @@ public class AgentLayer extends Layer {
                     double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
                     int hatched = ia.hatchEggs(temperature, lifecycleModel);
                     Random rng = SeedManager.getRandom();
+                    if (hatched > 0 || ia.getLarvalCount() > 0) {
+                        ia.applyDensityDependentMortality();
+                    }
                     if (hatched > 0) {
                         AgentLayer mosquitoLayer = findMosquitoLayer(project);
                         if (mosquitoLayer != null) {

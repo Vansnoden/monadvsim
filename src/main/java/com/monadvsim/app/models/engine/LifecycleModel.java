@@ -123,36 +123,65 @@ public class LifecycleModel {
      * Updates larval development using accumulated progress.
      * This replaces the previous stochastic transition method.
      */
+//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
+//        double dL = larvaDevelopmentRate(tempKelvin);
+//        double mL = larvaMortalityRate(tempKelvin);
+//
+//        // 1. Accumulate development progress (in days)
+//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
+//        agent.setDevelopmentProgress(newProgress);
+//
+//        // Log progress periodically
+//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
+//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
+//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
+//        }
+//
+//        // 2. When accumulated progress reaches 1.0 (100%), pupate
+//        if (newProgress >= 1.0) {
+//            agent.setStage(LifecycleStage.PUPA);
+//            agent.setDevelopmentProgress(0.0);
+//            agent.setEnergy(0.6);
+//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+//            return;
+//        }
+//
+//        // 3. Apply mortality with the same probability as before
+//        double pDie = mortalityProb(mL);
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double dL = larvaDevelopmentRate(tempKelvin);
         double mL = larvaMortalityRate(tempKelvin);
 
-        // 1. Accumulate development progress (in days)
         double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
         agent.setDevelopmentProgress(newProgress);
 
-        // Log progress periodically
         if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
             SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
                 agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
         }
 
-        // 2. When accumulated progress reaches 1.0 (100%), pupate
         if (newProgress >= 1.0) {
             agent.setStage(LifecycleStage.PUPA);
-            agent.setDevelopmentProgress(0.0);
+            agent.setDevelopmentProgress(0.0);  // Reset progress
             agent.setEnergy(0.6);
             SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
             return;
         }
 
-        // 3. Apply mortality with the same probability as before
         double pDie = mortalityProb(mL);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
             SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
         }
     }
 
