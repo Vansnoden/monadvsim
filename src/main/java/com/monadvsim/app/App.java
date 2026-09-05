@@ -122,6 +122,7 @@ public class App {
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
+            timeManager.setDataStartDateTime(startDate);
             // ======================================================================
             // 5. WORLD BOUNDS FROM STUDY SITE
             // ======================================================================
@@ -684,7 +685,7 @@ public class App {
             isUniform ? "uniformly" : "using weighted habitat selection");
         
         // Get InertAgent parameters from config
-        SimulationConfig.InertAgentParams inertParams = config.inertAgent;
+        SimulationConfig.InertAgentParams inertParams = config.inert_agents;
         if (inertParams == null) {
             inertParams = new SimulationConfig.InertAgentParams();
             SimulationLogger.info("Using default InertAgent parameters");

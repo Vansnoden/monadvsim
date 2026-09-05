@@ -221,13 +221,54 @@ public class InterpolatedRasterLayer extends Layer {
         }
     }
 
+//    private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
+//        Variable timeVar = ncfile.findVariable(timeDimName);
+//        if (timeVar == null) {
+//            SimulationLogger.warning("No time variable found; using step index.");
+//            timeValues = new double[timeSize];
+//            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1‑hour steps
+//            timeReference = timeManager.getStartDateTime();
+//            return;
+//        }
+//
+//        Attribute unitsAttr = timeVar.findAttribute("units");
+//        String units = (unitsAttr != null) ? unitsAttr.getStringValue() : "";
+//        SimulationLogger.info("Time units attribute: %s", units);
+//        parseTimeUnits(units);
+//
+//        Array timeArray = timeVar.read();
+//        final double scale;
+//        if (units.contains("days") || units.contains("day")) scale = 86400.0;
+//        else if (units.contains("hours") || units.contains("hour")) scale = 3600.0;
+//        else if (units.contains("minutes") || units.contains("minute")) scale = 60.0;
+//        else {
+//            SimulationLogger.warning("Unknown time unit format: %s, using seconds", units);
+//            scale = 1.0;
+//        }
+//
+//        timeValues = new double[timeSize];
+//        for (int i = 0; i < timeSize; i++) {
+//            double raw = timeArray.getDouble(i);
+//            timeValues[i] = raw * scale;
+//        }
+//        SimulationLogger.info("Time range: %.2f to %.2f seconds since reference", timeValues[0], timeValues[timeSize-1]);
+//        
+//        // Verify time reference is valid
+//        if (timeReference == null) {
+//            SimulationLogger.warning("Time reference is null! Using simulation start time.");
+//            timeReference = timeManager.getStartDateTime();
+//        }
+//    }
+    
     private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
         Variable timeVar = ncfile.findVariable(timeDimName);
         if (timeVar == null) {
             SimulationLogger.warning("No time variable found; using step index.");
             timeValues = new double[timeSize];
-            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1‑hour steps
+            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1-hour steps
             timeReference = timeManager.getStartDateTime();
+            // CRITICAL FIX: Set dataStartDateTime in TimeManager
+            timeManager.setDataStartDateTime(timeReference);
             return;
         }
 
@@ -236,6 +277,13 @@ public class InterpolatedRasterLayer extends Layer {
         SimulationLogger.info("Time units attribute: %s", units);
         parseTimeUnits(units);
 
+        // CRITICAL FIX: If timeReference is still null after parsing, set it to simulation start
+        if (timeReference == null) {
+            SimulationLogger.warning("timeReference is null after parsing, using simulation start time");
+            timeReference = timeManager.getStartDateTime();
+            timeManager.setDataStartDateTime(timeReference);
+        }
+        
         Array timeArray = timeVar.read();
         final double scale;
         if (units.contains("days") || units.contains("day")) scale = 86400.0;
@@ -417,8 +465,9 @@ public class InterpolatedRasterLayer extends Layer {
         dataLock.readLock().lock();
         try {
             if (timeReference == null) {
-                SimulationLogger.warning("Time reference is null! Cannot interpolate.");
-                return;
+                SimulationLogger.warning("Time reference is null! Using simulation start time.");
+                timeReference = timeManager.getStartDateTime();
+                timeManager.setDataStartDateTime(timeReference);
             }
 
             // Get the frame index from TimeManager (already has the 41400 second offset applied)

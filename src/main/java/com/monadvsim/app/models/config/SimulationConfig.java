@@ -31,7 +31,7 @@ public class SimulationConfig {
     public double maxAgeMultiplierLarva = 0.45;
     public double maxAgeMultiplierPupa = 0.15;
     public double maxAgeMultiplierAdult = 0.35;
-    public InertAgentParams inertAgent;
+    public InertAgentParams inert_agents;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"

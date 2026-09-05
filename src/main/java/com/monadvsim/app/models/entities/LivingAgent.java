@@ -27,14 +27,17 @@ public class LivingAgent extends Agent {
     private final AtomicInteger timeWithoutRest = new AtomicInteger(0);
     private final AtomicInteger maxRestingDuration = new AtomicInteger(4); // 1 hour
     private double developmentProgress = 0.0;
-    
+    private int stageAgeTicks = 0;
     // Stage-specific max age multipliers (as percentage of global max age)
     // These represent the maximum age an agent can reach in each stage
     // before dying of old age
     public static final double MAX_AGE_MULTIPLIER_EGG = 0.05;    // 5% of global max
-    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.80;  // 45% of global max
-    public static final double MAX_AGE_MULTIPLIER_PUPA = 0.15;   // 15% of global max
-    public static final double MAX_AGE_MULTIPLIER_ADULT = 0.35;  // 35% of global max
+    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.25;  // 45% of global max
+    public static final double MAX_AGE_MULTIPLIER_PUPA = 0.10;   // 15% of global max
+    public static final double MAX_AGE_MULTIPLIER_ADULT = 0.60;  // 35% of global max
+   
+    private double accumulatedDegreeDays = 0.0;
+    private double stageAgeDays = 0.0;
     
     // The global max age (set by project defaults)
     private int globalMaxAge = 2880; // Default: 30 days at 15-min ticks
@@ -42,10 +45,21 @@ public class LivingAgent extends Agent {
     public double getDevelopmentProgress() {
         return developmentProgress;
     }
-
+    
     public void setDevelopmentProgress(double developmentProgress) {
         this.developmentProgress = developmentProgress;
     }
+    
+    public int getStageAgeTicks() { return stageAgeTicks; }
+    public void setStageAgeTicks(int stageAgeTicks) { this.stageAgeTicks = stageAgeTicks; }
+    public void incrementStageAgeTicks() { this.stageAgeTicks++; }
+    
+    // Getters and setters
+    public double getAccumulatedDegreeDays() { return accumulatedDegreeDays; }
+    public void setAccumulatedDegreeDays(double dd) { this.accumulatedDegreeDays = dd; }
+    
+    public double getStageAgeDays() { return stageAgeDays; }
+    public void setStageAgeDays(double days) { this.stageAgeDays = days; }
 
     public LivingAgent(double x, double y) {
         super(x, y);

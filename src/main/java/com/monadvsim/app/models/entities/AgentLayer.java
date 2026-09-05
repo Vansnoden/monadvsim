@@ -307,17 +307,165 @@ public class AgentLayer extends Layer {
 //    }
     
     
+//    private void processAgentRules(Agent agent, Project project) {
+//        if (agent == null) return;
+//
+//        if (agent instanceof LivingAgent la && !la.isAlive()) {
+//            return;
+//        }
+//
+//        if (rulesEvaluated.get() > 1_000_000_000L) {
+//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
+//            return;
+//        }
+//
+//        synchronized (agent) {
+//            try {
+//                // ================================================================
+//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
+//                // ================================================================
+//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
+//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
+//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
+//                    Random rng = SeedManager.getRandom();
+//                    if (hatched > 0 || ia.getLarvalCount() > 0) {
+//                        ia.applyDensityDependentMortality();
+//                    }
+//                    if (hatched > 0) {
+//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
+//                        if (mosquitoLayer != null) {
+//                            for (int i = 0; i < hatched; i++) {
+//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
+//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
+//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+//                                larva.setStage(LifecycleStage.LARVA);
+//                                larva.setAge(0);
+//                                larva.setStageAgeTicks(0); // <-- NEW: Reset stage age
+//                                larva.setEnergy(0.8);
+//                                larva.setDevelopmentProgress(0.0);
+//                                larva.setAccumulatedDegreeDays(0.0); // <-- NEW: Reset degree-days
+//                            }
+//                        }
+//                    }
+//                }
+//
+//                // ================================================================
+//                // 2. LIVING AGENT: Temperature‑dependent development
+//                // ================================================================
+//                if (agent instanceof LivingAgent la) {
+//                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
+//                    LifecycleStage stage = la.getStage();
+//
+//                    if (la.isAlive()) {
+//                        // Debug logging for larvae
+//                        if (stage == LifecycleStage.LARVA && timeManager != null) {
+//                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
+//                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, stageAge=%d, progress=%.3f, DD=%.2f, temp=%.2fK",
+//                                    la.getId().substring(0, 8), 
+//                                    la.getStageAgeTicks(), // <-- Use stage age
+//                                    la.getDevelopmentProgress(), 
+//                                    la.getAccumulatedDegreeDays(),
+//                                    temperature);
+//                            }
+//                        }
+//
+//                        // ================================================================
+//                        // IMPORTANT: Increment stage age FIRST before any transitions
+//                        // This ensures that even newly transitioned agents have their age tracked
+//                        // ================================================================
+//                        la.incrementStageAgeTicks();
+//
+//                        switch (stage) {
+//                            case LARVA:
+//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
+//                                break;
+//                            case PUPA:
+//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
+//                                break;
+//                            case ADULT:
+//                                lifecycleModel.applyAdultMortality(la, temperature);
+//                                break;
+//                            default:
+//                                break;
+//                        }
+//                    }
+//
+//                    if (!la.isAlive()) {
+//                        lifecycleManager.scheduleDeath(agent.getId());
+//                        deathsThisTick.incrementAndGet();
+//                        return;
+//                    }
+//
+//                    // ================================================================
+//                    // 3. RULE EVALUATION
+//                    // ================================================================
+//                    for (RuleDefinition rule : rules) {
+//                        rulesEvaluated.incrementAndGet();
+//                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+//                        if (evalResult) {
+//                            ruleEngine.execute(rule.action(), agent, project, this);
+//                            actionsExecuted.incrementAndGet();
+//
+//                            if (!la.isAlive()) {
+//                                lifecycleManager.scheduleDeath(agent.getId());
+//                                deathsThisTick.incrementAndGet();
+//                                break;
+//                            }
+//                            if (isTerminalAction(rule.action())) break;
+//                        }
+//                    }
+//
+//                    // ================================================================
+//                    // 4. AGING AND RESTING
+//                    // ================================================================
+//                    if (la.isAlive()) {
+//                        if (la.isResting()) {
+//                            la.incrementRestingDuration();
+//                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
+//                                la.setResting(false);
+//                            }
+//                        } else {
+//                            la.incrementTimeWithoutRest();
+//                            if (la.getTimeWithoutRest() > 96) {
+//                                la.setAlive(false);
+//                                lifecycleManager.scheduleDeath(agent.getId());
+//                                deathsThisTick.incrementAndGet();
+//                                return;
+//                            }
+//                        }
+//
+//                        // ================================================================
+//                        // CRITICAL FIX: Use stageAgeTicks for stage-specific max age check
+//                        // NOT the total age (which was being reset on transition)
+//                        // ================================================================
+//                        if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
+//                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
+//                                la.getId().substring(0, 8), 
+//                                la.getStage(), 
+//                                la.getStageAgeTicks(), 
+//                                la.getMaxAgeForStage());
+//                            la.setAlive(false);
+//                            lifecycleManager.scheduleDeath(agent.getId());
+//                            deathsThisTick.incrementAndGet();
+//                            return;
+//                        }
+//
+//                        // Optional: Track total age for statistics (no longer used for mortality)
+//                        la.incrementAge();
+//                    }
+//                }
+//            } catch (Exception e) {
+//                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
+//                e.printStackTrace();
+//            }
+//        }
+//    }
+//    
+    
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
-
-        if (agent instanceof LivingAgent la && !la.isAlive()) {
-            return;
-        }
-
-        if (rulesEvaluated.get() > 1_000_000_000L) {
-            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
-            return;
-        }
+        if (agent instanceof LivingAgent la && !la.isAlive()) return;
+        if (rulesEvaluated.get() > 1_000_000_000L) return;
 
         synchronized (agent) {
             try {
@@ -340,98 +488,42 @@ public class AgentLayer extends Layer {
                                 LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
                                 larva.setStage(LifecycleStage.LARVA);
                                 larva.setAge(0);
+                                larva.setStageAgeTicks(0);
                                 larva.setEnergy(0.8);
                                 larva.setDevelopmentProgress(0.0);
+                                larva.setAccumulatedDegreeDays(0.0);
                             }
                         }
                     }
                 }
 
                 // ================================================================
-                // 2. LIVING AGENT: Temperature‑dependent development
+                // 2. RULE EVALUATION FOR ALL AGENT TYPES (MOVED HERE!)
                 // ================================================================
-                if (agent instanceof LivingAgent la) {
-                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
-                    LifecycleStage stage = la.getStage();
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+                    if (evalResult) {
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
 
-                    if (la.isAlive()) {
-                        // Debug logging for larvae
-                        if (stage == LifecycleStage.LARVA && timeManager != null) {
-                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
-                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, age=%d, progress=%.3f, temp=%.2fK",
-                                    la.getId().substring(0, 8), la.getAge(), 
-                                    la.getDevelopmentProgress(), temperature);
-                            }
-                        }
-
-                        switch (stage) {
-                            case LARVA:
-                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-                                break;
-                            case PUPA:
-                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-                                break;
-                            case ADULT:
-                                lifecycleModel.applyAdultMortality(la, temperature);
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-
-                    if (!la.isAlive()) {
-                        lifecycleManager.scheduleDeath(agent.getId());
-                        deathsThisTick.incrementAndGet();
-                        return;
-                    }
-
-                    // ================================================================
-                    // 3. RULE EVALUATION
-                    // ================================================================
-                    for (RuleDefinition rule : rules) {
-                        rulesEvaluated.incrementAndGet();
-                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-                        if (evalResult) {
-                            ruleEngine.execute(rule.action(), agent, project, this);
-                            actionsExecuted.incrementAndGet();
-
-                            if (!la.isAlive()) {
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                break;
-                            }
-                            if (isTerminalAction(rule.action())) break;
-                        }
-                    }
-
-                    // ================================================================
-                    // 4. AGING AND RESTING
-                    // ================================================================
-                    if (la.isAlive()) {
-                        if (la.isResting()) {
-                            la.incrementRestingDuration();
-                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-                                la.setResting(false);
-                            }
-                        } else {
-                            la.incrementTimeWithoutRest();
-                            if (la.getTimeWithoutRest() > 96) {
-                                la.setAlive(false);
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                return;
-                            }
-                        }
-
-                        la.incrementAge();
-                        if (la.getAge() > la.getMaxAgeForStage()) {
-                            la.setAlive(false);
+                        // If LivingAgent died during rule execution, stop processing
+                        if (agent instanceof LivingAgent la && !la.isAlive()) {
                             lifecycleManager.scheduleDeath(agent.getId());
                             deathsThisTick.incrementAndGet();
-                            return;
+                            break;
                         }
+                        if (isTerminalAction(rule.action())) break;
                     }
                 }
+
+                // ================================================================
+                // 3. LIVING AGENT: Lifecycle updates (age, resting, development)
+                // ================================================================
+                if (agent instanceof LivingAgent la) {
+                    // ... existing LivingAgent code ...
+                }
+
             } catch (Exception e) {
                 SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
                 e.printStackTrace();

@@ -38,7 +38,7 @@ public class InertAgent extends Agent {
     private static final int DEFAULT_MAX_LARVAE_CAPACITY = 500;
     private static final double DEFAULT_MORTALITY_INTENSITY = 0.5;
     private static final int DEFAULT_MIN_LARVAE_RETAIN = 50;
-    
+       
 
     public InertAgent(double x, double y, InertAgentParams params) {
         super(x, y);
@@ -313,22 +313,65 @@ public class InertAgent extends Agent {
 //        return eggsToHatch;
 //    }
     
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int current = eggCount.get();
+//        if (current == 0) return 0;
+//
+//        double de = model.eggDevelopmentRate(temperature);
+//        double dtDays = 0.0104166667;
+//        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
+//        eggDevelopmentProgress.set(newProgress);
+//
+//        if (newProgress < 1.0) return 0;
+//
+//        // Get hatch fraction from config
+//        double hatchFractionMin = (params != null) ? params.hatch_fraction_min : 0.1;
+//        double hatchFractionMax = (params != null) ? params.hatch_fraction_max : 0.6;
+//        
+//        double excessProgress = newProgress - 1.0;
+//        double hatchFraction = Math.min(hatchFractionMax, hatchFractionMin + excessProgress * 0.5);
+//        eggDevelopmentProgress.set(excessProgress);
+//
+//        // Check capacity
+//        int maxCapacity = (params != null) ? params.max_larvae_capacity : DEFAULT_MAX_LARVAE_CAPACITY;
+//        int currentLarvae = larvalCount.get();
+//        if (currentLarvae >= maxCapacity) return 0;
+//
+//        int maxHatch = maxCapacity - currentLarvae;
+//        int eggsToHatch = (int) Math.min(current, maxHatch * hatchFraction);
+//        eggsToHatch = Math.max(1, Math.min(eggsToHatch, current));
+//
+//        if (eggsToHatch > 0) {
+//            eggCount.addAndGet(-eggsToHatch);
+//            larvalCount.addAndGet(eggsToHatch);
+//            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
+//                eggsToHatch, hatchFraction * 100, newProgress);
+//        }
+//        return eggsToHatch;
+//    }
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
         if (current == 0) return 0;
 
-        double de = model.eggDevelopmentRate(temperature);
-        double dtDays = 0.0104166667;
-        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
-        eggDevelopmentProgress.set(newProgress);
+        // Use degree-day accumulation for eggs too
+        double tempC = temperature - 273.15;
+        double T_BASE_EGG = 10.0; // Base temperature for egg development
+        double DEGREE_DAYS_EGG_TO_HATCH = 22.0; // Required degree-days for eggs
 
-        if (newProgress < 1.0) return 0;
+        if (tempC > T_BASE_EGG) {
+            double dd = (tempC - T_BASE_EGG) * 0.0104166667;
+            double newProgress = eggDevelopmentProgress.get() + dd;
+            eggDevelopmentProgress.set(newProgress);
+        }
+
+        if (eggDevelopmentProgress.get() < DEGREE_DAYS_EGG_TO_HATCH) return 0;
 
         // Get hatch fraction from config
         double hatchFractionMin = (params != null) ? params.hatch_fraction_min : 0.1;
         double hatchFractionMax = (params != null) ? params.hatch_fraction_max : 0.6;
-        
-        double excessProgress = newProgress - 1.0;
+
+        double excessProgress = eggDevelopmentProgress.get() - DEGREE_DAYS_EGG_TO_HATCH;
         double hatchFraction = Math.min(hatchFractionMax, hatchFractionMin + excessProgress * 0.5);
         eggDevelopmentProgress.set(excessProgress);
 
@@ -344,8 +387,8 @@ public class InertAgent extends Agent {
         if (eggsToHatch > 0) {
             eggCount.addAndGet(-eggsToHatch);
             larvalCount.addAndGet(eggsToHatch);
-            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
-                eggsToHatch, hatchFraction * 100, newProgress);
+            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), DD=%.2f", 
+                eggsToHatch, hatchFraction * 100, eggDevelopmentProgress.get());
         }
         return eggsToHatch;
     }

@@ -14,7 +14,14 @@ public class LifecycleModel {
 
     private final SpeciesParameters p;
     private final double dtDays;          
-    private final Random rng;             
+    private final Random rng;  
+    
+    private static final double T_BASE_LARVA = 13.3;        // Base temperature in Celsius
+    private static final double T_BASE_PUPA = 10.0;         // Base temperature for pupa
+    private static final double DEGREE_DAYS_LARVA_TO_PUPA = 66.5;  // Required thermal accumulation
+    private static final double DEGREE_DAYS_PUPA_TO_ADULT = 22.0;   // Required for pupa to adult
+    private static final double DEGREE_DAYS_TO_PUPA = 66.5; // Required thermal accumulation
+    
 
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
         this.p = params;
@@ -156,62 +163,144 @@ public class LifecycleModel {
 //        }
 //    }
     
+//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
+//        double dL = larvaDevelopmentRate(tempKelvin);
+//        double mL = larvaMortalityRate(tempKelvin);
+//
+//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
+//        agent.setDevelopmentProgress(newProgress);
+//
+//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
+//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
+//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
+//        }
+//
+//        if (newProgress >= 1.0) {
+//            agent.setStage(LifecycleStage.PUPA);
+//            agent.setDevelopmentProgress(0.0);
+//            agent.setEnergy(0.6);
+//            agent.setAge(0); // <-- RESET AGE HERE
+//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin); // log will now show 0
+//            return;
+//        }
+//
+//        double pDie = mortalityProb(mL);
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-        double dL = larvaDevelopmentRate(tempKelvin);
+        double tempC = celsius(tempKelvin);
         double mL = larvaMortalityRate(tempKelvin);
 
-        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-        agent.setDevelopmentProgress(newProgress);
-
-        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
+        // 1. Accumulate degree-days
+        if (tempC > T_BASE_LARVA) {
+            double dd = (tempC - T_BASE_LARVA) * dtDays;
+            double newDD = agent.getAccumulatedDegreeDays() + dd;
+            agent.setAccumulatedDegreeDays(newDD);
         }
 
-        if (newProgress >= 1.0) {
+        // 2. Check if enough degree-days accumulated to pupate
+        if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_LARVA_TO_PUPA) {
             agent.setStage(LifecycleStage.PUPA);
-            agent.setDevelopmentProgress(0.0);  // Reset progress
+            agent.setAccumulatedDegreeDays(0.0);
+            agent.setStageAgeDays(0.0);
+            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setDevelopmentProgress(0.0);
             agent.setEnergy(0.6);
-            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+            // DO NOT reset age here - it's for total lifespan tracking
+
+            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), // Will now show 0
+                DEGREE_DAYS_LARVA_TO_PUPA, 
+                tempC);
             return;
         }
 
+        // 3. Apply mortality
         double pDie = mortalityProb(mL);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+            SimulationLogger.info("[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), 
+                tempC);
         }
     }
+
+//    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
+//        double dP = pupaDevelopmentRate(tempKelvin);
+//        double mP = pupaMortalityRate(tempKelvin);
+//        double pAdv = transitionProb(dP);
+//        double pDie = mortalityProb(mP);
+//
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//            return;
+//        }
+//        if (rng.nextDouble() < pAdv) {
+//            agent.setStage(LifecycleStage.ADULT);
+//            agent.setEnergy(0.9);
+//            agent.setAge(0); // <-- RESET AGE HERE
+//            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
-        double dP = pupaDevelopmentRate(tempKelvin);
+        double tempC = celsius(tempKelvin);
         double mP = pupaMortalityRate(tempKelvin);
-        double pAdv = transitionProb(dP);
-        double pDie = mortalityProb(mP);
 
-        if (rng.nextDouble() < pDie) {
-            agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+        // 1. Accumulate degree-days for pupa
+        if (tempC > T_BASE_PUPA) {
+            double dd = (tempC - T_BASE_PUPA) * dtDays;
+            double newDD = agent.getAccumulatedDegreeDays() + dd;
+            agent.setAccumulatedDegreeDays(newDD);
+        }
+
+        // 2. Check if enough degree-days to emerge
+        if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_PUPA_TO_ADULT) {
+            agent.setStage(LifecycleStage.ADULT);
+            agent.setAccumulatedDegreeDays(0.0);
+            agent.setStageAgeDays(0.0);
+            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setEnergy(0.9);
+            // DO NOT reset age here - it's for total lifespan tracking
+
+            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), // Will now show 0
+                DEGREE_DAYS_PUPA_TO_ADULT, 
+                tempC);
             return;
         }
-        if (rng.nextDouble() < pAdv) {
-            agent.setStage(LifecycleStage.ADULT);
-            agent.setEnergy(0.9);
-            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+
+        // 3. Apply mortality
+        double pDie = mortalityProb(mP);
+        if (rng.nextDouble() < pDie) {
+            agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), 
+                tempC);
         }
     }
-
+    
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double mA = adultMortalityRate(tempKelvin);
         double pDie = mortalityProb(mA);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
             SimulationLogger.info("[DEATH] %s died as ADULT at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+                    agent.getId(), agent.getAge(), celsius(tempKelvin));
         }
     }
 

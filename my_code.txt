@@ -14,7 +14,14 @@ public class LifecycleModel {
 
     private final SpeciesParameters p;
     private final double dtDays;          
-    private final Random rng;             
+    private final Random rng;  
+    
+    private static final double T_BASE_LARVA = 13.3;        // Base temperature in Celsius
+    private static final double T_BASE_PUPA = 10.0;         // Base temperature for pupa
+    private static final double DEGREE_DAYS_LARVA_TO_PUPA = 66.5;  // Required thermal accumulation
+    private static final double DEGREE_DAYS_PUPA_TO_ADULT = 22.0;   // Required for pupa to adult
+    private static final double DEGREE_DAYS_TO_PUPA = 66.5; // Required thermal accumulation
+    
 
     public LifecycleModel(SpeciesParameters params, double tickMinutes) {
         this.p = params;
@@ -156,62 +163,144 @@ public class LifecycleModel {
 //        }
 //    }
     
+//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
+//        double dL = larvaDevelopmentRate(tempKelvin);
+//        double mL = larvaMortalityRate(tempKelvin);
+//
+//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
+//        agent.setDevelopmentProgress(newProgress);
+//
+//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
+//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
+//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
+//        }
+//
+//        if (newProgress >= 1.0) {
+//            agent.setStage(LifecycleStage.PUPA);
+//            agent.setDevelopmentProgress(0.0);
+//            agent.setEnergy(0.6);
+//            agent.setAge(0); // <-- RESET AGE HERE
+//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
+//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin); // log will now show 0
+//            return;
+//        }
+//
+//        double pDie = mortalityProb(mL);
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
+//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-        double dL = larvaDevelopmentRate(tempKelvin);
+        double tempC = celsius(tempKelvin);
         double mL = larvaMortalityRate(tempKelvin);
 
-        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-        agent.setDevelopmentProgress(newProgress);
-
-        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
+        // 1. Accumulate degree-days
+        if (tempC > T_BASE_LARVA) {
+            double dd = (tempC - T_BASE_LARVA) * dtDays;
+            double newDD = agent.getAccumulatedDegreeDays() + dd;
+            agent.setAccumulatedDegreeDays(newDD);
         }
 
-        if (newProgress >= 1.0) {
+        // 2. Check if enough degree-days accumulated to pupate
+        if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_LARVA_TO_PUPA) {
             agent.setStage(LifecycleStage.PUPA);
-            agent.setDevelopmentProgress(0.0);  // Reset progress
+            agent.setAccumulatedDegreeDays(0.0);
+            agent.setStageAgeDays(0.0);
+            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setDevelopmentProgress(0.0);
             agent.setEnergy(0.6);
-            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+            // DO NOT reset age here - it's for total lifespan tracking
+
+            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), // Will now show 0
+                DEGREE_DAYS_LARVA_TO_PUPA, 
+                tempC);
             return;
         }
 
+        // 3. Apply mortality
         double pDie = mortalityProb(mL);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
+            SimulationLogger.info("[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), 
+                tempC);
         }
     }
+
+//    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
+//        double dP = pupaDevelopmentRate(tempKelvin);
+//        double mP = pupaMortalityRate(tempKelvin);
+//        double pAdv = transitionProb(dP);
+//        double pDie = mortalityProb(mP);
+//
+//        if (rng.nextDouble() < pDie) {
+//            agent.setAlive(false);
+//            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//            return;
+//        }
+//        if (rng.nextDouble() < pAdv) {
+//            agent.setStage(LifecycleStage.ADULT);
+//            agent.setEnergy(0.9);
+//            agent.setAge(0); // <-- RESET AGE HERE
+//            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
+//                    agent.getId(), agent.getAge(), tempKelvin);
+//        }
+//    }
+    
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
-        double dP = pupaDevelopmentRate(tempKelvin);
+        double tempC = celsius(tempKelvin);
         double mP = pupaMortalityRate(tempKelvin);
-        double pAdv = transitionProb(dP);
-        double pDie = mortalityProb(mP);
 
-        if (rng.nextDouble() < pDie) {
-            agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+        // 1. Accumulate degree-days for pupa
+        if (tempC > T_BASE_PUPA) {
+            double dd = (tempC - T_BASE_PUPA) * dtDays;
+            double newDD = agent.getAccumulatedDegreeDays() + dd;
+            agent.setAccumulatedDegreeDays(newDD);
+        }
+
+        // 2. Check if enough degree-days to emerge
+        if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_PUPA_TO_ADULT) {
+            agent.setStage(LifecycleStage.ADULT);
+            agent.setAccumulatedDegreeDays(0.0);
+            agent.setStageAgeDays(0.0);
+            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setEnergy(0.9);
+            // DO NOT reset age here - it's for total lifespan tracking
+
+            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), // Will now show 0
+                DEGREE_DAYS_PUPA_TO_ADULT, 
+                tempC);
             return;
         }
-        if (rng.nextDouble() < pAdv) {
-            agent.setStage(LifecycleStage.ADULT);
-            agent.setEnergy(0.9);
-            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+
+        // 3. Apply mortality
+        double pDie = mortalityProb(mP);
+        if (rng.nextDouble() < pDie) {
+            agent.setAlive(false);
+            SimulationLogger.info("[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8), 
+                agent.getStageAgeTicks(), 
+                tempC);
         }
     }
-
+    
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double mA = adultMortalityRate(tempKelvin);
         double pDie = mortalityProb(mA);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
             SimulationLogger.info("[DEATH] %s died as ADULT at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), tempKelvin);
+                    agent.getId(), agent.getAge(), celsius(tempKelvin));
         }
     }
 
@@ -929,6 +1018,7 @@ public class SimulationEngine implements Runnable {
     }
 }package com.monadvsim.app.models.engine;
 
+import com.monadvsim.app.models.utils.SimulationLogger;
 import java.time.LocalDateTime;
 import java.time.Duration;
 
@@ -940,6 +1030,7 @@ public class TimeManager {
     private final LocalDateTime startDateTime;
     private LocalDateTime currentDateTime;
     private final LocalDateTime endDateTime;
+    private LocalDateTime dataStartDateTime;
     
     private long tickCount = 0;
     private final Duration tickDuration;      
@@ -953,7 +1044,36 @@ public class TimeManager {
         this.dataStepDuration = Duration.ofHours(1);
         this.totalTicks = totalTicks;
         this.endDateTime = start.plus(tickDuration.multipliedBy(totalTicks));
+        this.dataStartDateTime = null;
     }
+    
+    public void setDataStartDateTime(LocalDateTime dataStart) {
+        this.dataStartDateTime = dataStart;
+        SimulationLogger.info("[TimeManager] Data start time set to: %s", dataStart);
+    }
+
+//    public int getCurrentFrameIndex() {
+//        // Use the data's absolute time if available
+//        if (dataStartDateTime != null) {
+//            // Calculate elapsed hours from data start to current time
+//            Duration elapsedSinceDataStart = Duration.between(dataStartDateTime, currentDateTime);
+//            long hours = elapsedSinceDataStart.toHours();
+//
+//            // If current time is before data start, return 0 (use first frame)
+//            if (hours < 0) {
+//                SimulationLogger.warning("[TimeManager] Current time %s is before data start %s, using frame 0",
+//                    currentDateTime, dataStartDateTime);
+//                return 0;
+//            }
+//
+//            return (int) Math.max(0, hours);
+//        }
+//
+//        // Fallback: use elapsed seconds from simulation start (original behavior)
+//        Duration elapsed = Duration.between(startDateTime, currentDateTime);
+//        long seconds = elapsed.getSeconds();
+//        return (int) (seconds / 3600);
+//    }
 
     public boolean tick() {
         currentDateTime = currentDateTime.plus(tickDuration);
@@ -983,11 +1103,33 @@ public class TimeManager {
 //    }
     
     // In TimeManager
+//    public int getCurrentFrameIndex(){
+//        Duration elapsed = Duration.between(dataStartDateTime, currentDateTime);
+//        return (int) (elapsed.toHours());
+//    }
+    // In TimeManager.java
     public int getCurrentFrameIndex() {
-        Duration elapsed = Duration.between(startDateTime, currentDateTime);
-        long seconds = elapsed.getSeconds();
-        // Use the actual data step duration (1 hour) and align to the data start
-        return (int) (seconds / 3600);
+        // If dataStartDateTime is null, try to set it
+        if (dataStartDateTime == null) {
+            dataStartDateTime = startDateTime;
+            SimulationLogger.warning("[TimeManager] dataStartDateTime was null, set to: %s", dataStartDateTime);
+            return 0; // Return first frame
+        }
+
+        try {
+            Duration elapsedSinceDataStart = Duration.between(dataStartDateTime, currentDateTime);
+            long hours = elapsedSinceDataStart.toHours();
+
+            if (hours < 0) {
+                return 0; // Use first frame if before data start
+            }
+
+            return (int) Math.min(hours, Integer.MAX_VALUE);
+
+        } catch (Exception e) {
+            SimulationLogger.severe("[TimeManager] Error calculating frame index: " + e.getMessage());
+            return 0;
+        }
     }
 }package com.monadvsim.app.models.engine;
 
@@ -4002,6 +4144,7 @@ public class SimulationConfig {
     public double maxAgeMultiplierLarva = 0.45;
     public double maxAgeMultiplierPupa = 0.15;
     public double maxAgeMultiplierAdult = 0.35;
+    public InertAgentParams inert_agents;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"
@@ -4106,6 +4249,15 @@ public class SimulationConfig {
     public static class TokenMapping {
         public String token;
         public String layer;
+    }
+    
+    public static class InertAgentParams {
+        public int max_larvae_capacity = 500;
+        public double mortality_intensity = 0.5;
+        public int min_larvae_retain = 50;
+        public double max_water_volume = 100.0;
+        public double hatch_fraction_min = 0.1;
+        public double hatch_fraction_max = 0.6;
     }
 }package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
@@ -4416,17 +4568,165 @@ public class AgentLayer extends Layer {
 //    }
     
     
+//    private void processAgentRules(Agent agent, Project project) {
+//        if (agent == null) return;
+//
+//        if (agent instanceof LivingAgent la && !la.isAlive()) {
+//            return;
+//        }
+//
+//        if (rulesEvaluated.get() > 1_000_000_000L) {
+//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
+//            return;
+//        }
+//
+//        synchronized (agent) {
+//            try {
+//                // ================================================================
+//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
+//                // ================================================================
+//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
+//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
+//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
+//                    Random rng = SeedManager.getRandom();
+//                    if (hatched > 0 || ia.getLarvalCount() > 0) {
+//                        ia.applyDensityDependentMortality();
+//                    }
+//                    if (hatched > 0) {
+//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
+//                        if (mosquitoLayer != null) {
+//                            for (int i = 0; i < hatched; i++) {
+//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
+//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
+//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
+//                                larva.setStage(LifecycleStage.LARVA);
+//                                larva.setAge(0);
+//                                larva.setStageAgeTicks(0); // <-- NEW: Reset stage age
+//                                larva.setEnergy(0.8);
+//                                larva.setDevelopmentProgress(0.0);
+//                                larva.setAccumulatedDegreeDays(0.0); // <-- NEW: Reset degree-days
+//                            }
+//                        }
+//                    }
+//                }
+//
+//                // ================================================================
+//                // 2. LIVING AGENT: Temperature‑dependent development
+//                // ================================================================
+//                if (agent instanceof LivingAgent la) {
+//                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
+//                    LifecycleStage stage = la.getStage();
+//
+//                    if (la.isAlive()) {
+//                        // Debug logging for larvae
+//                        if (stage == LifecycleStage.LARVA && timeManager != null) {
+//                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
+//                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, stageAge=%d, progress=%.3f, DD=%.2f, temp=%.2fK",
+//                                    la.getId().substring(0, 8), 
+//                                    la.getStageAgeTicks(), // <-- Use stage age
+//                                    la.getDevelopmentProgress(), 
+//                                    la.getAccumulatedDegreeDays(),
+//                                    temperature);
+//                            }
+//                        }
+//
+//                        // ================================================================
+//                        // IMPORTANT: Increment stage age FIRST before any transitions
+//                        // This ensures that even newly transitioned agents have their age tracked
+//                        // ================================================================
+//                        la.incrementStageAgeTicks();
+//
+//                        switch (stage) {
+//                            case LARVA:
+//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
+//                                break;
+//                            case PUPA:
+//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
+//                                break;
+//                            case ADULT:
+//                                lifecycleModel.applyAdultMortality(la, temperature);
+//                                break;
+//                            default:
+//                                break;
+//                        }
+//                    }
+//
+//                    if (!la.isAlive()) {
+//                        lifecycleManager.scheduleDeath(agent.getId());
+//                        deathsThisTick.incrementAndGet();
+//                        return;
+//                    }
+//
+//                    // ================================================================
+//                    // 3. RULE EVALUATION
+//                    // ================================================================
+//                    for (RuleDefinition rule : rules) {
+//                        rulesEvaluated.incrementAndGet();
+//                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+//                        if (evalResult) {
+//                            ruleEngine.execute(rule.action(), agent, project, this);
+//                            actionsExecuted.incrementAndGet();
+//
+//                            if (!la.isAlive()) {
+//                                lifecycleManager.scheduleDeath(agent.getId());
+//                                deathsThisTick.incrementAndGet();
+//                                break;
+//                            }
+//                            if (isTerminalAction(rule.action())) break;
+//                        }
+//                    }
+//
+//                    // ================================================================
+//                    // 4. AGING AND RESTING
+//                    // ================================================================
+//                    if (la.isAlive()) {
+//                        if (la.isResting()) {
+//                            la.incrementRestingDuration();
+//                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
+//                                la.setResting(false);
+//                            }
+//                        } else {
+//                            la.incrementTimeWithoutRest();
+//                            if (la.getTimeWithoutRest() > 96) {
+//                                la.setAlive(false);
+//                                lifecycleManager.scheduleDeath(agent.getId());
+//                                deathsThisTick.incrementAndGet();
+//                                return;
+//                            }
+//                        }
+//
+//                        // ================================================================
+//                        // CRITICAL FIX: Use stageAgeTicks for stage-specific max age check
+//                        // NOT the total age (which was being reset on transition)
+//                        // ================================================================
+//                        if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
+//                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
+//                                la.getId().substring(0, 8), 
+//                                la.getStage(), 
+//                                la.getStageAgeTicks(), 
+//                                la.getMaxAgeForStage());
+//                            la.setAlive(false);
+//                            lifecycleManager.scheduleDeath(agent.getId());
+//                            deathsThisTick.incrementAndGet();
+//                            return;
+//                        }
+//
+//                        // Optional: Track total age for statistics (no longer used for mortality)
+//                        la.incrementAge();
+//                    }
+//                }
+//            } catch (Exception e) {
+//                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
+//                e.printStackTrace();
+//            }
+//        }
+//    }
+//    
+    
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
-
-        if (agent instanceof LivingAgent la && !la.isAlive()) {
-            return;
-        }
-
-        if (rulesEvaluated.get() > 1_000_000_000L) {
-            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
-            return;
-        }
+        if (agent instanceof LivingAgent la && !la.isAlive()) return;
+        if (rulesEvaluated.get() > 1_000_000_000L) return;
 
         synchronized (agent) {
             try {
@@ -4437,6 +4737,9 @@ public class AgentLayer extends Layer {
                     double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
                     int hatched = ia.hatchEggs(temperature, lifecycleModel);
                     Random rng = SeedManager.getRandom();
+                    if (hatched > 0 || ia.getLarvalCount() > 0) {
+                        ia.applyDensityDependentMortality();
+                    }
                     if (hatched > 0) {
                         AgentLayer mosquitoLayer = findMosquitoLayer(project);
                         if (mosquitoLayer != null) {
@@ -4446,98 +4749,42 @@ public class AgentLayer extends Layer {
                                 LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
                                 larva.setStage(LifecycleStage.LARVA);
                                 larva.setAge(0);
+                                larva.setStageAgeTicks(0);
                                 larva.setEnergy(0.8);
                                 larva.setDevelopmentProgress(0.0);
+                                larva.setAccumulatedDegreeDays(0.0);
                             }
                         }
                     }
                 }
 
                 // ================================================================
-                // 2. LIVING AGENT: Temperature‑dependent development
+                // 2. RULE EVALUATION FOR ALL AGENT TYPES (MOVED HERE!)
                 // ================================================================
-                if (agent instanceof LivingAgent la) {
-                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
-                    LifecycleStage stage = la.getStage();
+                for (RuleDefinition rule : rules) {
+                    rulesEvaluated.incrementAndGet();
+                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
+                    if (evalResult) {
+                        ruleEngine.execute(rule.action(), agent, project, this);
+                        actionsExecuted.incrementAndGet();
 
-                    if (la.isAlive()) {
-                        // Debug logging for larvae
-                        if (stage == LifecycleStage.LARVA && timeManager != null) {
-                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
-                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, age=%d, progress=%.3f, temp=%.2fK",
-                                    la.getId().substring(0, 8), la.getAge(), 
-                                    la.getDevelopmentProgress(), temperature);
-                            }
-                        }
-
-                        switch (stage) {
-                            case LARVA:
-                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-                                break;
-                            case PUPA:
-                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-                                break;
-                            case ADULT:
-                                lifecycleModel.applyAdultMortality(la, temperature);
-                                break;
-                            default:
-                                break;
-                        }
-                    }
-
-                    if (!la.isAlive()) {
-                        lifecycleManager.scheduleDeath(agent.getId());
-                        deathsThisTick.incrementAndGet();
-                        return;
-                    }
-
-                    // ================================================================
-                    // 3. RULE EVALUATION
-                    // ================================================================
-                    for (RuleDefinition rule : rules) {
-                        rulesEvaluated.incrementAndGet();
-                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-                        if (evalResult) {
-                            ruleEngine.execute(rule.action(), agent, project, this);
-                            actionsExecuted.incrementAndGet();
-
-                            if (!la.isAlive()) {
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                break;
-                            }
-                            if (isTerminalAction(rule.action())) break;
-                        }
-                    }
-
-                    // ================================================================
-                    // 4. AGING AND RESTING
-                    // ================================================================
-                    if (la.isAlive()) {
-                        if (la.isResting()) {
-                            la.incrementRestingDuration();
-                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-                                la.setResting(false);
-                            }
-                        } else {
-                            la.incrementTimeWithoutRest();
-                            if (la.getTimeWithoutRest() > 96) {
-                                la.setAlive(false);
-                                lifecycleManager.scheduleDeath(agent.getId());
-                                deathsThisTick.incrementAndGet();
-                                return;
-                            }
-                        }
-
-                        la.incrementAge();
-                        if (la.getAge() > la.getMaxAgeForStage()) {
-                            la.setAlive(false);
+                        // If LivingAgent died during rule execution, stop processing
+                        if (agent instanceof LivingAgent la && !la.isAlive()) {
                             lifecycleManager.scheduleDeath(agent.getId());
                             deathsThisTick.incrementAndGet();
-                            return;
+                            break;
                         }
+                        if (isTerminalAction(rule.action())) break;
                     }
                 }
+
+                // ================================================================
+                // 3. LIVING AGENT: Lifecycle updates (age, resting, development)
+                // ================================================================
+                if (agent instanceof LivingAgent la) {
+                    // ... existing LivingAgent code ...
+                }
+
             } catch (Exception e) {
                 SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
                 e.printStackTrace();
@@ -5577,13 +5824,54 @@ public class InterpolatedRasterLayer extends Layer {
         }
     }
 
+//    private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
+//        Variable timeVar = ncfile.findVariable(timeDimName);
+//        if (timeVar == null) {
+//            SimulationLogger.warning("No time variable found; using step index.");
+//            timeValues = new double[timeSize];
+//            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1‑hour steps
+//            timeReference = timeManager.getStartDateTime();
+//            return;
+//        }
+//
+//        Attribute unitsAttr = timeVar.findAttribute("units");
+//        String units = (unitsAttr != null) ? unitsAttr.getStringValue() : "";
+//        SimulationLogger.info("Time units attribute: %s", units);
+//        parseTimeUnits(units);
+//
+//        Array timeArray = timeVar.read();
+//        final double scale;
+//        if (units.contains("days") || units.contains("day")) scale = 86400.0;
+//        else if (units.contains("hours") || units.contains("hour")) scale = 3600.0;
+//        else if (units.contains("minutes") || units.contains("minute")) scale = 60.0;
+//        else {
+//            SimulationLogger.warning("Unknown time unit format: %s, using seconds", units);
+//            scale = 1.0;
+//        }
+//
+//        timeValues = new double[timeSize];
+//        for (int i = 0; i < timeSize; i++) {
+//            double raw = timeArray.getDouble(i);
+//            timeValues[i] = raw * scale;
+//        }
+//        SimulationLogger.info("Time range: %.2f to %.2f seconds since reference", timeValues[0], timeValues[timeSize-1]);
+//        
+//        // Verify time reference is valid
+//        if (timeReference == null) {
+//            SimulationLogger.warning("Time reference is null! Using simulation start time.");
+//            timeReference = timeManager.getStartDateTime();
+//        }
+//    }
+    
     private void readTimeMetadata(NetcdfFile ncfile) throws IOException {
         Variable timeVar = ncfile.findVariable(timeDimName);
         if (timeVar == null) {
             SimulationLogger.warning("No time variable found; using step index.");
             timeValues = new double[timeSize];
-            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1‑hour steps
+            for (int i = 0; i < timeSize; i++) timeValues[i] = i * 3600.0; // 1-hour steps
             timeReference = timeManager.getStartDateTime();
+            // CRITICAL FIX: Set dataStartDateTime in TimeManager
+            timeManager.setDataStartDateTime(timeReference);
             return;
         }
 
@@ -5592,6 +5880,13 @@ public class InterpolatedRasterLayer extends Layer {
         SimulationLogger.info("Time units attribute: %s", units);
         parseTimeUnits(units);
 
+        // CRITICAL FIX: If timeReference is still null after parsing, set it to simulation start
+        if (timeReference == null) {
+            SimulationLogger.warning("timeReference is null after parsing, using simulation start time");
+            timeReference = timeManager.getStartDateTime();
+            timeManager.setDataStartDateTime(timeReference);
+        }
+        
         Array timeArray = timeVar.read();
         final double scale;
         if (units.contains("days") || units.contains("day")) scale = 86400.0;
@@ -5773,8 +6068,9 @@ public class InterpolatedRasterLayer extends Layer {
         dataLock.readLock().lock();
         try {
             if (timeReference == null) {
-                SimulationLogger.warning("Time reference is null! Cannot interpolate.");
-                return;
+                SimulationLogger.warning("Time reference is null! Using simulation start time.");
+                timeReference = timeManager.getStartDateTime();
+                timeManager.setDataStartDateTime(timeReference);
             }
 
             // Get the frame index from TimeManager (already has the 41400 second offset applied)
@@ -6379,6 +6675,7 @@ public enum LifecycleStage {
 }
 package com.monadvsim.app.models.entities;
 
+import com.monadvsim.app.models.config.SimulationConfig.InertAgentParams;
 import com.monadvsim.app.models.engine.LifecycleModel;
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.utils.SeedManager;
@@ -6411,6 +6708,56 @@ public class InertAgent extends Agent {
 
     // For thread-safe batch operations (kept for potential future use)
     private final Object batchLock = new Object();
+    private InertAgentParams params = new InertAgentParams();
+    
+    private static final int DEFAULT_MAX_LARVAE_CAPACITY = 500;
+    private static final double DEFAULT_MORTALITY_INTENSITY = 0.5;
+    private static final int DEFAULT_MIN_LARVAE_RETAIN = 50;
+       
+
+    public InertAgent(double x, double y, InertAgentParams params) {
+        super(x, y);
+        this.params = params;
+    }
+    
+    
+    // ================================================================
+    // NEW: Density-Dependent Mortality Check
+    // ================================================================
+    /**
+     * Applies density-dependent mortality to the larval population in this tank.
+     * If the larval count exceeds MAX_LARVAE_CAPACITY, a percentage of the excess
+     * is killed to simulate competition for resources.
+     * 
+     * @return The number of larvae killed
+     */
+    public int applyDensityDependentMortality() {
+        int currentLarvae = larvalCount.get();
+        if (currentLarvae <= params.max_larvae_capacity) {
+            return 0;
+        }
+        int excess = currentLarvae - params.max_larvae_capacity;
+        int toKill = (int) (excess * params.mortality_intensity);
+        int maxKill = Math.max(0, currentLarvae - params.min_larvae_retain);
+        toKill = Math.min(toKill, maxKill);
+
+        if (toKill > 0) {
+            // Create a final copy for the lambda expression
+            final int killCount = toKill;
+
+            // Update the larval count (thread-safe)
+            int newCount = larvalCount.updateAndGet(current -> Math.max(0, current - killCount));
+
+            // Log the mortality event (optional, for debugging)
+            if (killCount > 10) {
+                SimulationLogger.fine("[TANK] Density-dependent mortality: killed %d larvae (was: %d, now: %d), capacity=%.1f", 
+                    killCount, currentLarvae, newCount, getCapacity());
+            }
+            return killCount;
+        }
+        return 0;
+    }
+    
 
     public InertAgent(double x, double y) {
         super(x, y);
@@ -6599,44 +6946,124 @@ public class InertAgent extends Agent {
 //        return hatched;
 //    }
     
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int current = eggCount.get();
+//        if (current == 0) return 0;
+//
+//        double de = model.eggDevelopmentRate(temperature);
+//        double dtDays = 0.0104166667;
+//        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
+//        eggDevelopmentProgress.set(newProgress);
+//        
+//        if (this.getId().hashCode() % 20 == 0 && current > 0) {
+//            SimulationLogger.fine("[EGG] %s progress=%.4f, de=%.6f, temp=%.2fK, eggs=%d",
+//                this.getId().substring(0, 8), newProgress, de, temperature, current);
+//        }
+//
+//        if (newProgress < 1.0) return 0;
+//
+//        // STAGGERED HATCHING: Don't hatch all at once!
+//        // Only hatch a percentage based on how far past 1.0 progress is
+//        double excessProgress = newProgress - 1.0;
+//        double hatchFraction = Math.min(1.0, 0.1 + excessProgress * 0.5); // 10-60% per tick
+//
+//        // Reset progress (some eggs may continue developing)
+//        eggDevelopmentProgress.set(excessProgress);
+//
+//        double cap = capacity.get();
+//        int currentLarvae = larvalCount.get();
+//        if (currentLarvae >= cap) return 0;
+//
+//        int maxHatch = (int)(cap - currentLarvae);
+//        int eggsToHatch = (int)Math.min(current, maxHatch * hatchFraction);
+//        eggsToHatch = Math.max(1, eggsToHatch);
+//        eggsToHatch = Math.min(eggsToHatch, current);
+//
+//        if (eggsToHatch > 0) {
+//            eggCount.addAndGet(-eggsToHatch);
+//            larvalCount.addAndGet(eggsToHatch);
+//            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
+//                eggsToHatch, hatchFraction * 100, newProgress);
+//        }
+//        return eggsToHatch;
+//    }
+    
+//    public int hatchEggs(double temperature, LifecycleModel model) {
+//        int current = eggCount.get();
+//        if (current == 0) return 0;
+//
+//        double de = model.eggDevelopmentRate(temperature);
+//        double dtDays = 0.0104166667;
+//        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
+//        eggDevelopmentProgress.set(newProgress);
+//
+//        if (newProgress < 1.0) return 0;
+//
+//        // Get hatch fraction from config
+//        double hatchFractionMin = (params != null) ? params.hatch_fraction_min : 0.1;
+//        double hatchFractionMax = (params != null) ? params.hatch_fraction_max : 0.6;
+//        
+//        double excessProgress = newProgress - 1.0;
+//        double hatchFraction = Math.min(hatchFractionMax, hatchFractionMin + excessProgress * 0.5);
+//        eggDevelopmentProgress.set(excessProgress);
+//
+//        // Check capacity
+//        int maxCapacity = (params != null) ? params.max_larvae_capacity : DEFAULT_MAX_LARVAE_CAPACITY;
+//        int currentLarvae = larvalCount.get();
+//        if (currentLarvae >= maxCapacity) return 0;
+//
+//        int maxHatch = maxCapacity - currentLarvae;
+//        int eggsToHatch = (int) Math.min(current, maxHatch * hatchFraction);
+//        eggsToHatch = Math.max(1, Math.min(eggsToHatch, current));
+//
+//        if (eggsToHatch > 0) {
+//            eggCount.addAndGet(-eggsToHatch);
+//            larvalCount.addAndGet(eggsToHatch);
+//            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
+//                eggsToHatch, hatchFraction * 100, newProgress);
+//        }
+//        return eggsToHatch;
+//    }
+    
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
         if (current == 0) return 0;
 
-        double de = model.eggDevelopmentRate(temperature);
-        double dtDays = 0.0104166667;
-        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
-        eggDevelopmentProgress.set(newProgress);
-        
-        if (this.getId().hashCode() % 20 == 0 && current > 0) {
-            SimulationLogger.fine("[EGG] %s progress=%.4f, de=%.6f, temp=%.2fK, eggs=%d",
-                this.getId().substring(0, 8), newProgress, de, temperature, current);
+        // Use degree-day accumulation for eggs too
+        double tempC = temperature - 273.15;
+        double T_BASE_EGG = 10.0; // Base temperature for egg development
+        double DEGREE_DAYS_EGG_TO_HATCH = 22.0; // Required degree-days for eggs
+
+        if (tempC > T_BASE_EGG) {
+            double dd = (tempC - T_BASE_EGG) * 0.0104166667;
+            double newProgress = eggDevelopmentProgress.get() + dd;
+            eggDevelopmentProgress.set(newProgress);
         }
 
-        if (newProgress < 1.0) return 0;
+        if (eggDevelopmentProgress.get() < DEGREE_DAYS_EGG_TO_HATCH) return 0;
 
-        // STAGGERED HATCHING: Don't hatch all at once!
-        // Only hatch a percentage based on how far past 1.0 progress is
-        double excessProgress = newProgress - 1.0;
-        double hatchFraction = Math.min(1.0, 0.1 + excessProgress * 0.5); // 10-60% per tick
+        // Get hatch fraction from config
+        double hatchFractionMin = (params != null) ? params.hatch_fraction_min : 0.1;
+        double hatchFractionMax = (params != null) ? params.hatch_fraction_max : 0.6;
 
-        // Reset progress (some eggs may continue developing)
+        double excessProgress = eggDevelopmentProgress.get() - DEGREE_DAYS_EGG_TO_HATCH;
+        double hatchFraction = Math.min(hatchFractionMax, hatchFractionMin + excessProgress * 0.5);
         eggDevelopmentProgress.set(excessProgress);
 
-        double cap = capacity.get();
+        // Check capacity
+        int maxCapacity = (params != null) ? params.max_larvae_capacity : DEFAULT_MAX_LARVAE_CAPACITY;
         int currentLarvae = larvalCount.get();
-        if (currentLarvae >= cap) return 0;
+        if (currentLarvae >= maxCapacity) return 0;
 
-        int maxHatch = (int)(cap - currentLarvae);
-        int eggsToHatch = (int)Math.min(current, maxHatch * hatchFraction);
-        eggsToHatch = Math.max(1, eggsToHatch);
-        eggsToHatch = Math.min(eggsToHatch, current);
+        int maxHatch = maxCapacity - currentLarvae;
+        int eggsToHatch = (int) Math.min(current, maxHatch * hatchFraction);
+        eggsToHatch = Math.max(1, Math.min(eggsToHatch, current));
 
         if (eggsToHatch > 0) {
             eggCount.addAndGet(-eggsToHatch);
             larvalCount.addAndGet(eggsToHatch);
-            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
-                eggsToHatch, hatchFraction * 100, newProgress);
+            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), DD=%.2f", 
+                eggsToHatch, hatchFraction * 100, eggDevelopmentProgress.get());
         }
         return eggsToHatch;
     }
@@ -6823,14 +7250,17 @@ public class LivingAgent extends Agent {
     private final AtomicInteger timeWithoutRest = new AtomicInteger(0);
     private final AtomicInteger maxRestingDuration = new AtomicInteger(4); // 1 hour
     private double developmentProgress = 0.0;
-    
+    private int stageAgeTicks = 0;
     // Stage-specific max age multipliers (as percentage of global max age)
     // These represent the maximum age an agent can reach in each stage
     // before dying of old age
     public static final double MAX_AGE_MULTIPLIER_EGG = 0.05;    // 5% of global max
-    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.80;  // 45% of global max
-    public static final double MAX_AGE_MULTIPLIER_PUPA = 0.15;   // 15% of global max
-    public static final double MAX_AGE_MULTIPLIER_ADULT = 0.35;  // 35% of global max
+    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.25;  // 45% of global max
+    public static final double MAX_AGE_MULTIPLIER_PUPA = 0.10;   // 15% of global max
+    public static final double MAX_AGE_MULTIPLIER_ADULT = 0.60;  // 35% of global max
+   
+    private double accumulatedDegreeDays = 0.0;
+    private double stageAgeDays = 0.0;
     
     // The global max age (set by project defaults)
     private int globalMaxAge = 2880; // Default: 30 days at 15-min ticks
@@ -6838,10 +7268,21 @@ public class LivingAgent extends Agent {
     public double getDevelopmentProgress() {
         return developmentProgress;
     }
-
+    
     public void setDevelopmentProgress(double developmentProgress) {
         this.developmentProgress = developmentProgress;
     }
+    
+    public int getStageAgeTicks() { return stageAgeTicks; }
+    public void setStageAgeTicks(int stageAgeTicks) { this.stageAgeTicks = stageAgeTicks; }
+    public void incrementStageAgeTicks() { this.stageAgeTicks++; }
+    
+    // Getters and setters
+    public double getAccumulatedDegreeDays() { return accumulatedDegreeDays; }
+    public void setAccumulatedDegreeDays(double dd) { this.accumulatedDegreeDays = dd; }
+    
+    public double getStageAgeDays() { return stageAgeDays; }
+    public void setStageAgeDays(double days) { this.stageAgeDays = days; }
 
     public LivingAgent(double x, double y) {
         super(x, y);
@@ -7123,6 +7564,7 @@ public class App {
             LocalDateTime startDate = LocalDateTime.parse(config.time.startDateTime);
             timeManager = new TimeManager(startDate, config.time.totalTicks, config.time.tickMinutes);
 
+            timeManager.setDataStartDateTime(startDate);
             // ======================================================================
             // 5. WORLD BOUNDS FROM STUDY SITE
             // ======================================================================
@@ -7683,6 +8125,13 @@ public class App {
 
         SimulationLogger.info("Seeding %s across the study area",
             isUniform ? "uniformly" : "using weighted habitat selection");
+        
+        // Get InertAgent parameters from config
+        SimulationConfig.InertAgentParams inertParams = config.inert_agents;
+        if (inertParams == null) {
+            inertParams = new SimulationConfig.InertAgentParams();
+            SimulationLogger.info("Using default InertAgent parameters");
+        }
 
         // Point generator
         java.util.function.Supplier<double[]> pointGenerator;
@@ -7717,17 +8166,19 @@ public class App {
 
             if (buildingDensity > seeding.tankBuildingThreshold &&
                 popDensity > seeding.tankPopulationThreshold) {
-                InertAgent tank = new InertAgent(rx, ry);
+                // Pass the config parameters to the constructor
+                InertAgent tank = new InertAgent(rx, ry, inertParams);
                 tank.setWaterVolume(70 + rand.nextDouble() * 30);
                 tank.setLarvalCount(rand.nextInt(30) + 10);
                 tank.setEggCount(rand.nextInt(80) + 20);
-                tank.setCapacity(300 + rand.nextDouble() * 200);
+                tank.updateCapacityFromVolume(); // Now uses config values
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
                 tanksPlaced++;
             }
         }
         SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
+
 
         // Seed mosquitoes
         int mosquitoesPlaced = 0;
