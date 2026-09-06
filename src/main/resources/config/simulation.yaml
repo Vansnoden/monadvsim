@@ -2,9 +2,11 @@
 # SIMULATION CONFIGURATION - REVISED FOR ACTIVE POPULATION DYNAMICS
 # ================================================================
 
+#140256 
+
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 5000
+  totalTicks: 3000
   tickMinutes: 15
 
 files:
@@ -13,7 +15,7 @@ files:
 gridCellSizeDegrees: 0.001
 
 # ================================================================
-# SPECIES PARAMETERS - OPTIMIZED FOR EGG DEVELOPMENT
+# SPECIES PARAMETERS
 # ================================================================
 species:
   egg_dev_rho: 0.005000000000000001
@@ -48,7 +50,7 @@ species:
   host_carrying_capacity_base: 2.0
 
 # ================================================================
-# LAYER DEFINITIONS
+# DATA LAYER DEFINITIONS
 # ================================================================
 layers:
   - name: Elevation
@@ -94,15 +96,15 @@ tokens:
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      - condition: "stage == 'LARVA' && age > 200 && energy > 0.4"
+      - condition: "stage == 'LARVA' && stageAgeTick > 200 && energy > 0.4"
         action: "pupate"
         priority: 5
 
-      - condition: "stage == 'PUPA' && age > 150"
+      - condition: "stage == 'PUPA' && stageAgeTick > 150"
         action: "emerge"
         priority: 5
 
-      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && age > 100"
+      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && stageAgeTick > 100"
         action: "pupate"
         priority: 6
 
@@ -130,13 +132,21 @@ agentLayers:
         action: "rest_in_building"
         priority: 6
 
-      - condition: "stage == 'ADULT' && !resting && age < 2000"
+      - condition: "stage == 'ADULT' && !resting && stageAgeTick < 2000"
         action: "move_random"
         priority: 3
 
       - condition: "true"
         action: "rest"
         priority: 2
+        
+      - condition: "agent.gravid && agent.alive"
+        action: "seek_tank"
+        priority: 90
+        
+      - condition: "agent.gravid && agent.alive"
+        action: "lay_eggs"
+        priority: 80
 
   - name: "WaterTanks"
     rules:
@@ -168,7 +178,7 @@ agentLayers:
 # InertAgent (Water Tank) Configuration
 # ================================================================
 inert_agents:
-  max_larvae_capacity: 300
+  max_larvae_capacity: 1000
   mortality_intensity: 0.4
   min_larvae_retain: 20
   max_water_volume: 100.0
@@ -179,14 +189,14 @@ inert_agents:
 # SEEDING CONFIGURATION
 # ================================================================
 seeding:
-  seedAcrossFullStudySite: false
-  useOccurrencePoints: true
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
   occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
   occurrenceYearStart: 2016
   occurrenceYearEnd: 2023
   occurrenceBufferKm: 0.05
-  tanksToSeed: 2500
-  mosquitoesToSeed: 10000
+  tanksToSeed: 5000
+  mosquitoesToSeed: 20000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
   tankBuildingThreshold: 0.000001
@@ -202,6 +212,6 @@ project:
   defaultAgentStep: 0.00005
   defaultMaxAgentAge: 5760
   maxAgeMultiplierEgg: 0.05
-  maxAgeMultiplierLarva: 0.85
+  maxAgeMultiplierLarva: 0.45
   maxAgeMultiplierPupa: 0.15
-  maxAgeMultiplierAdult: 0.40
+  maxAgeMultiplierAdult: 0.35

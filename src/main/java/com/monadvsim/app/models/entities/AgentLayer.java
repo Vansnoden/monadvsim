@@ -498,7 +498,88 @@ public class AgentLayer extends Layer {
                 }
 
                 // ================================================================
-                // 2. RULE EVALUATION FOR ALL AGENT TYPES (MOVED HERE!)
+                // 2. LIVING AGENT: Lifecycle updates (age, resting, development)
+                //    MOVED UP BEFORE RULE EVALUATION!
+                // ================================================================
+                if (agent instanceof LivingAgent la) {
+                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
+                    LifecycleStage stage = la.getStage();
+
+                    if (la.isAlive()) {
+                        // Debug logging for larvae
+                        if (stage == LifecycleStage.LARVA && timeManager != null) {
+                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
+                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, stageAge=%d, progress=%.3f, DD=%.2f, temp=%.2fK",
+                                    la.getId().substring(0, 8), 
+                                    la.getStageAgeTicks(),
+                                    la.getDevelopmentProgress(), 
+                                    la.getAccumulatedDegreeDays(),
+                                    temperature);
+                            }
+                        }
+
+                        // IMPORTANT: Increment stage age FIRST before any transitions
+                        la.incrementStageAgeTicks();
+
+                        switch (stage) {
+                            case LARVA:
+                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
+                                break;
+                            case PUPA:
+                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
+                                break;
+                            case ADULT:
+                                lifecycleModel.applyAdultMortality(la, temperature);
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+
+                    if (!la.isAlive()) {
+                        lifecycleManager.scheduleDeath(agent.getId());
+                        deathsThisTick.incrementAndGet();
+                        return;
+                    }
+
+                    // Resting and aging updates
+                    if (la.isAlive()) {
+                        if (la.isResting()) {
+                            la.incrementRestingDuration();
+                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
+                                la.setResting(false);
+                            }
+                        } else {
+                            la.incrementTimeWithoutRest();
+                            if (la.getTimeWithoutRest() > 96) {
+                                la.setAlive(false);
+                                lifecycleManager.scheduleDeath(agent.getId());
+                                deathsThisTick.incrementAndGet();
+                                return;
+                            }
+                        }
+
+                        // Stage-specific max age check using stageAgeTicks
+                        if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
+                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
+                                la.getId().substring(0, 8), 
+                                la.getStage(), 
+                                la.getStageAgeTicks(), 
+                                la.getMaxAgeForStage());
+                            la.setAlive(false);
+                            lifecycleManager.scheduleDeath(agent.getId());
+                            deathsThisTick.incrementAndGet();
+                            return;
+                        }
+
+                        // Track total age for statistics only (no longer used for mortality)
+                        la.incrementAge();
+                    }
+                }
+
+                // ================================================================
+                // 3. RULE EVALUATION FOR ALL AGENT TYPES
+                //    MOVED AFTER LIFE-CYCLE UPDATES!
                 // ================================================================
                 for (RuleDefinition rule : rules) {
                     rulesEvaluated.incrementAndGet();
@@ -515,13 +596,6 @@ public class AgentLayer extends Layer {
                         }
                         if (isTerminalAction(rule.action())) break;
                     }
-                }
-
-                // ================================================================
-                // 3. LIVING AGENT: Lifecycle updates (age, resting, development)
-                // ================================================================
-                if (agent instanceof LivingAgent la) {
-                    // ... existing LivingAgent code ...
                 }
 
             } catch (Exception e) {

@@ -113,7 +113,7 @@ public class App {
             if (config == null) {
                 SimulationLogger.severe("Failed to load configuration from: %s", configPath);
                 SimulationLogger.info("Using default configuration values...");
-                config = createDefaultConfig();
+                config = createDefaultConfig(); // Just for Testing
             }
 
             // ======================================================================
@@ -779,6 +779,9 @@ public class App {
         Random rand = SeedManager.getRandom();
         double bufferDegrees = seeding.occurrenceBufferKm / 111.32;
 
+        // Create GeometryFactory for point validation
+        GeometryFactory geometryFactory = new GeometryFactory();
+
         SimulationLogger.info("Occurrence-based seeding: %d points, buffer %.2f km",
             occurrencePoints.size(), seeding.occurrenceBufferKm);
 
@@ -790,7 +793,7 @@ public class App {
 
         HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
             seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
-        
+
         // After loading occurrence points, log the building/population values at each point
         for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
             double b = buildings.getValueAt(p.longitude, p.latitude);
@@ -865,17 +868,39 @@ public class App {
 
         SimulationLogger.info("Seeded %d water tanks near occurrences", tanksPlaced);
 
-        // If still no tanks, force-place them!
+        // If still no tanks, force-place them with study area validation
         if (tanksPlaced == 0 && !occurrenceCoords.isEmpty()) {
             SimulationLogger.warning("No tanks placed with thresholds, force-placing at occurrence points!");
-            for (int i = 0; i < Math.min(20, occurrenceCoords.size()); i++) {
-                double[] base = occurrenceCoords.get(i % occurrenceCoords.size());
-                // Add some random offset
-                double lon = base[0] + (rand.nextDouble() - 0.5) * 0.01;
-                double lat = base[1] + (rand.nextDouble() - 0.5) * 0.01;
-                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
-                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+            int forcePlaced = 0;
+            int maxForceAttempts = Math.min(50, occurrenceCoords.size() * 5);
 
+            for (int attempt = 0; attempt < maxForceAttempts && forcePlaced < 20; attempt++) {
+                double[] base = occurrenceCoords.get(attempt % occurrenceCoords.size());
+                double lon, lat;
+                Point point;
+                int retries = 0;
+                boolean validPoint = false;
+
+                // Keep trying to find a point inside the study area
+                do {
+                    lon = base[0] + (rand.nextDouble() - 0.5) * 0.01;
+                    lat = base[1] + (rand.nextDouble() - 0.5) * 0.01;
+                    lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
+                    lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+
+                    point = geometryFactory.createPoint(new Coordinate(lon, lat));
+                    retries++;
+
+                    // If we've tried too many times, use the bounding box center
+                    if (retries > 100) {
+                        lon = worldBounds.getCenterX();
+                        lat = worldBounds.getCenterY();
+                        point = geometryFactory.createPoint(new Coordinate(lon, lat));
+                        break;
+                    }
+                } while (studyAreaGeometry != null && !studyAreaGeometry.contains(point));
+
+                // Create the tank with the validated coordinates
                 InertAgent tank = new InertAgent(lon, lat);
                 tank.setWaterVolume(70 + rand.nextDouble() * 30);
                 tank.setLarvalCount(rand.nextInt(15) + 5);
@@ -883,22 +908,42 @@ public class App {
                 tank.setCapacity(150 + rand.nextDouble() * 150);
                 habitatLayer.addAgent(tank);
                 spatialRegistry.registerAgent(tank);
+                forcePlaced++;
                 tanksPlaced++;
             }
-            SimulationLogger.info("Force-placed %d tanks", tanksPlaced);
+            SimulationLogger.info("Force-placed %d tanks within study area", forcePlaced);
         }
 
-        // Seed mosquitoes at occurrence points (same as before)
+        // Seed mosquitoes at occurrence points with study area validation
         int mosquitoesPlaced = 0;
         int perPoint = Math.max(1, seeding.mosquitoesToSeed / occurrencePoints.size());
 
         for (OccurrenceLoader.OccurrencePoint occPoint : occurrencePoints) {
             int count = Math.min(perPoint, seeding.mosquitoesToSeed - mosquitoesPlaced);
             for (int i = 0; i < count; i++) {
-                double lon = occPoint.longitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
-                double lat = occPoint.latitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
-                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
-                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+                double lon, lat;
+                Point point;
+                int retries = 0;
+                boolean validPoint = false;
+
+                // Keep trying to find a point inside the study area
+                do {
+                    lon = occPoint.longitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
+                    lat = occPoint.latitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
+                    lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
+                    lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
+
+                    point = geometryFactory.createPoint(new Coordinate(lon, lat));
+                    retries++;
+
+                    // If we've tried too many times, use the occurrence point itself
+                    if (retries > 50) {
+                        lon = occPoint.longitude;
+                        lat = occPoint.latitude;
+                        point = geometryFactory.createPoint(new Coordinate(lon, lat));
+                        break;
+                    }
+                } while (studyAreaGeometry != null && !studyAreaGeometry.contains(point));
 
                 LivingAgent mosquito = createMosquito(rand, lon, lat);
                 mosquitoLayer.addAgent(mosquito);
@@ -908,7 +953,8 @@ public class App {
             if (mosquitoesPlaced >= seeding.mosquitoesToSeed) break;
         }
         SimulationLogger.info("Seeded %d mosquitoes at occurrences", mosquitoesPlaced);
-    }
+    }    
+    
     
     private static LivingAgent createMosquito(Random rand, double x, double y) {
         LivingAgent mosquito = new LivingAgent(x, y);
@@ -1160,7 +1206,7 @@ public class App {
         private final double[][] suitabilityGrid;
         private final double[] cumulativeDistribution;
         private final double cellSize;
-        private final double minX, minY;
+        private final double minX, minY, maxX, maxY;
         private final int gridSizeX, gridSizeY;
         private final Random random = SeedManager.getRandom();
         private final Geometry studyArea;
@@ -1174,6 +1220,8 @@ public class App {
                                      worldBounds.getHeight() / gridSizeY);
             this.minX = worldBounds.getMinX();
             this.minY = worldBounds.getMinY();
+            this.maxX = worldBounds.getMaxX();
+            this.maxY = worldBounds.getMaxY();
             this.studyArea = studyArea;
             this.suitabilityGrid = new double[gridSizeX][gridSizeY];
             calculateSuitability(buildings, population);
@@ -1240,16 +1288,46 @@ public class App {
             return cdf;
         }
 
+//        public double[] getRandomWeightedPoint() {
+//            double r = random.nextDouble();
+//            int idx = java.util.Arrays.binarySearch(cumulativeDistribution, r);
+//            if (idx < 0) idx = -(idx + 1);
+//            if (idx >= cumulativeDistribution.length) idx = cumulativeDistribution.length - 1;
+//            int i = idx / gridSizeY;
+//            int j = idx % gridSizeY;
+//            double x = minX + (i + random.nextDouble()) * cellSize;
+//            double y = minY + (j + random.nextDouble()) * cellSize;
+//            return new double[]{x, y};
+//        }
+        
         public double[] getRandomWeightedPoint() {
-            double r = random.nextDouble();
-            int idx = java.util.Arrays.binarySearch(cumulativeDistribution, r);
-            if (idx < 0) idx = -(idx + 1);
-            if (idx >= cumulativeDistribution.length) idx = cumulativeDistribution.length - 1;
-            int i = idx / gridSizeY;
-            int j = idx % gridSizeY;
-            double x = minX + (i + random.nextDouble()) * cellSize;
-            double y = minY + (j + random.nextDouble()) * cellSize;
-            return new double[]{x, y};
+            if (studyArea == null) {
+                // Fallback to bounding box if no study area is defined
+                double x = minX + random.nextDouble() * (maxX - minX);
+                double y = minY + random.nextDouble() * (maxY - minY);
+                return new double[]{x, y};
+            }
+
+            // Keep trying until we find a point inside the study area.
+            // The while loop ensures we don't return a point outside.
+            while (true) {
+                double r = random.nextDouble();
+                int idx = java.util.Arrays.binarySearch(cumulativeDistribution, r);
+                if (idx < 0) idx = -(idx + 1);
+                if (idx >= cumulativeDistribution.length) idx = cumulativeDistribution.length - 1;
+                int i = idx / gridSizeY;
+                int j = idx % gridSizeY;
+                double x = minX + (i + random.nextDouble()) * cellSize;
+                double y = minY + (j + random.nextDouble()) * cellSize;
+
+                // Check if the point is inside the study area.
+                GeometryFactory geomFactory = new GeometryFactory();
+                Point point = geomFactory.createPoint(new Coordinate(x, y));
+                if (studyArea.contains(point)) {
+                    return new double[]{x, y};
+                }
+                // If not, the loop will retry with a new random point.
+            }
         }
     }
 }

@@ -83,3 +83,7 @@ gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_SAFER Somali_Population_10m.vrt S
 
 - Merge and keep only specific variables
 ```./merge_timeseries.sh -i ./climate_data -v "t2m,tp" -o merged_climate.nc```
+
+
+- Convert Tick to Datetime:
+```python tick_to_datetime.py -f results/merged_snapshots_20260906_212725.csv -c src/main/resources/config/simulation.yaml```

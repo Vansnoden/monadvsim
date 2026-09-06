@@ -87,6 +87,7 @@ public class RuleEngine {
         if (agent instanceof LivingAgent la) {
             bindings.putMember("stage", la.getStage().toString());
             bindings.putMember("age", la.getAge());
+            bindings.putMember("stageAgeTick", la.getStageAgeTicks());
             bindings.putMember("energy", la.getEnergy());
             bindings.putMember("gravid", la.isGravid());
             bindings.putMember("alive", la.isAlive());
@@ -156,8 +157,46 @@ public class RuleEngine {
             case "pupate" -> executePupate(agent, project, layer);
             case "emerge" -> executeEmerge(agent, project, layer);
             case "thin_larvae" -> executeThinLarvae(agent, layer);
+            case "seek_tank" -> executeSeekTank(agent, project, layer);
         }
     }
+    
+    
+    private void executeSeekTank(Agent agent, Project project, AgentLayer layer) {
+        if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
+        if (!la.isGravid()) return;
+
+        // Search a larger radius for tanks
+        double searchRadius = project.getDefaultAgentSearchRadius() * 10;
+        List<Agent> nearby = project.getSpatialRegistry()
+                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
+
+        Agent nearestTank = null;
+        double nearestDist = Double.MAX_VALUE;
+
+        for (Agent n : nearby) {
+            if (n instanceof InertAgent tank && tank.getWaterVolume() > 10) {
+                double dist = Math.hypot(n.getX() - agent.getX(), n.getY() - agent.getY());
+                if (dist < nearestDist) {
+                    nearestDist = dist;
+                    nearestTank = n;
+                }
+            }
+        }
+
+        if (nearestTank != null) {
+            // Move toward the tank
+            double dx = nearestTank.getX() - agent.getX();
+            double dy = nearestTank.getY() - agent.getY();
+            double dist = Math.hypot(dx, dy);
+            if (dist > 0.0001) {
+                double step = project.getDefaultAgentStep() * 2;
+                la.move((dx / dist) * step, (dy / dist) * step);
+                layer.updateAgentPositionImmediately(la);
+            }
+        }
+    }
+    
     
     private void executeThinLarvae(Agent agent, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
