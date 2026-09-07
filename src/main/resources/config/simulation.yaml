@@ -3,7 +3,6 @@
 # ================================================================
 
 #140256 
-
 time:
   startDateTime: "2020-01-01T00:00:00"
   totalTicks: 3000
@@ -115,6 +114,10 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy < 0.8 && resting"
         action: "rest"
         priority: 8
+      
+      - condition: "stage == 'ADULT' && gravid && energy < 0.8"
+        action: "feed"
+        priority: 8
 
       - condition: "stage == 'ADULT' && energy > 0.5 && !gravid"
         action: "get_gravid"
@@ -199,18 +202,18 @@ seeding:
   mosquitoesToSeed: 20000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  tankBuildingThreshold: 0.000001
-  tankPopulationThreshold: 0.000001
-  mosquitoBuildingThreshold: 0.0001
-  mosquitoPopulationThreshold: 0.0001
+  tankBuildingThreshold: 0.15
+  tankPopulationThreshold: 0.05
+  mosquitoBuildingThreshold: 0.05
+  mosquitoPopulationThreshold: 0.02
 
 # ================================================================
 # PROJECT DEFAULTS
 # ================================================================
 project:
-  defaultAgentSearchRadius: 0.005
-  defaultAgentStep: 0.00005
-  defaultMaxAgentAge: 5760
+  defaultAgentSearchRadius: 0.02
+  defaultAgentStep: 0.0005
+  defaultMaxAgentAge: 2880
   maxAgeMultiplierEgg: 0.05
   maxAgeMultiplierLarva: 0.45
   maxAgeMultiplierPupa: 0.15

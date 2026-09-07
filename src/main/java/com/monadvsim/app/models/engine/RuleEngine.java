@@ -371,9 +371,11 @@ public class RuleEngine {
         if (model == null) return;
         int eggsToLay = model.eggsToLay(temperature, livestock);
         if (eggsToLay <= 0) return;
+        
+        double searchRadius = project.getDefaultAgentSearchRadius() * 10.0;
 
         List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), project.getDefaultAgentSearchRadius());
+                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
         for (Agent n : nearby) {
             if (n instanceof InertAgent tank) {
                 tank.addEggs(eggsToLay);
