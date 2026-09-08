@@ -7369,10 +7369,10 @@ public class LivingAgent extends Agent {
     // Stage-specific max age multipliers (as percentage of global max age)
     // These represent the maximum age an agent can reach in each stage
     // before dying of old age
-    public static final double MAX_AGE_MULTIPLIER_EGG = 0.05;    // 5% of global max
-    public static final double MAX_AGE_MULTIPLIER_LARVA = 0.25;  // 45% of global max
-    public static final double MAX_AGE_MULTIPLIER_PUPA = 0.10;   // 15% of global max
-    public static final double MAX_AGE_MULTIPLIER_ADULT = 0.60;  // 35% of global max
+    private double maxAgeMultiplierEgg = 0.05;
+    private double maxAgeMultiplierLarva = 0.45;
+    private double maxAgeMultiplierPupa = 0.15;
+    private double maxAgeMultiplierAdult = 0.35;
    
     private double accumulatedDegreeDays = 0.0;
     private double stageAgeDays = 0.0;
@@ -7426,70 +7426,56 @@ public class LivingAgent extends Agent {
     public int getMaxAgeForStage() {
         LifecycleStage currentStage = stage.get();
         double multiplier;
-        
         switch (currentStage) {
-            case EGG:
-                multiplier = MAX_AGE_MULTIPLIER_EGG;
-                break;
-            case LARVA:
-                multiplier = MAX_AGE_MULTIPLIER_LARVA;
-                break;
-            case PUPA:
-                multiplier = MAX_AGE_MULTIPLIER_PUPA;
-                break;
-            case ADULT:
-                multiplier = MAX_AGE_MULTIPLIER_ADULT;
-                break;
-            default:
-                multiplier = 1.0;
-                break;
+            case EGG:   multiplier = maxAgeMultiplierEgg; break;
+            case LARVA: multiplier = maxAgeMultiplierLarva; break;
+            case PUPA:  multiplier = maxAgeMultiplierPupa; break;
+            case ADULT: multiplier = maxAgeMultiplierAdult; break;
+            default:    multiplier = 1.0; break;
         }
-        
         return (int) Math.max(1, globalMaxAge * multiplier);
     }
     
     /**
      * Get the maximum age for a specific stage (static helper).
      */
-    public static int getMaxAgeForStage(LifecycleStage stage, int globalMaxAge) {
+    // Static version that takes multipliers as parameters
+    public int getMaxAgeForStage(LifecycleStage stage, int globalMaxAge) {
         double multiplier;
-        
+
         switch (stage) {
-            case EGG:
-                multiplier = MAX_AGE_MULTIPLIER_EGG;
-                break;
-            case LARVA:
-                multiplier = MAX_AGE_MULTIPLIER_LARVA;
-                break;
-            case PUPA:
-                multiplier = MAX_AGE_MULTIPLIER_PUPA;
-                break;
-            case ADULT:
-                multiplier = MAX_AGE_MULTIPLIER_ADULT;
-                break;
-            default:
-                multiplier = 1.0;
-                break;
+            case EGG:   multiplier = maxAgeMultiplierEgg; break;
+            case LARVA: multiplier = maxAgeMultiplierLarva; break;
+            case PUPA:  multiplier = maxAgeMultiplierPupa; break;
+            case ADULT: multiplier = maxAgeMultiplierAdult; break;
+            default:    multiplier = 1.0; break;
         }
-        
+
         return (int) Math.max(1, globalMaxAge * multiplier);
+    }
+    
+    public void setAgeMultipliers(double egg, double larva, double pupa, double adult) {
+        this.maxAgeMultiplierEgg = egg;
+        this.maxAgeMultiplierLarva = larva;
+        this.maxAgeMultiplierPupa = pupa;
+        this.maxAgeMultiplierAdult = adult;
     }
     
     /**
      * Get a description of the age limits for all stages.
      */
-    public static String getAgeLimitDescription(int globalMaxAge) {
+    public String getAgeLimitDescription(int globalMaxAge) {
         return String.format(
             "EGG: %d ticks (%.1f%%), LARVA: %d ticks (%.1f%%), " +
             "PUPA: %d ticks (%.1f%%), ADULT: %d ticks (%.1f%%)",
             getMaxAgeForStage(LifecycleStage.EGG, globalMaxAge),
-            MAX_AGE_MULTIPLIER_EGG * 100,
+            maxAgeMultiplierEgg * 100,
             getMaxAgeForStage(LifecycleStage.LARVA, globalMaxAge),
-            MAX_AGE_MULTIPLIER_LARVA * 100,
+            maxAgeMultiplierLarva * 100,
             getMaxAgeForStage(LifecycleStage.PUPA, globalMaxAge),
-            MAX_AGE_MULTIPLIER_PUPA * 100,
+            maxAgeMultiplierPupa * 100,
             getMaxAgeForStage(LifecycleStage.ADULT, globalMaxAge),
-            MAX_AGE_MULTIPLIER_ADULT * 100
+            maxAgeMultiplierAdult * 100
         );
     }
 
