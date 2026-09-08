@@ -11,6 +11,8 @@ import com.monadvsim.app.models.utils.OccurrenceLoader;
 import com.monadvsim.app.models.utils.SeedManager;
 import com.monadvsim.app.models.utils.SnapshotMerger;
 import com.monadvsim.app.models.utils.VectorBoundsLoader;
+import javax.imageio.ImageIO;
+import org.geotools.coverage.grid.io.GridFormatFinder;
 
 import java.awt.geom.Rectangle2D;
 import java.io.File;
@@ -55,6 +57,10 @@ public class App {
     private static final String DEFAULT_OUTPUT_DIR = "results";
 
     public static void main(String[] args) {
+        // Force ImageIO and GeoTools to discover raster SPI readers inside the fat JAR
+        javax.imageio.ImageIO.scanForPlugins();
+        org.geotools.coverage.grid.io.GridFormatFinder.scanForPlugins();
+        
         SimulationLogger.info("Starting Multi-Agent Simulation System");
 
         try {

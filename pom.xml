@@ -145,7 +145,7 @@
         </dependency>
 
         <!-- JAI -->
-        <dependency>
+<!--        <dependency>
             <groupId>javax.media</groupId>
             <artifactId>jai_core</artifactId>
             <version>1.1.3</version>
@@ -159,7 +159,7 @@
             <groupId>javax.media</groupId>
             <artifactId>jai_imageio</artifactId>
             <version>1.1</version>
-        </dependency>
+        </dependency>-->
 
         <!-- Testing -->
         <dependency>
@@ -219,6 +219,7 @@
             
             <!-- ===== ADD THIS PLUGIN FOR FAT JAR (includes dependencies) ===== -->
             <!-- Creates a single JAR with all dependencies included -->
+            
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>
@@ -232,19 +233,44 @@
                         <configuration>
                             <createDependencyReducedPom>false</createDependencyReducedPom>
                             <transformers>
+                                <!-- Main-Class Manifest Entry -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
-                                    <mainClass>com.monadvsim.app.App</mainClass>
+                                    <mainClass>${exec.mainClass}</mainClass>
+                                    <manifestEntries>
+                                        <Multi-Release>true</Multi-Release>
+                                    </manifestEntries>
                                 </transformer>
-                                <!-- Handle GeoTools services -->
+
+                                <!-- Automatically merges SPI files like javax.imageio.spi.ImageReaderSpi -->
                                 <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+
+                                <!-- Merges ImageN / JAI registry configuration files -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.AppendingTransformer">
+                                    <resource>META-INF/registryFile.imagen</resource>
+                                </transformer>
                             </transformers>
+
                             <filters>
                                 <filter>
                                     <artifact>*:*</artifact>
                                     <excludes>
+                                        <!-- Security signatures -->
                                         <exclude>META-INF/*.SF</exclude>
                                         <exclude>META-INF/*.DSA</exclude>
                                         <exclude>META-INF/*.RSA</exclude>
+                            
+                                        <!-- Multi-release class files -->
+                                        <exclude>module-info.class</exclude>
+                                        <exclude>META-INF/versions/**/module-info.class</exclude>
+                            
+                                        <!-- Metadata -->
+                                        <exclude>META-INF/LICENSE*</exclude>
+                                        <exclude>META-INF/NOTICE*</exclude>
+                                        <exclude>META-INF/DEPENDENCIES</exclude>
+                            
+                                        <!-- EXCLUDE THE BAD CLASSES directly, NOT the SPI service files -->
+                                        <exclude>com/sun/media/imageioimpl/**</exclude>
+                                        <exclude>com/sun/media/imageio/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
@@ -252,6 +278,7 @@
                     </execution>
                 </executions>
             </plugin>
+            
             <!-- ===== END ADDED PLUGIN ===== -->
             
             <plugin>

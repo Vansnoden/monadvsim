@@ -5,7 +5,7 @@
 #105216 
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 3000
+  totalTicks: 35040
   tickMinutes: 15
 
 files:
