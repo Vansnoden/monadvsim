@@ -72,3 +72,27 @@ gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_SAFER Somali_Elevation_10m.vrt So
 gdalbuildvrt Somali_Population_10m.vrt Somali_Population_10m-*.tif
 gdal_translate -co COMPRESS=LZW -co BIGTIFF=IF_SAFER Somali_Population_10m.vrt Somali_Population_10m.tif
 ```
+
+# Merge .nc files 
+
+- In a given folder: 
+``` . /merge_timeseries.sh -i ./prepared_data/somali/ -o merged_2020_2023.nc```
+
+- Merge specific files with pattern:
+```./merge_timeseries.sh -i ./climate_data -p "climate_202*.nc" -o merged.nc```
+
+- Merge and keep only specific variables
+```./merge_timeseries.sh -i ./climate_data -v "t2m,tp" -o merged_climate.nc```
+
+
+- Convert Tick to Datetime:
+```python tick_to_datetime.py -f results/merged_snapshots_20260906_212725.csv -c src/main/resources/config/simulation.yaml```
+
+
+
+=====
+tankBuildingThreshold: 0.000001
+tankPopulationThreshold: 0.000001
+mosquitoBuildingThreshold: 0.0001
+mosquitoPopulationThreshold: 0.0001
+=====

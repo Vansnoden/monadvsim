@@ -12,7 +12,63 @@ public class SimulationLogger {
     private static FileHandler fileHandler;
     private static ConsoleHandler consoleHandler;
     private static String currentLogFile;
+    private static String logDir = "logs";  // Default
+    
+    static {
+        initialize("logs");  // Default initialization
+    }
+    
+    public static void initialize(String customLogDir) {
+        try {
+            if (customLogDir != null && !customLogDir.isEmpty()) {
+                logDir = customLogDir;
+            }
+            
+            // Close existing handlers if any
+            if (fileHandler != null) {
+                fileHandler.close();
+                LOGGER.removeHandler(fileHandler);
+            }
+            if (consoleHandler != null) {
+                LOGGER.removeHandler(consoleHandler);
+            }
+            
+            // Create log directory
+            new java.io.File(logDir).mkdirs();
 
+            String timestamp = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd_HHmmss"));
+            currentLogFile = logDir + "/simulation_" + timestamp + ".log";
+
+            fileHandler = new FileHandler(currentLogFile, true);
+            fileHandler.setFormatter(new SimpleFormatter() {
+                @Override
+                public String format(LogRecord record) {
+                    return String.format("[%1$tY-%1$tm-%1$td %1$tH:%1$tM:%1$tS] [%2$s] %3$s %4$s%n",
+                        record.getMillis(),
+                        record.getLevel(),
+                        record.getSourceClassName() != null ? record.getSourceClassName() : "",
+                        record.getMessage());
+                }
+            });
+            fileHandler.setLevel(Level.ALL);
+
+            consoleHandler = new ConsoleHandler();
+            consoleHandler.setFormatter(new SimpleFormatter());
+            consoleHandler.setLevel(Level.INFO);
+
+            LOGGER.addHandler(fileHandler);
+            LOGGER.addHandler(consoleHandler);
+            LOGGER.setLevel(Level.ALL);
+            LOGGER.setUseParentHandlers(false);
+
+            LOGGER.info("=== Simulation Log Started ===");
+            LOGGER.info("Log file: " + currentLogFile);
+
+        } catch (IOException e) {
+            System.err.println("Failed to initialize file logger: " + e.getMessage());
+        }
+    }
+    
     static {
         try {
             String logDir = "logs";

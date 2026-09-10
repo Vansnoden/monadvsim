@@ -1,6 +1,4 @@
 package com.monadvsim.app.models.entities;
-import com.monadvsim.app.models.utils.SimulationLogger;
-
 
 import com.monadvsim.app.models.engine.TimeManager;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -11,20 +9,8 @@ import java.util.concurrent.atomic.AtomicReference;
  * Mobile Biological Agent
  *
  * Represents mosquitoes with lifeCycle stages (egg, larva, pupa, adult)
- *
  * Thread-safe state management using atomic variables
- *
- * Tracks age, energy, gravid state, resting behavior
- *
- * Implements movement with position synchronization
- *
- * Manages resting/exhaustion mechanics
- * 
- * 
- * @author void
  */
-
-
 public class LivingAgent extends Agent {
     // Using atomic types for thread-safe state
     private final AtomicBoolean alive = new AtomicBoolean(true);
@@ -40,6 +26,40 @@ public class LivingAgent extends Agent {
     private final AtomicInteger restingDuration = new AtomicInteger(0);
     private final AtomicInteger timeWithoutRest = new AtomicInteger(0);
     private final AtomicInteger maxRestingDuration = new AtomicInteger(4); // 1 hour
+    private double developmentProgress = 0.0;
+    private int stageAgeTicks = 0;
+    // Stage-specific max age multipliers (as percentage of global max age)
+    // These represent the maximum age an agent can reach in each stage
+    // before dying of old age
+    private double maxAgeMultiplierEgg = 0.05;
+    private double maxAgeMultiplierLarva = 0.45;
+    private double maxAgeMultiplierPupa = 0.15;
+    private double maxAgeMultiplierAdult = 0.35;
+   
+    private double accumulatedDegreeDays = 0.0;
+    private double stageAgeDays = 0.0;
+    
+    // The global max age (set by project defaults)
+    private int globalMaxAge = 2880; // Default: 30 days at 15-min ticks
+
+    public double getDevelopmentProgress() {
+        return developmentProgress;
+    }
+    
+    public void setDevelopmentProgress(double developmentProgress) {
+        this.developmentProgress = developmentProgress;
+    }
+    
+    public int getStageAgeTicks() { return stageAgeTicks; }
+    public void setStageAgeTicks(int stageAgeTicks) { this.stageAgeTicks = stageAgeTicks; }
+    public void incrementStageAgeTicks() { this.stageAgeTicks++; }
+    
+    // Getters and setters
+    public double getAccumulatedDegreeDays() { return accumulatedDegreeDays; }
+    public void setAccumulatedDegreeDays(double dd) { this.accumulatedDegreeDays = dd; }
+    
+    public double getStageAgeDays() { return stageAgeDays; }
+    public void setStageAgeDays(double days) { this.stageAgeDays = days; }
 
     public LivingAgent(double x, double y) {
         super(x, y);
@@ -51,6 +71,74 @@ public class LivingAgent extends Agent {
         super(x, y, name);
         this.volatileX = x;
         this.volatileY = y;
+    }
+    
+    /**
+     * Set the global max age for this agent.
+     * Called from AgentLayer when the agent is created.
+     */
+    public void setGlobalMaxAge(int globalMaxAge) {
+        this.globalMaxAge = globalMaxAge;
+    }
+    
+    /**
+     * Get the stage-specific max age for this agent.
+     * Returns a percentage of the global max age based on the current stage.
+     */
+    public int getMaxAgeForStage() {
+        LifecycleStage currentStage = stage.get();
+        double multiplier;
+        switch (currentStage) {
+            case EGG:   multiplier = maxAgeMultiplierEgg; break;
+            case LARVA: multiplier = maxAgeMultiplierLarva; break;
+            case PUPA:  multiplier = maxAgeMultiplierPupa; break;
+            case ADULT: multiplier = maxAgeMultiplierAdult; break;
+            default:    multiplier = 1.0; break;
+        }
+        return (int) Math.max(1, globalMaxAge * multiplier);
+    }
+    
+    /**
+     * Get the maximum age for a specific stage (static helper).
+     */
+    // Static version that takes multipliers as parameters
+    public int getMaxAgeForStage(LifecycleStage stage, int globalMaxAge) {
+        double multiplier;
+
+        switch (stage) {
+            case EGG:   multiplier = maxAgeMultiplierEgg; break;
+            case LARVA: multiplier = maxAgeMultiplierLarva; break;
+            case PUPA:  multiplier = maxAgeMultiplierPupa; break;
+            case ADULT: multiplier = maxAgeMultiplierAdult; break;
+            default:    multiplier = 1.0; break;
+        }
+
+        return (int) Math.max(1, globalMaxAge * multiplier);
+    }
+    
+    public void setAgeMultipliers(double egg, double larva, double pupa, double adult) {
+        this.maxAgeMultiplierEgg = egg;
+        this.maxAgeMultiplierLarva = larva;
+        this.maxAgeMultiplierPupa = pupa;
+        this.maxAgeMultiplierAdult = adult;
+    }
+    
+    /**
+     * Get a description of the age limits for all stages.
+     */
+    public String getAgeLimitDescription(int globalMaxAge) {
+        return String.format(
+            "EGG: %d ticks (%.1f%%), LARVA: %d ticks (%.1f%%), " +
+            "PUPA: %d ticks (%.1f%%), ADULT: %d ticks (%.1f%%)",
+            getMaxAgeForStage(LifecycleStage.EGG, globalMaxAge),
+            maxAgeMultiplierEgg * 100,
+            getMaxAgeForStage(LifecycleStage.LARVA, globalMaxAge),
+            maxAgeMultiplierLarva * 100,
+            getMaxAgeForStage(LifecycleStage.PUPA, globalMaxAge),
+            maxAgeMultiplierPupa * 100,
+            getMaxAgeForStage(LifecycleStage.ADULT, globalMaxAge),
+            maxAgeMultiplierAdult * 100
+        );
     }
 
     // Thread-safe getters and setters

@@ -18,11 +18,20 @@ public class SimulationConfig {
     // Project defaults
     public ProjectDefaults project;
     
+    // Layer definitions - data-driven layer creation
+    public List<LayerDefinition> layers;
+    
     // Spatial registry grid cell size (degrees)
     public double gridCellSizeDegrees;
     
     // Tokens for rule engine (maps token name to layer name)
     public List<TokenMapping> tokens;
+    
+    public double maxAgeMultiplierEgg = 0.05;
+    public double maxAgeMultiplierLarva = 0.45;
+    public double maxAgeMultiplierPupa = 0.15;
+    public double maxAgeMultiplierAdult = 0.35;
+    public InertAgentParams inert_agents;
 
     public static class SimulationTime {
         public String startDateTime; // ISO format, e.g. "2025-09-01T00:00:00"
@@ -35,7 +44,20 @@ public class SimulationConfig {
         public String elevation;
         public String buildings;
         public String population;
-        public String climateNetCDF;
+        public String climateNetCDF; // single .nc file
+        public List<String> climateFiles; // in case of multiple Multiple NetCDF files
+    }
+    
+    
+    public static class LayerDefinition {
+        public String name;
+        public String filePath;
+        public String type;  // "raster", "timeseries", "vector", "occurrence"
+        public String variable;  // For NetCDF: variable name to extract
+        public boolean active = true;
+        
+        // For NetCDF files with multiple variables, you can specify which to load
+        public List<String> variables;
     }
 
     
@@ -69,6 +91,7 @@ public class SimulationConfig {
 
         // Sex ratio (proportion females)
         public double sex_ratio;
+        public double host_carrying_capacity_base = 1.0;
     }
 
     
@@ -93,16 +116,34 @@ public class SimulationConfig {
         public double mosquitoBuildingThreshold;
         public double mosquitoPopulationThreshold;
         public boolean seedAcrossFullStudySite = false;
+        public boolean useOccurrencePoints = false;
+        public String occurrenceFilePath = "";
+        public int occurrenceYearStart = 0;
+        public int occurrenceYearEnd = 9999;
+        public double occurrenceBufferKm = 5.0;  // Buffer around each point
     }
 
     public static class ProjectDefaults {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
+        public double maxAgeMultiplierEgg = 0.05;
+        public double maxAgeMultiplierLarva = 0.45;
+        public double maxAgeMultiplierPupa = 0.15;
+        public double maxAgeMultiplierAdult = 0.35;
     }
 
     public static class TokenMapping {
         public String token;
         public String layer;
+    }
+    
+    public static class InertAgentParams {
+        public int max_larvae_capacity = 500;
+        public double mortality_intensity = 0.5;
+        public int min_larvae_retain = 50;
+        public double max_water_volume = 100.0;
+        public double hatch_fraction_min = 0.1;
+        public double hatch_fraction_max = 0.6;
     }
 }

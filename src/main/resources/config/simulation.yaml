@@ -1,24 +1,21 @@
-# ======================================================================
-# Simulation configuration for Anopheles stephensi – REALISTIC CALIBRATION
-# Based on meta-analyses of temperature-dependent traits.
-# Reference: Mordecai et al. (2013) Parasites & Vectors
-# ======================================================================
+# ================================================================
+# SIMULATION CONFIGURATION - REVISED FOR ACTIVE POPULATION DYNAMICS
+# ================================================================
 
+#105216 
 time:
-  startDateTime: "2020-04-01T00:00:00"
-  totalTicks: 17280
+  startDateTime: "2020-01-01T00:00:00"
+  totalTicks: 35040
   tickMinutes: 15
-  
+
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.shp"
-  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
-  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
-  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
-  climateNetCDF: "prepared_data/dire_dawa/climate_t2m_tp_2020.nc"
+  studySite: "prepared_data/somali/somali.shp"
 
 gridCellSizeDegrees: 0.001
-  
 
+# ================================================================
+# SPECIES PARAMETERS
+# ================================================================
 species:
   egg_dev_rho: 0.005000000000000001
   egg_dev_k: 39.20841161317061
@@ -49,11 +46,37 @@ species:
   adult_mort_b3: 0.003908
   adult_mortality_per_day: 0.1198
   sex_ratio: 0.5
+  host_carrying_capacity_base: 2.0
 
+# ================================================================
+# DATA LAYER DEFINITIONS
+# ================================================================
+layers:
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
 
-# ======================================================================
-# Tokens – environmental layers
-# ======================================================================
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+# ================================================================
+# TOKENS FOR RULE ENGINE
+# ================================================================
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -66,83 +89,132 @@ tokens:
   - token: "elevation"
     layer: "Elevation"
 
-# ======================================================================
-# Agent rules – refined with physiological realism
-# ======================================================================
+# ================================================================
+# AGENT LAYERS WITH ENHANCED RULES
+# ================================================================
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      # Emergency transitions (if development extremely delayed)
-      - condition: "stage == 'LARVA' && age > 960"
+      - condition: "stage == 'LARVA' && stageAgeTick > 200 && energy > 0.4"
         action: "pupate"
-        priority: 10
-      - condition: "stage == 'PUPA' && age > 384"
+        priority: 5
+
+      - condition: "stage == 'PUPA' && stageAgeTick > 150"
         action: "emerge"
-        priority: 10
-      # Feeding and resting cycle
+        priority: 5
+
+      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && stageAgeTick > 100"
+        action: "pupate"
+        priority: 6
+
       - condition: "stage == 'ADULT' && energy < 0.6 && !resting"
         action: "feed"
-        priority: 8
-      - condition: "stage == 'ADULT' && energy < 0.9 && resting"
-        action: "rest"
-        priority: 6
-      # Gonotrophic cycle – only when energy sufficient
-      - condition: "stage == 'ADULT' && energy > 0.7 && !gravid"
-        action: "get_gravid"
-        priority: 7
-      - condition: "gravid == true && temperature > 288.15"
-        action: "lay_eggs"
-        priority: 6
-      # Temperature extremes
-      - condition: "temperature < 283.15 || temperature > 313.15"
-        action: "die"
         priority: 9
-      # Seek shelter if heavy rain or low temperature
-      - condition: "(precipitation > 0.008 || temperature < 287.15) && building_density > 0.1 && !resting"
+
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
+        action: "rest"
+        priority: 8
+      
+      - condition: "stage == 'ADULT' && gravid && energy < 0.8"
+        action: "feed"
+        priority: 8
+
+      - condition: "stage == 'ADULT' && energy > 0.5 && !gravid"
+        action: "get_gravid"
+        priority: 8
+
+      - condition: "gravid == true && temperature > 280.15 && getTotalLarvae < 30000"
+        action: "lay_eggs"
+        priority: 7
+
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
+
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
         action: "rest_in_building"
-        priority: 5
-      # Default movement
-      - condition: "stage == 'ADULT' && !resting"
+        priority: 6
+
+      - condition: "stage == 'ADULT' && !resting && stageAgeTick < 2000"
         action: "move_random"
         priority: 3
+
       - condition: "true"
         action: "rest"
         priority: 2
+        
+      - condition: "agent.gravid && agent.alive"
+        action: "seek_tank"
+        priority: 90
+        
+      - condition: "agent.gravid && agent.alive"
+        action: "lay_eggs"
+        priority: 80
 
   - name: "WaterTanks"
     rules:
+      - condition: "true"
+        action: "evaporate"
+        priority: 1
+
+      - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
+        action: "thin_larvae"
+        priority: 5
+
+      - condition: "eggCount > 150 && waterVolume > 15"
+        action: "hatch_eggs"
+        priority: 6
+
       - condition: "waterVolume <= 5 && waterVolume > 0"
         action: "dry_out"
-        priority: 3
+        priority: 4
+
       - condition: "temperature < 273.15 && waterVolume > 0"
         action: "freeze"
-        priority: 2
-      - condition: "temperature > 288.15 && precipitation < 0.002"
-        action: "evaporate"
-        priority: 5
-      - condition: "waterVolume == 0 && eggCount == 0 && larvalCount == 0"
+        priority: 3
+
+      - condition: "waterVolume == 0 && eggCount < 10 && larvalCount < 10"
         action: "die"
         priority: 4
 
-# ======================================================================
-# Seeding – habitat-weighted (critical for spatial validity)
-# ======================================================================
+# ================================================================
+# InertAgent (Water Tank) Configuration
+# ================================================================
+inert_agents:
+  max_larvae_capacity: 1000
+  mortality_intensity: 0.4
+  min_larvae_retain: 20
+  max_water_volume: 100.0
+  hatch_fraction_min: 0.1
+  hatch_fraction_max: 0.6
+
+# ================================================================
+# SEEDING CONFIGURATION
+# ================================================================
 seeding:
-  seedAcrossFullStudySite: False       # Use habitat suitability weighting
-  tanksToSeed: 10000
-  mosquitoesToSeed: 250000
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
+  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
+  occurrenceYearStart: 2016
+  occurrenceYearEnd: 2023
+  occurrenceBufferKm: 0.05
+  tanksToSeed: 5000
+  mosquitoesToSeed: 20000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  # Low thresholds to include many cells, weighting will select most suitable
-  tankBuildingThreshold: 0.0001
-  tankPopulationThreshold: 0.0001
-  mosquitoBuildingThreshold: 0.0001
-  mosquitoPopulationThreshold: 0.0001
+  tankBuildingThreshold: 0.15
+  tankPopulationThreshold: 0.05
+  mosquitoBuildingThreshold: 0.05
+  mosquitoPopulationThreshold: 0.02
 
-# ======================================================================
-# Project defaults
-# ======================================================================
+# ================================================================
+# PROJECT DEFAULTS
+# ================================================================
 project:
-  defaultAgentSearchRadius: 0.005    # ~550 m
-  defaultAgentStep: 0.00005           # ~5.5 m per tick
-  defaultMaxAgentAge: 2880            # 30 days (longer for realistic seniors)
+  defaultAgentSearchRadius: 0.02
+  defaultAgentStep: 0.0005
+  defaultMaxAgentAge: 2880
+  maxAgeMultiplierEgg: 0.05
+  maxAgeMultiplierLarva: 0.45
+  maxAgeMultiplierPupa: 0.15
+  maxAgeMultiplierAdult: 0.35
