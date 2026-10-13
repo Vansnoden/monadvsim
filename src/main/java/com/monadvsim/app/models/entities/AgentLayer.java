@@ -17,12 +17,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 
 /**
@@ -60,7 +61,12 @@ public class AgentLayer extends Layer {
     private final AtomicLong deaths = new AtomicLong(0);
     private final AtomicLong birthsThisTick = new AtomicLong(0);
     private final AtomicLong deathsThisTick = new AtomicLong(0);
-    private final ThreadLocal<List<Agent>> immediateNewborns = ThreadLocal.withInitial(ArrayList::new);
+    /**
+    * Newborns produced during the current tick, from ANY worker thread.
+    * Must be a shared, thread-safe queue: hatch events run on rule-worker
+    * threads, but the flush runs on the main thread.
+    */
+    private final Queue<Agent> immediateNewborns = new ConcurrentLinkedQueue<>();
     
     private Project project;
     
@@ -151,7 +157,10 @@ public class AgentLayer extends Layer {
             }
 
             agentContainer.applyPendingOperations();
-            processAgentsWithRules(project, timeLimit);
+            if (timeManager != null && ruleEngine != null) {
+                ruleEngine.updateTickCache(project, timeManager.getTickCount());
+            }
+            processAgentsWithRules(project);
             processImmediateNewborns();
             cleanupDeadAgents();
 
@@ -172,295 +181,18 @@ public class AgentLayer extends Layer {
         logUpdatePerformance(startTime);
     }
 
-    private void processAgentsWithRules(Project project, long timeLimit) throws ExecutionException {
-        immediateNewborns.remove();
-
+    private void processAgentsWithRules(Project project) throws ExecutionException {
+        // No artificial time budget: with large populations, skipping agents
+        // mid-tick means larvae effectively stop aging and mortality stops
+        // firing. Slow ticks are preferable to incorrect ones. The watchdog
+        // (SimulationEngine) has its own, much looser hang detector.
         agentContainer.processWithBatching(batch -> {
-            if (System.nanoTime() > timeLimit) return;
             for (Agent agent : batch) {
                 processAgentRules(agent, project);
-                if (System.nanoTime() > timeLimit) break;
             }
         }, 100);
     }
 
-
-//    private void processAgentRules(Agent agent, Project project) {
-//        if (agent == null) return;
-//
-//        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//            return;
-//        }
-//
-//        if (rulesEvaluated.get() > 1_000_000_000L) {
-//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, "
-//                    + "skipping further evaluations");
-//            return;
-//        }
-//
-//        synchronized (agent) {
-//            try {
-//                // --------------------------------------------------------------------
-//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
-//                // --------------------------------------------------------------------
-//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
-//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
-//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
-//                    Random rng = SeedManager.getRandom();
-//                    if (hatched > 0) {
-//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
-//                        if (mosquitoLayer != null) {
-//                            for (int i = 0; i < hatched; i++) {
-//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-//                                larva.setStage(LifecycleStage.LARVA);
-//                                larva.setAge(0);
-//                                larva.setEnergy(0.8);
-//                            }
-//                        }
-//                    }
-//                }
-//
-//                // --------------------------------------------------------------------
-//                // 2. RULE EVALUATION FOR ALL AGENT TYPES
-//                //    This is the key change - rules now run for InertAgent too!
-//                // --------------------------------------------------------------------
-//                for (RuleDefinition rule : rules) {
-//                    rulesEvaluated.incrementAndGet();
-//                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-//                    if (evalResult) {
-//                        ruleEngine.execute(rule.action(), agent, project, this);
-//                        actionsExecuted.incrementAndGet();
-//
-//                        // If LivingAgent died during rule execution, stop processing
-//                        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            break;
-//                        }
-//                        if (isTerminalAction(rule.action())) break;
-//                    }
-//                }
-//
-//                // --------------------------------------------------------------------
-//                // 3. LIVING AGENT: Lifecycle updates (age, resting, development, etc.)
-//                //    These should only run for LivingAgent
-//                // --------------------------------------------------------------------
-//                
-//                if (agent instanceof LivingAgent la) {
-//                    // Update resting state
-//                    if (la.isResting()) {
-//                        la.incrementRestingDuration();
-//                        if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-//                            la.setResting(false);
-//                        }
-//                    } else {
-//                        la.incrementTimeWithoutRest();
-//                        if (la.getTimeWithoutRest() > 96) {
-//                            la.setAlive(false);
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            return;
-//                        }
-//                    }
-//
-//                    // Age increment
-//                    la.incrementAge();
-//                    if (la.getAge() > project.getDefaultMaxAgentAge()) {
-//                        la.setAlive(false);
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                        return;
-//                    }
-//
-//                    // Temperature‑dependent development
-//                    if (la.isAlive()) {
-//                        double temperature = getTemperatureAt(project, la.getX(), la.getY());
-//                        LifecycleStage stage = la.getStage();
-//                        switch (stage) {
-//                            case LARVA:
-//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-//                                break;
-//                            case PUPA:
-//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-//                                break;
-//                            case ADULT:
-//                                lifecycleModel.applyAdultMortality(la, temperature);
-//                                break;
-//                            default:
-//                                break;
-//                        }
-//                        if (!la.isAlive()) {
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                        }
-//                    }
-//                }
-//            } catch (Exception e) {
-//                SimulationLogger.severe("Error processing agent " 
-//                        + agent.getId() 
-//                        + ": " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//    }
-    
-    
-//    private void processAgentRules(Agent agent, Project project) {
-//        if (agent == null) return;
-//
-//        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//            return;
-//        }
-//
-//        if (rulesEvaluated.get() > 1_000_000_000L) {
-//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
-//            return;
-//        }
-//
-//        synchronized (agent) {
-//            try {
-//                // ================================================================
-//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
-//                // ================================================================
-//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
-//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
-//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
-//                    Random rng = SeedManager.getRandom();
-//                    if (hatched > 0 || ia.getLarvalCount() > 0) {
-//                        ia.applyDensityDependentMortality();
-//                    }
-//                    if (hatched > 0) {
-//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
-//                        if (mosquitoLayer != null) {
-//                            for (int i = 0; i < hatched; i++) {
-//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-//                                larva.setStage(LifecycleStage.LARVA);
-//                                larva.setAge(0);
-//                                larva.setStageAgeTicks(0); // <-- NEW: Reset stage age
-//                                larva.setEnergy(0.8);
-//                                larva.setDevelopmentProgress(0.0);
-//                                larva.setAccumulatedDegreeDays(0.0); // <-- NEW: Reset degree-days
-//                            }
-//                        }
-//                    }
-//                }
-//
-//                // ================================================================
-//                // 2. LIVING AGENT: Temperature‑dependent development
-//                // ================================================================
-//                if (agent instanceof LivingAgent la) {
-//                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
-//                    LifecycleStage stage = la.getStage();
-//
-//                    if (la.isAlive()) {
-//                        // Debug logging for larvae
-//                        if (stage == LifecycleStage.LARVA && timeManager != null) {
-//                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
-//                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, stageAge=%d, progress=%.3f, DD=%.2f, temp=%.2fK",
-//                                    la.getId().substring(0, 8), 
-//                                    la.getStageAgeTicks(), // <-- Use stage age
-//                                    la.getDevelopmentProgress(), 
-//                                    la.getAccumulatedDegreeDays(),
-//                                    temperature);
-//                            }
-//                        }
-//
-//                        // ================================================================
-//                        // IMPORTANT: Increment stage age FIRST before any transitions
-//                        // This ensures that even newly transitioned agents have their age tracked
-//                        // ================================================================
-//                        la.incrementStageAgeTicks();
-//
-//                        switch (stage) {
-//                            case LARVA:
-//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-//                                break;
-//                            case PUPA:
-//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-//                                break;
-//                            case ADULT:
-//                                lifecycleModel.applyAdultMortality(la, temperature);
-//                                break;
-//                            default:
-//                                break;
-//                        }
-//                    }
-//
-//                    if (!la.isAlive()) {
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                        return;
-//                    }
-//
-//                    // ================================================================
-//                    // 3. RULE EVALUATION
-//                    // ================================================================
-//                    for (RuleDefinition rule : rules) {
-//                        rulesEvaluated.incrementAndGet();
-//                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-//                        if (evalResult) {
-//                            ruleEngine.execute(rule.action(), agent, project, this);
-//                            actionsExecuted.incrementAndGet();
-//
-//                            if (!la.isAlive()) {
-//                                lifecycleManager.scheduleDeath(agent.getId());
-//                                deathsThisTick.incrementAndGet();
-//                                break;
-//                            }
-//                            if (isTerminalAction(rule.action())) break;
-//                        }
-//                    }
-//
-//                    // ================================================================
-//                    // 4. AGING AND RESTING
-//                    // ================================================================
-//                    if (la.isAlive()) {
-//                        if (la.isResting()) {
-//                            la.incrementRestingDuration();
-//                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-//                                la.setResting(false);
-//                            }
-//                        } else {
-//                            la.incrementTimeWithoutRest();
-//                            if (la.getTimeWithoutRest() > 96) {
-//                                la.setAlive(false);
-//                                lifecycleManager.scheduleDeath(agent.getId());
-//                                deathsThisTick.incrementAndGet();
-//                                return;
-//                            }
-//                        }
-//
-//                        // ================================================================
-//                        // CRITICAL FIX: Use stageAgeTicks for stage-specific max age check
-//                        // NOT the total age (which was being reset on transition)
-//                        // ================================================================
-//                        if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
-//                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
-//                                la.getId().substring(0, 8), 
-//                                la.getStage(), 
-//                                la.getStageAgeTicks(), 
-//                                la.getMaxAgeForStage());
-//                            la.setAlive(false);
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            return;
-//                        }
-//
-//                        // Optional: Track total age for statistics (no longer used for mortality)
-//                        la.incrementAge();
-//                    }
-//                }
-//            } catch (Exception e) {
-//                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//    }
-//    
     
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
@@ -643,14 +375,23 @@ public class AgentLayer extends Layer {
     }
 
     private void processImmediateNewborns() {
-        List<Agent> newborns = immediateNewborns.get();
-        if (!newborns.isEmpty()) {
-            synchronized (newborns) {
-                List<Agent> newbornsCopy = new ArrayList<>(newborns);
-                agentContainer.addAgents(newbornsCopy);
-                birthsThisTick.addAndGet(newbornsCopy.size());
-                newborns.clear();
-            }
+        if (immediateNewborns.isEmpty()) return;
+
+        List<Agent> newbornsCopy = new ArrayList<>();
+        Agent a;
+        while ((a = immediateNewborns.poll()) != null) {
+            newbornsCopy.add(a);
+        }
+
+        if (!newbornsCopy.isEmpty()) {
+            agentContainer.addAgents(newbornsCopy);
+            birthsThisTick.addAndGet(newbornsCopy.size());
+        }
+        
+        if (newbornsCopy.size() > 10_000) {
+            SimulationLogger.warning(
+                "[%s] Large newborn batch: %,d agents added this tick",
+                getName(), newbornsCopy.size());
         }
     }
 
@@ -690,31 +431,22 @@ public class AgentLayer extends Layer {
         }
     }
 
-//    public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
-//        Agent agent = lifecycleManager.createAgent(agentClass, x, y);
-//        lifecycleManager.scheduleBirth(agent);
-//        List<Agent> newborns = immediateNewborns.get();
-//        synchronized (newborns) {
-//            newborns.add(agent);
-//        }
-//        return agent;
-//    }
     
     public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
         Agent agent = lifecycleManager.createAgent(agentClass, x, y);
-        if (agent instanceof LivingAgent la) {
-            // Set the global max age from project defaults
-            if (project != null) {
-                la.setGlobalMaxAge(project.getDefaultMaxAgentAge());
-            }
+        if (agent instanceof LivingAgent la && project != null) {
+            la.setGlobalMaxAge(project.getDefaultMaxAgentAge());
+            la.setAgeMultipliers(
+                project.getMaxAgeMultiplierEgg(),
+                project.getMaxAgeMultiplierLarva(),
+                project.getMaxAgeMultiplierPupa(),
+                project.getMaxAgeMultiplierAdult());
         }
         lifecycleManager.scheduleBirth(agent);
-        List<Agent> newborns = immediateNewborns.get();
-        synchronized (newborns) {
-            newborns.add(agent);
-        }
+        immediateNewborns.offer(agent);
         return agent;
     }
+    
 
     public void killAgentImmediately(String agentId) {
         lifecycleManager.immediateDeath(agentId);

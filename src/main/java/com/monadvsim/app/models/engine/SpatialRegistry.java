@@ -167,6 +167,22 @@ public class SpatialRegistry {
     public GridCell getAgentCell(String agentId) { 
         return agentPositions.get(agentId); 
     }
+    
+    /**
+    * O(cell-size) lookup. Given a known id, returns the agent or null.
+    * Used by RuleEngine for persistent-target seeking.
+    */
+    public Agent getAgentById(String id) {
+        if (id == null) return null;
+        GridCell cell = agentPositions.get(id);
+        if (cell == null) return null;
+        List<Agent> list = spatialGrid.get(cell);
+        if (list == null) return null;
+        for (Agent a : list) {
+            if (id.equals(a.getId())) return a;
+        }
+        return null;
+    }
 
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
@@ -193,4 +209,5 @@ public class SpatialRegistry {
         spatialGrid.clear();
         agentPositions.clear();
     }
+    
 }

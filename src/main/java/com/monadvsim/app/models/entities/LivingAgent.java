@@ -73,6 +73,29 @@ public class LivingAgent extends Agent {
         this.volatileY = y;
     }
     
+    // ------------------------------------------------------------------
+    // Persistent tank target for gravid females.
+    // Not part of the serialized state: if the simulation is snapshotted
+    // and reloaded, the female simply reacquires a target on the next tick.
+    // ------------------------------------------------------------------
+    private transient volatile String targetTankId = null;
+    private transient final AtomicInteger targetTankAgeTicks = new AtomicInteger(0);
+
+    public String getTargetTankId() { return targetTankId; }
+
+    public void setTargetTankId(String id) {
+        this.targetTankId = id;
+        this.targetTankAgeTicks.set(0);
+    }
+
+    public void clearTargetTank() {
+        this.targetTankId = null;
+        this.targetTankAgeTicks.set(0);
+    }
+
+    public int getTargetTankAgeTicks() { return targetTankAgeTicks.get(); }
+    public void incrementTargetTankAgeTicks() { targetTankAgeTicks.incrementAndGet(); }
+    
     /**
      * Set the global max age for this agent.
      * Called from AgentLayer when the agent is created.

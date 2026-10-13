@@ -456,13 +456,10 @@ public class SimulationEngine implements Runnable {
     }
     
     private void adaptiveSleep(long tickDuration) {
-        long targetTickTime = 16_666_667L;
+        long targetTickTime = 100_000_000L;   // 100 ms per tick target
         if (tickDuration < targetTickTime) {
-            try {
-                TimeUnit.NANOSECONDS.sleep(targetTickTime - tickDuration);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            try { TimeUnit.NANOSECONDS.sleep(targetTickTime - tickDuration); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
     }
     

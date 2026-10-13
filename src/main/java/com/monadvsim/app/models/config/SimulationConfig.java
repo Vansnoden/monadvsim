@@ -1,6 +1,7 @@
 package com.monadvsim.app.models.config;
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.ArrayList;
 import java.util.List;
 
 public class SimulationConfig {
@@ -82,6 +83,8 @@ public class SimulationConfig {
 
         // Fecundity (Gaussian‑on‑log)
         public double fecundity_rmax, fecundity_Topt, fecundity_c;
+        
+        public double fecundity_scale = 5.0;
 
         // Adult mortality (constant per day)
         public double adult_mortality_per_day;
@@ -121,15 +124,16 @@ public class SimulationConfig {
         public int occurrenceYearStart = 0;
         public int occurrenceYearEnd = 9999;
         public double occurrenceBufferKm = 5.0;  // Buffer around each point
+        public TankSuitabilityConfig tankSuitability;
     }
 
     public static class ProjectDefaults {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
-        public double maxAgeMultiplierEgg = 0.05;
+        public double maxAgeMultiplierEgg   = 0.05;
         public double maxAgeMultiplierLarva = 0.45;
-        public double maxAgeMultiplierPupa = 0.15;
+        public double maxAgeMultiplierPupa  = 0.15;
         public double maxAgeMultiplierAdult = 0.35;
     }
 
@@ -137,6 +141,51 @@ public class SimulationConfig {
         public String token;
         public String layer;
     }
+    
+    
+    /** Config for the WeightedRasterSuitability-driven seeding path. */
+    public static class TankSuitabilityConfig {
+        /**
+         * Baseline score applied to every in-study-area cell. Ensures the
+         * CDF has nonzero mass even where all layers are zero, so seeding
+         * still works in regions where population / building data is
+         * missing. Must be > 0.
+         */
+        public double floorSuitability = 0.05;
+
+        /**
+         * Per-cell multiplicative jitter half-width. 0.0 = deterministic,
+         * 0.3 = each cell's score is multiplied by U(0.7, 1.3). Applied
+         * once when the sampling grid is built.
+         */
+        public double stochasticJitter = 0.30;
+
+        /**
+         * Layer contributions. Each entry adds
+         *   weight * min(cap, max(0, layer_value))^power
+         * to the cell's score. Order doesn't matter.
+         */
+        public List<SuitabilityLayer> layers = new ArrayList<>();
+    }
+
+    public static class SuitabilityLayer {
+        /** Layer name, looked up via project.getLayerByName(name). */
+        public String name;
+
+        /** Non-negative contribution weight. 0 disables the layer cleanly. */
+        public double weight = 0.0;
+
+        /**
+         * Value above which the layer's contribution saturates. Prevents
+         * one or two extreme pixels (e.g. a single urban hotspot) from
+         * dominating the CDF. Use a large number to disable.
+         */
+        public double cap = 1.0e9;
+
+        /** Exponent applied to the (capped) layer value. 1.0 = linear. */
+        public double power = 1.0;
+    }
+    
     
     public static class InertAgentParams {
         public int max_larvae_capacity = 500;

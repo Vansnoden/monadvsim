@@ -1,3 +1,4 @@
+=== src/main/java/com/monadvsim/app/models/engine/LifecycleModel.java ===
 package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.LifecycleStage;
@@ -77,121 +78,52 @@ public class LifecycleModel {
         return p.adultMortalityPerDay;
     }
 
+    
+    /**
+    * Raw temperature response of fecundity, in "eggs per female per day"
+    * BEFORE sex ratio and host-density scaling. The Gaussian-on-log form
+    * follows Komi et al. 2025.
+    */
     public double fecundityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
-        double val = Math.exp(p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2));
-        return Math.max(0, val * p.sexRatio);
+        double exponent = p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2);
+        return p.fecundityScale * Math.max(0.0, Math.exp(exponent));
     }
 
-    public double hostCarryingCapacity(double livestockDensity) {
-        return p.hostCarryingCapacityBase + Math.log1p(livestockDensity);
+
+    /**
+    * Density-dependent host-availability multiplier on fecundity.
+    * Uses log1p so an empty landscape still has a small non-zero factor.
+    */
+    public double hostCarryingCapacity(double hostDensity) {
+        double host = Math.max(0.0, hostDensity);
+        return p.hostCarryingCapacityBase + Math.log1p(host);
     }
 
-    public double effectiveFecundity(double tempKelvin, double livestockDensity) {
-        double F = fecundityRate(tempKelvin);
-        double K = hostCarryingCapacity(livestockDensity);
-        return F * K * dtDays;
+    
+    /**
+    * Expected eggs per female per tick. This is the quantity the Poisson
+    * sampler consumes; it is intentionally the full product of every
+    * dimensioned factor so the calibration knob ({@link SpeciesParameters#fecundityScale})
+    * has a single, predictable effect.
+    */
+    public double effectiveFecundity(double tempKelvin, double hostDensity) {
+        return fecundityRate(tempKelvin)
+             * p.sexRatio
+             * hostCarryingCapacity(hostDensity)
+             * dtDays;
     }
 
+    
     public double transitionProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
+    
     public double mortalityProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//        double pAdv = transitionProb(dL);
-//        double pDie = mortalityProb(mL);
-//        
-//        if (agent.getAge() % 100 == 0) {
-//            SimulationLogger.fine("[DEBUG] Larva age=%d, T=%.2fK, dL=%.6f, pAdv=%.6f, pDie=%.6f",
-//                agent.getAge(), tempKelvin, dL, pAdv, pDie);
-//        }
-//
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//        if (rng.nextDouble() < pAdv) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setEnergy(0.6);
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
-    /**
-     * Updates larval development using accumulated progress.
-     * This replaces the previous stochastic transition method.
-     */
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//
-//        // 1. Accumulate development progress (in days)
-//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-//        agent.setDevelopmentProgress(newProgress);
-//
-//        // Log progress periodically
-//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
-//        }
-//
-//        // 2. When accumulated progress reaches 1.0 (100%), pupate
-//        if (newProgress >= 1.0) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setDevelopmentProgress(0.0);
-//            agent.setEnergy(0.6);
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//
-//        // 3. Apply mortality with the same probability as before
-//        double pDie = mortalityProb(mL);
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//
-//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-//        agent.setDevelopmentProgress(newProgress);
-//
-//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
-//        }
-//
-//        if (newProgress >= 1.0) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setDevelopmentProgress(0.0);
-//            agent.setEnergy(0.6);
-//            agent.setAge(0); // <-- RESET AGE HERE
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin); // log will now show 0
-//            return;
-//        }
-//
-//        double pDie = mortalityProb(mL);
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//        }
-//    }
     
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
@@ -233,27 +165,6 @@ public class LifecycleModel {
         }
     }
 
-//    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
-//        double dP = pupaDevelopmentRate(tempKelvin);
-//        double mP = pupaMortalityRate(tempKelvin);
-//        double pAdv = transitionProb(dP);
-//        double pDie = mortalityProb(mP);
-//
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//        if (rng.nextDouble() < pAdv) {
-//            agent.setStage(LifecycleStage.ADULT);
-//            agent.setEnergy(0.9);
-//            agent.setAge(0); // <-- RESET AGE HERE
-//            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
@@ -294,6 +205,7 @@ public class LifecycleModel {
         }
     }
     
+    
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double mA = adultMortalityRate(tempKelvin);
         double pDie = mortalityProb(mA);
@@ -304,6 +216,7 @@ public class LifecycleModel {
         }
     }
 
+    
     public int tryHatchEggs(int currentEggs, double tempKelvin) {
         if (currentEggs <= 0) return 0;
         double de = eggDevelopmentRate(tempKelvin);
@@ -334,13 +247,50 @@ public class LifecycleModel {
         return hatched;
     }
 
+    
+    /**
+    * Poisson sample of the expected egg count per tick, capped at the
+    * biological maximum per laying event.
+    *
+    * <p>Knuth's algorithm is exact for λ ≲ 30 (which covers our range)
+    * and O(λ) — negligible next to everything else the tick does.
+    * Falls back to a normal approximation above that.
+    */
     public int eggsToLay(double tempKelvin, double hostDensity) {
-        double expected = effectiveFecundity(tempKelvin, hostDensity);
-        int eggs = (int) expected;
-        if (rng.nextDouble() < (expected - eggs)) eggs++;
+        double lambda = effectiveFecundity(tempKelvin, hostDensity);
+        if (lambda <= 0.0) return 0;
+
+        int eggs = poisson(lambda);
+
+        // Cap at a biologically defensible single-lay maximum.
         return Math.min(eggs, 50);
     }
-}package com.monadvsim.app.models.engine;
+    
+    
+    /**
+    * Poisson sample using Knuth's algorithm (λ < 30) or a rounded normal
+    * approximation (λ ≥ 30). Uses the shared LifecycleModel RNG so the
+    * global seed still governs repeatability.
+    */
+    private int poisson(double lambda) {
+        if (lambda >= 30.0) {
+            // Normal approximation is fine here; integrality is preserved
+            // by rounding. stddev = sqrt(lambda).
+            double g = rng.nextGaussian() * Math.sqrt(lambda) + lambda;
+            return Math.max(0, (int) Math.round(g));
+        }
+        double L = Math.exp(-lambda);
+        int k = 0;
+        double p = 1.0;
+        do {
+            k++;
+            p *= rng.nextDouble();
+        } while (p > L);
+        return k - 1;
+    }
+
+}=== src/main/java/com/monadvsim/app/models/engine/SpatialRegistry.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.Agent;
 import com.monadvsim.app.models.entities.GridCell;
@@ -509,6 +459,22 @@ public class SpatialRegistry {
     public GridCell getAgentCell(String agentId) { 
         return agentPositions.get(agentId); 
     }
+    
+    /**
+    * O(cell-size) lookup. Given a known id, returns the agent or null.
+    * Used by RuleEngine for persistent-target seeking.
+    */
+    public Agent getAgentById(String id) {
+        if (id == null) return null;
+        GridCell cell = agentPositions.get(id);
+        if (cell == null) return null;
+        List<Agent> list = spatialGrid.get(cell);
+        if (list == null) return null;
+        for (Agent a : list) {
+            if (id.equals(a.getId())) return a;
+        }
+        return null;
+    }
 
     public Map<String, Object> getStatistics() {
         Map<String, Object> stats = new HashMap<>();
@@ -535,7 +501,9 @@ public class SpatialRegistry {
         spatialGrid.clear();
         agentPositions.clear();
     }
-}package com.monadvsim.app.models.engine;
+    
+}=== src/main/java/com/monadvsim/app/models/engine/SimulationEngine.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.services.ProjectPersistenceService;
@@ -993,13 +961,10 @@ public class SimulationEngine implements Runnable {
     }
     
     private void adaptiveSleep(long tickDuration) {
-        long targetTickTime = 16_666_667L;
+        long targetTickTime = 100_000_000L;   // 100 ms per tick target
         if (tickDuration < targetTickTime) {
-            try {
-                TimeUnit.NANOSECONDS.sleep(targetTickTime - tickDuration);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-            }
+            try { TimeUnit.NANOSECONDS.sleep(targetTickTime - tickDuration); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
     }
     
@@ -1016,7 +981,8 @@ public class SimulationEngine implements Runnable {
     private void printExportStatus() {
         SimulationLogger.info("[Export Status] Queue: %d, Active: %b", exportQueue.size(), exportInProgress.get());
     }
-}package com.monadvsim.app.models.engine;
+}=== src/main/java/com/monadvsim/app/models/engine/TimeManager.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import java.time.LocalDateTime;
@@ -1131,7 +1097,8 @@ public class TimeManager {
             return 0;
         }
     }
-}package com.monadvsim.app.models.engine;
+}=== src/main/java/com/monadvsim/app/models/engine/RuleEngine.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.*;
@@ -1150,7 +1117,36 @@ public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> evaluationCache = new ConcurrentHashMap<>();
+    
+    // ---- Targeting behavior for gravid females -------------------------------
+    private static final int    TARGET_ACQUIRE_TIMEOUT_TICKS = 600;   // ~6 days
+    private static final double TARGET_ACQUIRE_RADIUS_MULT   = 20.0;  // was 5.0
+    private static final double SEEK_STEP_MULT               = 5.0;
+    private static final double MIN_TANK_WATER               = 1.0;
+    private static final double LAY_RADIUS_MULT              = 20.0;  // was 3.0
+    
+    
+    /** Cache for getTotalLarvae, invalidated once per tick by AgentLayer. */
+    private volatile int cachedTotalLarvae = 0;
+    private volatile long cacheTick = -1L;
+    
+    
+    /** Called by AgentLayer at the top of each tick, once. */
+    public void updateTickCache(Project project, long tick) {
+        if (tick == cacheTick) return;
+        int total = 0;
+        for (AgentLayer layer : project.getAgentLayers()) {
+            for (Agent a : layer.getAgents()) {
+                if (a instanceof InertAgent ia) {
+                    total += ia.getLarvalCount();
+                }
+            }
+        }
+        cachedTotalLarvae = total;
+        cacheTick = tick;
+    }
 
+    
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
             return Context.newBuilder("js")
@@ -1269,7 +1265,7 @@ public class RuleEngine {
                 }
             }
         }
-        bindings.putMember("getTotalLarvae", totalLarvae);
+        bindings.putMember("getTotalLarvae", cachedTotalLarvae);
     }
 
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
@@ -1297,37 +1293,78 @@ public class RuleEngine {
     
     private void executeSeekTank(Agent agent, Project project, AgentLayer layer) {
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
-        if (!la.isGravid()) return;
 
-        // Search a larger radius for tanks
-        double searchRadius = project.getDefaultAgentSearchRadius() * 10;
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
+        if (!la.isGravid()) {
+            la.clearTargetTank();
+            return;
+        }
 
-        Agent nearestTank = null;
-        double nearestDist = Double.MAX_VALUE;
+        SpatialRegistry registry = project.getSpatialRegistry();
+        double step         = project.getDefaultAgentStep();
+        double acquireRadius = project.getDefaultAgentSearchRadius() * TARGET_ACQUIRE_RADIUS_MULT;
 
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent tank && tank.getWaterVolume() > 10) {
-                double dist = Math.hypot(n.getX() - agent.getX(), n.getY() - agent.getY());
-                if (dist < nearestDist) {
-                    nearestDist = dist;
-                    nearestTank = n;
-                }
+        // 1. Resolve the current target, if any; drop it if it is now unusable.
+        InertAgent target = null;
+        if (la.getTargetTankId() != null) {
+            Agent a = registry.getAgentById(la.getTargetTankId());
+            if (a instanceof InertAgent t && t.getWaterVolume() > MIN_TANK_WATER) {
+                target = t;
+            } else {
+                la.clearTargetTank();
             }
         }
 
-        if (nearestTank != null) {
-            // Move toward the tank
-            double dx = nearestTank.getX() - agent.getX();
-            double dy = nearestTank.getY() - agent.getY();
-            double dist = Math.hypot(dx, dy);
-            if (dist > 0.0001) {
-                double step = project.getDefaultAgentStep() * 2;
-                la.move((dx / dist) * step, (dy / dist) * step);
+        // 2. Acquire a new target if needed.
+        if (target == null) {
+            target = findNearestUsableTank(registry, la, acquireRadius);
+            if (target == null) {
+                // No tank in range: perform a short random walk so she keeps searching.
+                Random rng = SeedManager.getRandom();
+                la.move((rng.nextDouble() - 0.5) * step * 2.0,
+                        (rng.nextDouble() - 0.5) * step * 2.0);
                 layer.updateAgentPositionImmediately(la);
+                return;
+            }
+            la.setTargetTankId(target.getId());
+        }
+
+        // 3. Move one step toward the target.
+        double dx = target.getX() - la.getX();
+        double dy = target.getY() - la.getY();
+        double dist = Math.hypot(dx, dy);
+
+        if (dist <= step) {
+            // Snap onto the tank.
+            la.setX(target.getX());
+            la.setY(target.getY());
+            layer.updateAgentPositionImmediately(la);
+        } else {
+            double moveStep = Math.min(step * SEEK_STEP_MULT, dist);
+            la.move((dx / dist) * moveStep, (dy / dist) * moveStep);
+            layer.updateAgentPositionImmediately(la);
+        }
+
+        // 4. Timeout: if she has been chasing too long, drop the target
+        //    so she can reconsider on subsequent ticks.
+        la.incrementTargetTankAgeTicks();
+        if (la.getTargetTankAgeTicks() > TARGET_ACQUIRE_TIMEOUT_TICKS) {
+            la.clearTargetTank();
+        }
+    }
+
+    private InertAgent findNearestUsableTank(SpatialRegistry registry,
+                                             LivingAgent la,
+                                             double radius) {
+        List<Agent> nearby = registry.getNearbyAgents(la.getX(), la.getY(), radius);
+        InertAgent best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Agent a : nearby) {
+            if (a instanceof InertAgent tank && tank.getWaterVolume() > MIN_TANK_WATER) {
+                double d = Math.hypot(tank.getX() - la.getX(), tank.getY() - la.getY());
+                if (d < bestD) { bestD = d; best = tank; }
             }
         }
+        return best;
     }
     
     
@@ -1490,34 +1527,62 @@ public class RuleEngine {
         }
     }
 
+    
     private void executeGetGravid(Agent agent) {
         if (agent instanceof LivingAgent la) la.setGravid(true);
     }
 
+    
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
-        double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
-        double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
-        if (livestock <= 0) livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
-        
-        LifecycleModel model = project.getLifecycleModel();
-        if (model == null) return;
-        int eggsToLay = model.eggsToLay(temperature, livestock);
-        if (eggsToLay <= 0) return;
-        
-        double searchRadius = project.getDefaultAgentSearchRadius() * 10.0;
+        if (!la.isGravid()) return;
 
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent tank) {
-                tank.addEggs(eggsToLay);
-                la.setGravid(false);
-                la.setEnergy(la.getEnergy() - 0.2);
-                break;
+        SpatialRegistry registry = project.getSpatialRegistry();
+        double layRadius = Math.max(project.getDefaultAgentStep() * LAY_RADIUS_MULT, 1e-4);
+
+        // 1. Prefer the persistent target if she is currently on / at it.
+        InertAgent tank = null;
+        if (la.getTargetTankId() != null) {
+            Agent a = registry.getAgentById(la.getTargetTankId());
+            if (a instanceof InertAgent t
+                    && t.getWaterVolume() > MIN_TANK_WATER
+                    && Math.hypot(t.getX() - la.getX(), t.getY() - la.getY()) <= layRadius) {
+                tank = t;
             }
         }
+
+        // 2. Fall back to the nearest usable tank within layRadius.
+        if (tank == null) {
+            List<Agent> nearby = registry.getNearbyAgents(la.getX(), la.getY(), layRadius);
+            double bestD = Double.MAX_VALUE;
+            for (Agent a : nearby) {
+                if (a instanceof InertAgent t && t.getWaterVolume() > MIN_TANK_WATER) {
+                    double d = Math.hypot(t.getX() - la.getX(), t.getY() - la.getY());
+                    if (d < bestD) { bestD = d; tank = t; }
+                }
+            }
+        }
+
+        if (tank == null) return;   // not at a tank yet — try again next tick
+
+        // 3. Compute eggs and lay.
+        double temperature = getValueAt(project, "t2m", la.getX(), la.getY());
+        double population  = getValueAt(project, "Population", la.getX(), la.getY());
+        if (population <= 0) population = 1.0;
+
+        LifecycleModel model = project.getLifecycleModel();
+        if (model == null) return;
+        int eggs = model.eggsToLay(temperature, population);
+        if (eggs <= 0) return;
+
+        tank.addEggs(eggs);
+        tank.updateCapacityFromVolume();
+
+        la.setGravid(false);
+        la.clearTargetTank();
+        la.setEnergy(Math.max(0.0, la.getEnergy() - 0.2));
     }
+    
     
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
@@ -1551,7 +1616,49 @@ public class RuleEngine {
         scriptCache.clear();
         evaluationCache.clear();
     }
-}package com.monadvsim.app.models.engine;
+}=== src/main/java/com/monadvsim/app/models/engine/HabitatSuitabilityScorer.java ===
+package com.monadvsim.app.models.engine;
+
+import java.awt.geom.Rectangle2D;
+import java.util.Map;
+import java.util.Random;
+
+/**
+ * Pluggable scoring function for spatially seeding agents.
+ *
+ * <p>Implementations return a non-negative suitability score for any
+ * position inside {@link #getBounds()}, and provide a weighted sampler
+ * that draws positions proportional to suitability. This keeps the
+ * seeding logic decoupled from the underlying signals (population
+ * density, building density, elevation, land cover, ...) so a new
+ * signal can be added by dropping in a new implementation without
+ * touching {@code App} or the seeding loops.
+ */
+public interface HabitatSuitabilityScorer {
+
+    /**
+     * Suitability at (x, y). Must be {@code >= 0}. A value of 0 means the
+     * position is entirely excluded from sampling.
+     */
+    double score(double x, double y);
+
+    /**
+     * Draw a position weighted by {@link #score(double, double)}. The
+     * returned array is {@code {x, y}}. Implementations may cache an
+     * internal cumulative distribution for speed.
+     */
+    double[] sample(Random rng);
+
+    /** Domain of the scorer. Sampling never leaves this rectangle. */
+    Rectangle2D getBounds();
+
+    /**
+     * Optional diagnostics for logging: min / max / mean score,
+     * fraction of zero cells, etc. Never null.
+     */
+    Map<String, Object> getStats();
+}=== src/main/java/com/monadvsim/app/models/engine/SimulationMetrics.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import java.util.concurrent.atomic.AtomicLong;
@@ -1595,7 +1702,8 @@ public class SimulationMetrics {
         births.set(0);
         deaths.set(0);
     }
-}package com.monadvsim.app.models.engine;
+}=== src/main/java/com/monadvsim/app/models/engine/AgentLifeCycleManager.java ===
+package com.monadvsim.app.models.engine;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.Agent;
@@ -1819,7 +1927,8 @@ public class AgentLifeCycleManager {
             Thread.currentThread().interrupt();
         }
     }
-}package com.monadvsim.app.models.engine;
+}=== src/main/java/com/monadvsim/app/models/engine/SpeciesParameters.java ===
+package com.monadvsim.app.models.engine;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.io.Serializable;
@@ -1885,6 +1994,29 @@ public class SpeciesParameters implements Serializable {
     public double fecundity_Topt = 32.908160;
     @JsonProperty("fecundity_c")
     public double fecundity_c = -0.007832;
+    
+    /**
+    * Multiplicative calibration on the raw Gaussian fecundity curve.
+    * The literature value of {@code exp(fecundity_rmax)} is on a different
+    * dimensional footing from "eggs per female per day" once sex ratio,
+    * host factor, and dt are folded in; this factor lets you tune the
+    * realized per-day output without touching the biologically-grounded
+    * shape parameters.
+    *
+    * <p>Sanity check: at T = fecundity_Topt, hostCarryingCapacity = 2,
+    * the realized daily egg output per female is approximately:
+    * <pre>
+    *   fecundityScale * exp(fecundity_rmax) * sexRatio
+    *                  * hostCarryingCapacity * 1.0
+    * </pre>
+    * For {@code rmax=1.6, sexRatio=0.5, hostBase=2}, that's
+    * {@code fecundityScale * 4.95}. With the default scale of 1.0 you get
+    * ~5 eggs/female/day before density attenuation, which is on the low
+    * end for {@code An. stephensi}; the shipped value of 5.0 gives ~25,
+    * matching moderate laboratory/field estimates.
+    */
+   @JsonProperty("fecundity_scale")
+   public double fecundityScale = 5.0;
 
     @JsonProperty("adult_mortality_per_day")
     public double adultMortalityPerDay = 1.0 / 240.0;
@@ -1899,7 +2031,255 @@ public class SpeciesParameters implements Serializable {
     public double hostCarryingCapacityBase = 1.0;
 
     public SpeciesParameters() {}
-}package com.monadvsim.app.models.services;
+}=== src/main/java/com/monadvsim/app/models/engine/WeightedRasterSuitability.java ===
+package com.monadvsim.app.models.engine;
+
+import com.monadvsim.app.models.entities.Layer;
+import com.monadvsim.app.models.utils.SimulationLogger;
+import org.locationtech.jts.geom.Coordinate;
+import org.locationtech.jts.geom.Geometry;
+import org.locationtech.jts.geom.GeometryFactory;
+import org.locationtech.jts.geom.Point;
+
+import java.awt.geom.Rectangle2D;
+import java.util.*;
+
+/**
+ * Weighted sum of raster layers → suitability score, sampled via
+ * inverse-CDF over a fixed grid.
+ *
+ * <p>Score at a cell:
+ * <pre>
+ *   score = floor + Σ_k  weight_k * min(cap_k, max(0, layer_k(x,y)))^power_k
+ * </pre>
+ * Then multiplied by a single multiplicative jitter drawn once per cell
+ * at grid-build time, so different runs give different realizations but
+ * each run is internally consistent (sampling is deterministic given
+ * the CDF).
+ *
+ * <p>Cells outside {@code studyArea} (if provided) are hard-masked to 0.
+ */
+public class WeightedRasterSuitability implements HabitatSuitabilityScorer {
+
+    /** Per-layer contribution spec, assembled by the caller from config. */
+    public static class LayerSpec {
+        public final Layer layer;
+        public final double weight;
+        public final double cap;
+        public final double power;
+
+        public LayerSpec(Layer layer, double weight, double cap, double power) {
+            this.layer = layer;
+            this.weight = weight;
+            this.cap = Math.max(0.0, cap);
+            this.power = power > 0 ? power : 1.0;
+        }
+    }
+
+    // ---- configuration -----------------------------------------------------
+    private final List<LayerSpec> specs;
+    private final Rectangle2D bounds;
+    private final Geometry studyArea;
+    private final int gridX, gridY;
+    private final double floorSuitability;
+    private final double stochasticJitter;
+
+    // ---- lazily-built sampling state --------------------------------------
+    private double[][] gridScores;
+    private double[] cdf;                 // length = gridX*gridY, monotone in [0,1]
+    private double cellW, cellH;
+    private final Object buildLock = new Object();
+    private volatile boolean built = false;
+
+    private final long jitterSeed;
+
+    public WeightedRasterSuitability(List<LayerSpec> specs,
+                                     Rectangle2D bounds,
+                                     Geometry studyArea,
+                                     int gridX, int gridY,
+                                     double floorSuitability,
+                                     double stochasticJitter,
+                                     long jitterSeed) {
+        if (specs == null) specs = Collections.emptyList();
+        if (bounds == null || bounds.getWidth() <= 0 || bounds.getHeight() <= 0) {
+            throw new IllegalArgumentException("WeightedRasterSuitability requires a positive bounds rectangle");
+        }
+        if (gridX < 4 || gridY < 4) {
+            throw new IllegalArgumentException("Grid dimensions must be >= 4");
+        }
+        this.specs = new ArrayList<>(specs);
+        this.bounds = bounds;
+        this.studyArea = studyArea;
+        this.gridX = gridX;
+        this.gridY = gridY;
+        this.floorSuitability = Math.max(1e-4, floorSuitability); // never truly zero
+        this.stochasticJitter = Math.max(0.0, Math.min(0.9, stochasticJitter));
+        this.jitterSeed = jitterSeed;
+    }
+
+    @Override
+    public Rectangle2D getBounds() { return bounds; }
+
+    @Override
+    public double score(double x, double y) {
+        // Direct evaluation (used for diagnostics / ad-hoc checks).
+        if (studyArea != null) {
+            Point p = new GeometryFactory().createPoint(new Coordinate(x, y));
+            if (!studyArea.contains(p)) return 0.0;
+        }
+        double s = floorSuitability;
+        for (LayerSpec spec : specs) {
+            double v = safeValue(spec.layer, x, y);
+            v = Math.min(v, spec.cap);
+            v = Math.pow(v, spec.power);
+            s += spec.weight * v;
+        }
+        return Math.max(0.0, s);
+    }
+
+    @Override
+    public double[] sample(Random rng) {
+        buildGridIfNeeded();
+        double r = rng.nextDouble();
+        int idx = Arrays.binarySearch(cdf, r);
+        if (idx < 0) idx = -(idx + 1);
+        if (idx >= cdf.length) idx = cdf.length - 1;
+
+        int i = idx / gridY;
+        int j = idx % gridY;
+
+        double x = bounds.getMinX() + (i + rng.nextDouble()) * cellW;
+        double y = bounds.getMinY() + (j + rng.nextDouble()) * cellH;
+        return new double[]{x, y};
+    }
+
+    // -----------------------------------------------------------------------
+    // Grid build
+    // -----------------------------------------------------------------------
+    private void buildGridIfNeeded() {
+        if (built) return;
+        synchronized (buildLock) {
+            if (built) return;
+            long t0 = System.currentTimeMillis();
+
+            gridScores = new double[gridX][gridY];
+            cellW = bounds.getWidth()  / gridX;
+            cellH = bounds.getHeight() / gridY;
+
+            GeometryFactory gf = new GeometryFactory();
+            Random noise = new Random(jitterSeed);
+
+            double total = 0.0;
+            int zeroCells = 0;
+            int maskedCells = 0;
+            double minS = Double.POSITIVE_INFINITY;
+            double maxS = 0.0;
+
+            for (int i = 0; i < gridX; i++) {
+                double cx = bounds.getMinX() + (i + 0.5) * cellW;
+                for (int j = 0; j < gridY; j++) {
+                    double cy = bounds.getMinY() + (j + 0.5) * cellH;
+
+                    if (studyArea != null) {
+                        Point p = gf.createPoint(new Coordinate(cx, cy));
+                        if (!studyArea.contains(p)) {
+                            gridScores[i][j] = 0.0;
+                            maskedCells++;
+                            continue;
+                        }
+                    }
+
+                    double s = floorSuitability;
+                    for (LayerSpec spec : specs) {
+                        double v = safeValue(spec.layer, cx, cy);
+                        v = Math.min(v, spec.cap);
+                        v = Math.pow(v, spec.power);
+                        s += spec.weight * v;
+                    }
+
+                    if (stochasticJitter > 0) {
+                        double jitter = 1.0 + (noise.nextDouble() * 2.0 - 1.0) * stochasticJitter;
+                        s *= jitter;
+                    }
+
+                    if (s < 0) s = 0;
+                    gridScores[i][j] = s;
+                    total += s;
+                    if (s < minS) minS = s;
+                    if (s > maxS) maxS = s;
+                    if (s == 0.0) zeroCells++;
+                }
+            }
+
+            if (total <= 0.0) {
+                SimulationLogger.severe(
+                    "[Suitability] Total score is zero — no cells are sampleable. "
+                    + "Falling back to uniform across study area.");
+                for (int i = 0; i < gridX; i++) {
+                    for (int j = 0; j < gridY; j++) {
+                        gridScores[i][j] = (gridScores[i][j] == 0.0 && maskedCells > 0) ? 0.0 : 1.0;
+                        total += gridScores[i][j];
+                    }
+                }
+                if (total <= 0) total = 1.0;
+            }
+
+            cdf = new double[gridX * gridY];
+            double cum = 0.0;
+            int idx = 0;
+            for (int i = 0; i < gridX; i++) {
+                for (int j = 0; j < gridY; j++) {
+                    cum += gridScores[i][j];
+                    cdf[idx++] = cum / total;
+                }
+            }
+
+            built = true;
+            long dt = System.currentTimeMillis() - t0;
+            SimulationLogger.info(
+                "[Suitability] Grid built: %dx%d cells in %d ms; "
+                + "min=%.4f, max=%.4f, zeroCells=%d, maskedCells=%d",
+                gridX, gridY, dt,
+                Double.isFinite(minS) ? minS : 0.0, maxS, zeroCells, maskedCells);
+        }
+    }
+
+    private static double safeValue(Layer layer, double x, double y) {
+        if (layer == null) return 0.0;
+        double v = layer.getValueAt(x, y);
+        if (Double.isNaN(v) || v < 0) return 0.0;
+        return v;
+    }
+
+    @Override
+    public Map<String, Object> getStats() {
+        Map<String, Object> s = new LinkedHashMap<>();
+        s.put("layers", specs.size());
+        s.put("gridX", gridX);
+        s.put("gridY", gridY);
+        s.put("floorSuitability", floorSuitability);
+        s.put("stochasticJitter", stochasticJitter);
+        s.put("built", built);
+        if (built && gridScores != null) {
+            double min = Double.POSITIVE_INFINITY, max = 0, sum = 0;
+            int zero = 0;
+            for (double[] row : gridScores) {
+                for (double v : row) {
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                    sum += v;
+                    if (v == 0) zero++;
+                }
+            }
+            s.put("minScore", min);
+            s.put("maxScore", max);
+            s.put("meanScore", sum / (gridX * (double) gridY));
+            s.put("zeroCells", zero);
+        }
+        return s;
+    }
+}=== src/main/java/com/monadvsim/app/models/services/LayerFactory.java ===
+package com.monadvsim.app.models.services;
 
 import com.monadvsim.app.models.entities.*;
 import com.monadvsim.app.models.engine.TimeManager;
@@ -2040,7 +2420,8 @@ public class LayerFactory {
                varName.equals("time") || varName.equals("level") ||
                varName.equals("step") || varName.equals("valid_time");
     }
-}package com.monadvsim.app.models.services;
+}=== src/main/java/com/monadvsim/app/models/services/ProjectPersistenceService.java ===
+package com.monadvsim.app.models.services;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.entities.*;
@@ -2056,6 +2437,9 @@ import org.geotools.coverage.grid.io.AbstractGridFormat;
 import org.geotools.coverage.grid.io.GridCoverage2DReader;
 import org.geotools.coverage.grid.io.GridFormatFinder;
 import org.geotools.geometry.jts.ReferencedEnvelope;
+import org.geotools.coverage.util.CoverageUtilities;
+import org.eclipse.imagen.media.range.NoDataContainer;
+
 
 /**
  * Data Loading/Export Service
@@ -2066,41 +2450,93 @@ public class ProjectPersistenceService {
 
     public void loadRasterData(RasterLayer layer, String filePath) throws Exception {
         SimulationLogger.info("✅ Loading Spatial Layer: " + layer.getName() + " [" + filePath + "]");
-        
+
         File file = new File(filePath);
         if (!file.exists()) {
             throw new FileNotFoundException("File not found: " + filePath);
         }
-        
+
         try {
             AbstractGridFormat format = GridFormatFinder.findFormat(file);
             if (format == null) throw new IOException("No suitable raster format found for: " + filePath);
-            
+
             GridCoverage2DReader reader = format.getReader(file);
             if (reader == null) throw new IOException("Unable to create reader for: " + filePath);
-            
+
             GridCoverage2D coverage = reader.read(null);
             if (coverage == null) throw new IOException("Unable to read coverage from: " + filePath);
-            
+
             RenderedImage image = coverage.getRenderedImage();
             int width = image.getWidth();
             int height = image.getHeight();
-            
+
+            // ------------------------------------------------------------------
+            // Bounds: use the raster's own geotransform, NOT the study-site extent.
+            // ------------------------------------------------------------------
             ReferencedEnvelope envelope = new ReferencedEnvelope(coverage.getEnvelope());
             layer.initialize(width, height, 1);
-            layer.setBounds(envelope.getMinX(), envelope.getMaxX(), envelope.getMinY(), envelope.getMaxY());
-            
-            readRasterData(layer, image, width, height);
-            
+            layer.setBounds(envelope.getMinX(), envelope.getMaxX(),
+                            envelope.getMinY(), envelope.getMaxY());
+
+            // ------------------------------------------------------------------
+            // Nodata: try GeoTools NoDataContainer, then _FillValue metadata,
+            // then fall back to common sentinels (-9999, -32768, -3.4e38).
+            // ------------------------------------------------------------------
+            double nodata = extractNoDataValue(coverage, reader);
+
+            // ------------------------------------------------------------------
+            // Read pixel data, replacing nodata with 0.
+            // ------------------------------------------------------------------
+            readRasterData(layer, image, width, height, nodata);
+
             GridCoverageWrapper wrapper = new GridCoverageWrapper(coverage, filePath);
             resourceManager.track("RasterCoverage", wrapper, layer.getName() + " - " + filePath);
-            
-            SimulationLogger.info("✅ Successfully loaded raster: " + layer.getName());
+
+            SimulationLogger.info(
+                "✅ Loaded raster '%s' [size=%dx%d, bounds=(%.4f,%.4f)–(%.4f,%.4f), nodata=%s]",
+                layer.getName(), width, height,
+                envelope.getMinX(), envelope.getMinY(),
+                envelope.getMaxX(), envelope.getMaxY(),
+                Double.isNaN(nodata) ? "none" : String.valueOf(nodata));
+
         } catch (Exception e) {
             SimulationLogger.severe("❌ Error loading raster: " + filePath + " - " + e.getMessage());
             fallbackRaster(layer);
         }
     }
+    
+    
+    /**
+    * Extracts the nodata value from a GeoTools coverage/reader.
+    * Returns Double.NaN if no explicit nodata is declared.
+    */
+    private double extractNoDataValue(GridCoverage2D coverage, GridCoverage2DReader reader) {
+        // 1. Preferred: NoDataContainer on the coverage itself.
+        try {
+            NoDataContainer ndc = CoverageUtilities.getNoDataProperty(coverage);
+            if (ndc != null) {
+                double v = ndc.getAsSingleValue();
+                if (!Double.isNaN(v)) {
+                    return v;
+                }
+            }
+        } catch (Throwable ignored) { /* older GeoTools versions may not support this */ }
+
+        // 2. Fallback: reader metadata for _FillValue / missing_value / nodata.
+        String[] keys = {"_FillValue", "missing_value", "nodata", "NODATA_VALUE"};
+        for (String key : keys) {
+            try {
+                String v = reader.getMetadataValue(key);
+                if (v != null && !v.isEmpty()) {
+                    return Double.parseDouble(v.trim());
+                }
+            } catch (Throwable ignored) { /* not present */ }
+        }
+
+        return Double.NaN; // unknown
+    }
+
+    
     
     private void fallbackRaster(RasterLayer layer) {
         layer.initialize(100, 100, 1);
@@ -2113,21 +2549,55 @@ public class ProjectPersistenceService {
         }
     }
 
-    private void readRasterData(RasterLayer layer, RenderedImage image, int width, int height) {
+    /**
+    * Reads every pixel into the layer, replacing nodata with 0.
+    * Also treats common integer sentinels as nodata when no explicit
+    * nodata value was declared (covers Int16 rasters with -32768 / -9999).
+    */
+    private void readRasterData(RasterLayer layer, RenderedImage image,
+                                int width, int height, double nodata) {
         java.awt.image.Raster raster = image.getData();
         double[] pixel = new double[1];
+        boolean hasExplicit = !Double.isNaN(nodata);
+        long replaced = 0;
+
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
                 try {
                     raster.getPixel(x, y, pixel);
-                    layer.setData(0, x, y, pixel[0]);
+                    double v = pixel[0];
+
+                    boolean isNo = Double.isNaN(v);
+                    if (hasExplicit) {
+                        isNo = isNo || Math.abs(v - nodata) < 1e-3;
+                    } else {
+                        // Heuristic sentinels for un-labeled Int16/Float32 rasters
+                        isNo = isNo
+                            || v == -32768.0
+                            || v == -9999.0
+                            || v == -99999.0
+                            || v <= -3.0e38;
+                    }
+
+                    if (isNo) {
+                        v = 0.0;
+                        replaced++;
+                    }
+                    layer.setData(0, x, y, v);
                 } catch (Exception e) {
                     layer.setData(0, x, y, 0.0);
                 }
             }
         }
+
+        if (replaced > 0) {
+            SimulationLogger.info(
+                "   ↳ Replaced %,d nodata pixel(s) with 0 in layer '%s'",
+                replaced, layer.getName());
+        }
     }
 
+    
     public void loadClimateNetCDF(RasterLayer tempLayer, RasterLayer rainLayer, String filePath) {
         SimulationLogger.info("✅ Ingested Climate Series: Temp & Rainfall from " + filePath);
         for (int f = 0; f < 3000; f++) {
@@ -2140,6 +2610,7 @@ public class ProjectPersistenceService {
         }
     }
 
+    
     public boolean exportToCSV(Project project, String outputPath, long tickCount) throws IOException {
         SimulationLogger.info("[Export-CSV] Starting export to %s for tick %d", outputPath, tickCount);
         long startTime = System.currentTimeMillis();
@@ -2219,7 +2690,8 @@ public class ProjectPersistenceService {
             throw e;
         }
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/SimulationLogger.java ===
+package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.IOException;
@@ -2362,7 +2834,8 @@ public class SimulationLogger {
             fileHandler.close();
         }
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/ManagedExecutorService.java ===
+package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 
@@ -2770,6 +3243,7 @@ public class ManagedExecutorService implements ExecutorService {
         }
     }
 }
+=== src/main/java/com/monadvsim/app/models/utils/ResourceManager.java ===
 package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -3063,7 +3537,8 @@ public final class ResourceManager implements Closeable {
             super.finalize();
         }
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/OccurrenceLoader.java ===
+package com.monadvsim.app.models.utils;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
@@ -3268,7 +3743,8 @@ public class OccurrenceLoader {
         
         return summary;
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/VectorBoundsLoader.java ===
+package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import org.geotools.api.data.FileDataStore;
@@ -3412,7 +3888,8 @@ public class VectorBoundsLoader {
             store.dispose();
         }
     }
-}// File: com/monadvsim/app/models/utils/SeedManager.java
+}=== src/main/java/com/monadvsim/app/models/utils/SeedManager.java ===
+// File: com/monadvsim/app/models/utils/SeedManager.java
 package com.monadvsim.app.models.utils;
 
 import java.util.Random;
@@ -3476,7 +3953,8 @@ public class SeedManager {
         // ThreadLocalRandom doesn't support seeding, so return a seeded Random
         return globalRandom;
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/SnapshotMerger.java ===
+package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.io.*;
@@ -3871,7 +4349,8 @@ public class SnapshotMerger {
         // Implementation depends on specific requirements
         SimulationLogger.info("Processing (parallel): " + file.getName());
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/SpeciesParameterLoader.java ===
+package com.monadvsim.app.models.utils;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -3921,8 +4400,10 @@ public class SpeciesParameterLoader {
     public static SpeciesParameters loadDefault() {
         return new SpeciesParameters();
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/ConfigLoader.java ===
+package com.monadvsim.app.models.utils;
 
+import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import com.monadvsim.app.models.config.SimulationConfig;
@@ -3932,75 +4413,78 @@ import java.io.InputStream;
 
 public class ConfigLoader {
 
-    private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory());
-
     /**
-     * Load configuration from the given path.
-     * Automatically detects if it's a classpath resource or file system path.
-     * 
-     * @param path - Path to the config file
-     * @return SimulationConfig object
-     * @throws IOException if the file cannot be loaded
+     * YAML mapper used for all config loading.
+     *
+     * <p>{@code FAIL_ON_UNKNOWN_PROPERTIES} is disabled on purpose: YAML
+     * configs frequently carry fields that a given code revision does not
+     * yet know about (or has retired). Strict failure means the whole run
+     * silently falls back to hard-coded defaults, which is much harder to
+     * debug than a warning. Unknown keys are logged and ignored.
      */
+    private static final ObjectMapper YAML_MAPPER = new ObjectMapper(new YAMLFactory())
+        .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
+
     public static SimulationConfig loadConfig(String path) throws IOException {
-        // Try classpath first (if path starts with "/")
+        if (path == null || path.isEmpty()) {
+            throw new IOException("Config path is null or empty");
+        }
+
+        // 1. Classpath, exact path
         if (path.startsWith("/")) {
             try (InputStream is = ConfigLoader.class.getResourceAsStream(path)) {
                 if (is != null) {
+                    SimulationLogger.info("[ConfigLoader] Loaded from classpath: %s", path);
                     return YAML_MAPPER.readValue(is, SimulationConfig.class);
                 }
             }
         }
-        
-        // Try classpath with leading "/" added
+
+        // 2. Classpath, leading "/" added
         if (!path.startsWith("/")) {
             try (InputStream is = ConfigLoader.class.getResourceAsStream("/" + path)) {
                 if (is != null) {
+                    SimulationLogger.info("[ConfigLoader] Loaded from classpath: /%s", path);
                     return YAML_MAPPER.readValue(is, SimulationConfig.class);
                 }
             } catch (IOException e) {
-                // Continue to file system
+                // fall through
             }
         }
-        
-        // Try file system
+
+        // 3. File system, exact path
         File file = new File(path);
         if (file.exists()) {
+            SimulationLogger.info("[ConfigLoader] Loaded from file: %s", file.getAbsolutePath());
             return YAML_MAPPER.readValue(file, SimulationConfig.class);
         }
-        
-        // Try with "config/" prefix
-        File configFile = new File("config/" + path);
-        if (configFile.exists()) {
-            return YAML_MAPPER.readValue(configFile, SimulationConfig.class);
+
+        // 4. File system, "config/" prefix
+        File prefixed = new File("config/" + path);
+        if (prefixed.exists()) {
+            SimulationLogger.info("[ConfigLoader] Loaded from file: %s", prefixed.getAbsolutePath());
+            return YAML_MAPPER.readValue(prefixed, SimulationConfig.class);
         }
-        
+
         throw new IOException("Config file not found: " + path);
     }
 
-    /**
-     * Load configuration from classpath resource (legacy method).
-     */
+    /** Legacy classpath-only loader. */
     public static SimulationConfig loadFromYaml(String resourcePath) throws IOException {
         try (InputStream is = ConfigLoader.class.getResourceAsStream(resourcePath)) {
-            if (is == null) {
-                throw new IOException("Config file not found: " + resourcePath);
-            }
+            if (is == null) throw new IOException("Config not found on classpath: " + resourcePath);
             return YAML_MAPPER.readValue(is, SimulationConfig.class);
         }
     }
-    
-    /**
-     * Load configuration from file system path.
-     */
+
+    /** Legacy file-system-only loader. */
     public static SimulationConfig loadFromFile(String filePath) throws IOException {
         File file = new File(filePath);
-        if (!file.exists()) {
-            throw new IOException("Config file not found: " + filePath);
-        }
+        if (!file.exists()) throw new IOException("Config file not found: " + filePath);
         return YAML_MAPPER.readValue(file, SimulationConfig.class);
     }
-}package com.monadvsim.app.models.utils;
+}=== src/main/java/com/monadvsim/app/models/utils/ClimateDatasetManager.java ===
+package com.monadvsim.app.models.utils;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.entities.InterpolatedRasterLayer;
@@ -4152,9 +4636,11 @@ public class ClimateDatasetManager {
             e.getValue().printStatistics();
         }
     }
-}package com.monadvsim.app.models.config;
+}=== src/main/java/com/monadvsim/app/models/config/SimulationConfig.java ===
+package com.monadvsim.app.models.config;
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.fasterxml.jackson.annotation.JsonProperty;
+import java.util.ArrayList;
 import java.util.List;
 
 public class SimulationConfig {
@@ -4236,6 +4722,8 @@ public class SimulationConfig {
 
         // Fecundity (Gaussian‑on‑log)
         public double fecundity_rmax, fecundity_Topt, fecundity_c;
+        
+        public double fecundity_scale = 5.0;
 
         // Adult mortality (constant per day)
         public double adult_mortality_per_day;
@@ -4275,22 +4763,64 @@ public class SimulationConfig {
         public int occurrenceYearStart = 0;
         public int occurrenceYearEnd = 9999;
         public double occurrenceBufferKm = 5.0;  // Buffer around each point
+        public TankSuitabilityConfig tankSuitability;
     }
 
     public static class ProjectDefaults {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
-        public double maxAgeMultiplierEgg = 0.05;
-        public double maxAgeMultiplierLarva = 0.45;
-        public double maxAgeMultiplierPupa = 0.15;
-        public double maxAgeMultiplierAdult = 0.35;
     }
 
     public static class TokenMapping {
         public String token;
         public String layer;
     }
+    
+    
+    /** Config for the WeightedRasterSuitability-driven seeding path. */
+    public static class TankSuitabilityConfig {
+        /**
+         * Baseline score applied to every in-study-area cell. Ensures the
+         * CDF has nonzero mass even where all layers are zero, so seeding
+         * still works in regions where population / building data is
+         * missing. Must be > 0.
+         */
+        public double floorSuitability = 0.05;
+
+        /**
+         * Per-cell multiplicative jitter half-width. 0.0 = deterministic,
+         * 0.3 = each cell's score is multiplied by U(0.7, 1.3). Applied
+         * once when the sampling grid is built.
+         */
+        public double stochasticJitter = 0.30;
+
+        /**
+         * Layer contributions. Each entry adds
+         *   weight * min(cap, max(0, layer_value))^power
+         * to the cell's score. Order doesn't matter.
+         */
+        public List<SuitabilityLayer> layers = new ArrayList<>();
+    }
+
+    public static class SuitabilityLayer {
+        /** Layer name, looked up via project.getLayerByName(name). */
+        public String name;
+
+        /** Non-negative contribution weight. 0 disables the layer cleanly. */
+        public double weight = 0.0;
+
+        /**
+         * Value above which the layer's contribution saturates. Prevents
+         * one or two extreme pixels (e.g. a single urban hotspot) from
+         * dominating the CDF. Use a large number to disable.
+         */
+        public double cap = 1.0e9;
+
+        /** Exponent applied to the (capped) layer value. 1.0 = linear. */
+        public double power = 1.0;
+    }
+    
     
     public static class InertAgentParams {
         public int max_larvae_capacity = 500;
@@ -4300,7 +4830,8 @@ public class SimulationConfig {
         public double hatch_fraction_min = 0.1;
         public double hatch_fraction_max = 0.6;
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/AgentLayer.java ===
+package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.AgentLifeCycleManager;
@@ -4319,12 +4850,13 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
 
 
 /**
@@ -4362,7 +4894,12 @@ public class AgentLayer extends Layer {
     private final AtomicLong deaths = new AtomicLong(0);
     private final AtomicLong birthsThisTick = new AtomicLong(0);
     private final AtomicLong deathsThisTick = new AtomicLong(0);
-    private final ThreadLocal<List<Agent>> immediateNewborns = ThreadLocal.withInitial(ArrayList::new);
+    /**
+    * Newborns produced during the current tick, from ANY worker thread.
+    * Must be a shared, thread-safe queue: hatch events run on rule-worker
+    * threads, but the flush runs on the main thread.
+    */
+    private final Queue<Agent> immediateNewborns = new ConcurrentLinkedQueue<>();
     
     private Project project;
     
@@ -4453,7 +4990,10 @@ public class AgentLayer extends Layer {
             }
 
             agentContainer.applyPendingOperations();
-            processAgentsWithRules(project, timeLimit);
+            if (timeManager != null && ruleEngine != null) {
+                ruleEngine.updateTickCache(project, timeManager.getTickCount());
+            }
+            processAgentsWithRules(project);
             processImmediateNewborns();
             cleanupDeadAgents();
 
@@ -4474,295 +5014,18 @@ public class AgentLayer extends Layer {
         logUpdatePerformance(startTime);
     }
 
-    private void processAgentsWithRules(Project project, long timeLimit) throws ExecutionException {
-        immediateNewborns.remove();
-
+    private void processAgentsWithRules(Project project) throws ExecutionException {
+        // No artificial time budget: with large populations, skipping agents
+        // mid-tick means larvae effectively stop aging and mortality stops
+        // firing. Slow ticks are preferable to incorrect ones. The watchdog
+        // (SimulationEngine) has its own, much looser hang detector.
         agentContainer.processWithBatching(batch -> {
-            if (System.nanoTime() > timeLimit) return;
             for (Agent agent : batch) {
                 processAgentRules(agent, project);
-                if (System.nanoTime() > timeLimit) break;
             }
         }, 100);
     }
 
-
-//    private void processAgentRules(Agent agent, Project project) {
-//        if (agent == null) return;
-//
-//        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//            return;
-//        }
-//
-//        if (rulesEvaluated.get() > 1_000_000_000L) {
-//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, "
-//                    + "skipping further evaluations");
-//            return;
-//        }
-//
-//        synchronized (agent) {
-//            try {
-//                // --------------------------------------------------------------------
-//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
-//                // --------------------------------------------------------------------
-//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
-//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
-//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
-//                    Random rng = SeedManager.getRandom();
-//                    if (hatched > 0) {
-//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
-//                        if (mosquitoLayer != null) {
-//                            for (int i = 0; i < hatched; i++) {
-//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-//                                larva.setStage(LifecycleStage.LARVA);
-//                                larva.setAge(0);
-//                                larva.setEnergy(0.8);
-//                            }
-//                        }
-//                    }
-//                }
-//
-//                // --------------------------------------------------------------------
-//                // 2. RULE EVALUATION FOR ALL AGENT TYPES
-//                //    This is the key change - rules now run for InertAgent too!
-//                // --------------------------------------------------------------------
-//                for (RuleDefinition rule : rules) {
-//                    rulesEvaluated.incrementAndGet();
-//                    boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-//                    if (evalResult) {
-//                        ruleEngine.execute(rule.action(), agent, project, this);
-//                        actionsExecuted.incrementAndGet();
-//
-//                        // If LivingAgent died during rule execution, stop processing
-//                        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            break;
-//                        }
-//                        if (isTerminalAction(rule.action())) break;
-//                    }
-//                }
-//
-//                // --------------------------------------------------------------------
-//                // 3. LIVING AGENT: Lifecycle updates (age, resting, development, etc.)
-//                //    These should only run for LivingAgent
-//                // --------------------------------------------------------------------
-//                
-//                if (agent instanceof LivingAgent la) {
-//                    // Update resting state
-//                    if (la.isResting()) {
-//                        la.incrementRestingDuration();
-//                        if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-//                            la.setResting(false);
-//                        }
-//                    } else {
-//                        la.incrementTimeWithoutRest();
-//                        if (la.getTimeWithoutRest() > 96) {
-//                            la.setAlive(false);
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            return;
-//                        }
-//                    }
-//
-//                    // Age increment
-//                    la.incrementAge();
-//                    if (la.getAge() > project.getDefaultMaxAgentAge()) {
-//                        la.setAlive(false);
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                        return;
-//                    }
-//
-//                    // Temperature‑dependent development
-//                    if (la.isAlive()) {
-//                        double temperature = getTemperatureAt(project, la.getX(), la.getY());
-//                        LifecycleStage stage = la.getStage();
-//                        switch (stage) {
-//                            case LARVA:
-//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-//                                break;
-//                            case PUPA:
-//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-//                                break;
-//                            case ADULT:
-//                                lifecycleModel.applyAdultMortality(la, temperature);
-//                                break;
-//                            default:
-//                                break;
-//                        }
-//                        if (!la.isAlive()) {
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                        }
-//                    }
-//                }
-//            } catch (Exception e) {
-//                SimulationLogger.severe("Error processing agent " 
-//                        + agent.getId() 
-//                        + ": " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//    }
-    
-    
-//    private void processAgentRules(Agent agent, Project project) {
-//        if (agent == null) return;
-//
-//        if (agent instanceof LivingAgent la && !la.isAlive()) {
-//            return;
-//        }
-//
-//        if (rulesEvaluated.get() > 1_000_000_000L) {
-//            SimulationLogger.severe("WARNING: Rule evaluation limit reached, skipping further evaluations");
-//            return;
-//        }
-//
-//        synchronized (agent) {
-//            try {
-//                // ================================================================
-//                // 1. INERT AGENT: Passive hatching (eggs → larvae)
-//                // ================================================================
-//                if (agent instanceof InertAgent ia && lifecycleModel != null) {
-//                    double temperature = getTemperatureAt(project, ia.getX(), ia.getY());
-//                    int hatched = ia.hatchEggs(temperature, lifecycleModel);
-//                    Random rng = SeedManager.getRandom();
-//                    if (hatched > 0 || ia.getLarvalCount() > 0) {
-//                        ia.applyDensityDependentMortality();
-//                    }
-//                    if (hatched > 0) {
-//                        AgentLayer mosquitoLayer = findMosquitoLayer(project);
-//                        if (mosquitoLayer != null) {
-//                            for (int i = 0; i < hatched; i++) {
-//                                double x = ia.getX() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                double y = ia.getY() + (rng.nextDouble() - 0.5) * 0.0001;
-//                                LivingAgent larva = (LivingAgent) mosquitoLayer.createAgentImmediately(LivingAgent.class, x, y);
-//                                larva.setStage(LifecycleStage.LARVA);
-//                                larva.setAge(0);
-//                                larva.setStageAgeTicks(0); // <-- NEW: Reset stage age
-//                                larva.setEnergy(0.8);
-//                                larva.setDevelopmentProgress(0.0);
-//                                larva.setAccumulatedDegreeDays(0.0); // <-- NEW: Reset degree-days
-//                            }
-//                        }
-//                    }
-//                }
-//
-//                // ================================================================
-//                // 2. LIVING AGENT: Temperature‑dependent development
-//                // ================================================================
-//                if (agent instanceof LivingAgent la) {
-//                    double temperature = getTemperatureAt(project, la.getX(), la.getY());
-//                    LifecycleStage stage = la.getStage();
-//
-//                    if (la.isAlive()) {
-//                        // Debug logging for larvae
-//                        if (stage == LifecycleStage.LARVA && timeManager != null) {
-//                            if (timeManager.getTickCount() % 100 == 0 && la.getId().hashCode() % 10 == 0) {
-//                                SimulationLogger.fine("[DEBUG] LARVA: id=%s, stageAge=%d, progress=%.3f, DD=%.2f, temp=%.2fK",
-//                                    la.getId().substring(0, 8), 
-//                                    la.getStageAgeTicks(), // <-- Use stage age
-//                                    la.getDevelopmentProgress(), 
-//                                    la.getAccumulatedDegreeDays(),
-//                                    temperature);
-//                            }
-//                        }
-//
-//                        // ================================================================
-//                        // IMPORTANT: Increment stage age FIRST before any transitions
-//                        // This ensures that even newly transitioned agents have their age tracked
-//                        // ================================================================
-//                        la.incrementStageAgeTicks();
-//
-//                        switch (stage) {
-//                            case LARVA:
-//                                lifecycleModel.tryAdvanceFromLarva(la, temperature);
-//                                break;
-//                            case PUPA:
-//                                lifecycleModel.tryAdvanceFromPupa(la, temperature);
-//                                break;
-//                            case ADULT:
-//                                lifecycleModel.applyAdultMortality(la, temperature);
-//                                break;
-//                            default:
-//                                break;
-//                        }
-//                    }
-//
-//                    if (!la.isAlive()) {
-//                        lifecycleManager.scheduleDeath(agent.getId());
-//                        deathsThisTick.incrementAndGet();
-//                        return;
-//                    }
-//
-//                    // ================================================================
-//                    // 3. RULE EVALUATION
-//                    // ================================================================
-//                    for (RuleDefinition rule : rules) {
-//                        rulesEvaluated.incrementAndGet();
-//                        boolean evalResult = ruleEngine.evaluate(rule.condition(), agent, project);
-//                        if (evalResult) {
-//                            ruleEngine.execute(rule.action(), agent, project, this);
-//                            actionsExecuted.incrementAndGet();
-//
-//                            if (!la.isAlive()) {
-//                                lifecycleManager.scheduleDeath(agent.getId());
-//                                deathsThisTick.incrementAndGet();
-//                                break;
-//                            }
-//                            if (isTerminalAction(rule.action())) break;
-//                        }
-//                    }
-//
-//                    // ================================================================
-//                    // 4. AGING AND RESTING
-//                    // ================================================================
-//                    if (la.isAlive()) {
-//                        if (la.isResting()) {
-//                            la.incrementRestingDuration();
-//                            if (la.getRestingDuration() > la.getMaxRestingDuration()) {
-//                                la.setResting(false);
-//                            }
-//                        } else {
-//                            la.incrementTimeWithoutRest();
-//                            if (la.getTimeWithoutRest() > 96) {
-//                                la.setAlive(false);
-//                                lifecycleManager.scheduleDeath(agent.getId());
-//                                deathsThisTick.incrementAndGet();
-//                                return;
-//                            }
-//                        }
-//
-//                        // ================================================================
-//                        // CRITICAL FIX: Use stageAgeTicks for stage-specific max age check
-//                        // NOT the total age (which was being reset on transition)
-//                        // ================================================================
-//                        if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
-//                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
-//                                la.getId().substring(0, 8), 
-//                                la.getStage(), 
-//                                la.getStageAgeTicks(), 
-//                                la.getMaxAgeForStage());
-//                            la.setAlive(false);
-//                            lifecycleManager.scheduleDeath(agent.getId());
-//                            deathsThisTick.incrementAndGet();
-//                            return;
-//                        }
-//
-//                        // Optional: Track total age for statistics (no longer used for mortality)
-//                        la.incrementAge();
-//                    }
-//                }
-//            } catch (Exception e) {
-//                SimulationLogger.severe("Error processing agent " + agent.getId() + ": " + e.getMessage());
-//                e.printStackTrace();
-//            }
-//        }
-//    }
-//    
     
     private void processAgentRules(Agent agent, Project project) {
         if (agent == null) return;
@@ -4945,14 +5208,23 @@ public class AgentLayer extends Layer {
     }
 
     private void processImmediateNewborns() {
-        List<Agent> newborns = immediateNewborns.get();
-        if (!newborns.isEmpty()) {
-            synchronized (newborns) {
-                List<Agent> newbornsCopy = new ArrayList<>(newborns);
-                agentContainer.addAgents(newbornsCopy);
-                birthsThisTick.addAndGet(newbornsCopy.size());
-                newborns.clear();
-            }
+        if (immediateNewborns.isEmpty()) return;
+
+        List<Agent> newbornsCopy = new ArrayList<>();
+        Agent a;
+        while ((a = immediateNewborns.poll()) != null) {
+            newbornsCopy.add(a);
+        }
+
+        if (!newbornsCopy.isEmpty()) {
+            agentContainer.addAgents(newbornsCopy);
+            birthsThisTick.addAndGet(newbornsCopy.size());
+        }
+        
+        if (newbornsCopy.size() > 10_000) {
+            SimulationLogger.warning(
+                "[%s] Large newborn batch: %,d agents added this tick",
+                getName(), newbornsCopy.size());
         }
     }
 
@@ -4992,31 +5264,22 @@ public class AgentLayer extends Layer {
         }
     }
 
-//    public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
-//        Agent agent = lifecycleManager.createAgent(agentClass, x, y);
-//        lifecycleManager.scheduleBirth(agent);
-//        List<Agent> newborns = immediateNewborns.get();
-//        synchronized (newborns) {
-//            newborns.add(agent);
-//        }
-//        return agent;
-//    }
     
     public Agent createAgentImmediately(Class<? extends Agent> agentClass, double x, double y) {
         Agent agent = lifecycleManager.createAgent(agentClass, x, y);
-        if (agent instanceof LivingAgent la) {
-            // Set the global max age from project defaults
-            if (project != null) {
-                la.setGlobalMaxAge(project.getDefaultMaxAgentAge());
-            }
+        if (agent instanceof LivingAgent la && project != null) {
+            la.setGlobalMaxAge(project.getDefaultMaxAgentAge());
+            la.setAgeMultipliers(
+                project.getMaxAgeMultiplierEgg(),
+                project.getMaxAgeMultiplierLarva(),
+                project.getMaxAgeMultiplierPupa(),
+                project.getMaxAgeMultiplierAdult());
         }
         lifecycleManager.scheduleBirth(agent);
-        List<Agent> newborns = immediateNewborns.get();
-        synchronized (newborns) {
-            newborns.add(agent);
-        }
+        immediateNewborns.offer(agent);
         return agent;
     }
+    
 
     public void killAgentImmediately(String agentId) {
         lifecycleManager.immediateDeath(agentId);
@@ -5100,7 +5363,8 @@ public class AgentLayer extends Layer {
     public double getValueAt(double x, double y) {
         return 0.0;
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/AgentContainer.java ===
+package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import java.util.ArrayList;
@@ -5479,6 +5743,7 @@ public class AgentContainer {
     }
     
 }
+=== src/main/java/com/monadvsim/app/models/entities/Layer.java ===
 package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -5545,6 +5810,7 @@ public abstract class Layer implements Serializable {
         return name + (visible ? "" : " (Hidden)");
     }
 }
+=== src/main/java/com/monadvsim/app/models/entities/RasterLayer.java ===
 package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
@@ -5716,7 +5982,8 @@ public class RasterLayer extends Layer implements Serializable {
     public void setMaxLat(double maxLat) {
         this.maxLat = maxLat;
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/InterpolatedRasterLayer.java ===
+package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import com.monadvsim.app.models.utils.SimulationLogger;
@@ -6295,7 +6562,8 @@ public class InterpolatedRasterLayer extends Layer {
                 timeValues[0], timeValues[timeValues.length - 1]);
         }
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/MemoryMappedRasterLayer.java ===
+package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -6520,7 +6788,9 @@ public class MemoryMappedRasterLayer extends RasterLayer {
         stats.put("activeFrame", getActiveFrame());
         return stats;
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/Project.java ===
+package com.monadvsim.app.models.entities;
+
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import com.monadvsim.app.models.engine.LifecycleModel;
@@ -6529,46 +6799,32 @@ import java.util.ArrayList;
 import java.util.List;
 import java.io.Serializable;
 
-
-/**
- * Simulation Project Container
- *
- * Main container for all simulation components
- *
- * Holds layers (raster, agent, vector), simulation parameters
- *
- * Manages spatial registry reference
- *
- * Provides layer lookup by name and type
- * 
- * 
- * @author void
- */
-
-
 public class Project implements Serializable {
     private String name;
-    private String crsCode = "EPSG:4326"; // e.g., "EPSG:4326"
+    private String crsCode = "EPSG:4326";
     private List<String> tokens;
     private List<String> layerNames;
     private int defaultMaxAgentAge;
     private double defaultAgentSearchRadius;
     private double defaultHatchingProbability;
     private double defaultAgentStep;
-    private int defaultBirthRate; // number of eggs to be layeds
+    private int defaultBirthRate;
     private transient LifecycleModel lifecycleModel;
-            
-    // The Environment
+
+    // Stage-specific max-age multipliers (as fractions of defaultMaxAgentAge).
+    private double maxAgeMultiplierEgg   = 0.05;
+    private double maxAgeMultiplierLarva = 0.45;
+    private double maxAgeMultiplierPupa  = 0.15;
+    private double maxAgeMultiplierAdult = 0.35;
+
     private List<Layer> layers;
-    
     private transient SpatialRegistry spatialRegistry;
-    
+
     public Project(String name) {
         this.name = name;
         this.layers = new ArrayList<>();
     }
 
-    
     public void updateEnvironment(int timeFrameIndex) {
         for (Layer layer : layers) {
             if (layer instanceof RasterLayer rl) {
@@ -6576,29 +6832,22 @@ public class Project implements Serializable {
             }
         }
     }
-    
 
-    public Layer getLayerByName(String layerName){
-        for(Layer l: layers){
-            if (layerName.equals(l.getName())){
-                return l;
-            }
+    public Layer getLayerByName(String layerName) {
+        for (Layer l : layers) {
+            if (layerName.equals(l.getName())) return l;
         }
         return null;
     }
-    
-    
+
     public List<AgentLayer> getAgentLayers() {
         List<AgentLayer> agentLayers = new ArrayList<>();
         for (Layer l : layers) {
-            if (l instanceof AgentLayer al) {
-                agentLayers.add(al);
-            }
+            if (l instanceof AgentLayer al) agentLayers.add(al);
         }
         return agentLayers;
     }
 
-    
     public RasterLayer getRasterByName(String name) {
         return layers.stream()
                 .filter(l -> l instanceof RasterLayer && l.getName().equalsIgnoreCase(name))
@@ -6606,9 +6855,7 @@ public class Project implements Serializable {
                 .findFirst()
                 .orElse(null);
     }
-    
 
-    // Standard Getters/Setters
     public List<Layer> getLayers() { return layers; }
     public void addLayer(Layer l) { this.layers.add(l); }
     public String getName() { return name; }
@@ -6618,78 +6865,38 @@ public class Project implements Serializable {
     public void setSpatialRegistry(SpatialRegistry spatialRegistry) {
         this.spatialRegistry = spatialRegistry;
     }
+    public SpatialRegistry getSpatialRegistry() { return spatialRegistry; }
+    public List<String> getTokens() { return tokens; }
+    public void setTokens(List<String> tokens) { this.tokens = tokens; }
+    public List<String> getLayerNames() { return layerNames; }
+    public void setLayerNames(List<String> layerNames) { this.layerNames = layerNames; }
+    public double getDefaultAgentSearchRadius() { return defaultAgentSearchRadius; }
+    public void setDefaultAgentSearchRadius(double v) { this.defaultAgentSearchRadius = v; }
+    public double getDefaultHatchingProbability() { return defaultHatchingProbability; }
+    public void setDefaultHatchingProbability(double v) { this.defaultHatchingProbability = v; }
+    public double getDefaultAgentStep() { return defaultAgentStep; }
+    public void setDefaultAgentStep(double v) { this.defaultAgentStep = v; }
+    public int getDefaultBirthRate() { return defaultBirthRate; }
+    public void setDefaultBirthRate(int v) { this.defaultBirthRate = v; }
+    public int getDefaultMaxAgentAge() { return defaultMaxAgentAge; }
+    public void setDefaultMaxAgentAge(int v) { this.defaultMaxAgentAge = v; }
+    public void setLifecycleModel(LifecycleModel model) { this.lifecycleModel = model; }
+    public LifecycleModel getLifecycleModel() { return lifecycleModel; }
 
-    public SpatialRegistry getSpatialRegistry() {
-        return spatialRegistry;
+    // ---- Max-age multipliers -------------------------------------------
+    public double getMaxAgeMultiplierEgg()   { return maxAgeMultiplierEgg; }
+    public double getMaxAgeMultiplierLarva() { return maxAgeMultiplierLarva; }
+    public double getMaxAgeMultiplierPupa()  { return maxAgeMultiplierPupa; }
+    public double getMaxAgeMultiplierAdult() { return maxAgeMultiplierAdult; }
+
+    public void setMaxAgeMultipliers(double egg, double larva, double pupa, double adult) {
+        this.maxAgeMultiplierEgg   = egg;
+        this.maxAgeMultiplierLarva = larva;
+        this.maxAgeMultiplierPupa  = pupa;
+        this.maxAgeMultiplierAdult = adult;
     }
-
-    public List<String> getTokens() {
-        return tokens;
-    }
-
-    public void setTokens(List<String> tokens) {
-        this.tokens = tokens;
-    }
-
-    public List<String> getLayerNames() {
-        return layerNames;
-    }
-
-    public void setLayerNames(List<String> layerNames) {
-        this.layerNames = layerNames;
-    }
-
-    public double getDefaultAgentSearchRadius() {
-        return defaultAgentSearchRadius;
-    }
-
-    public void setDefaultAgentSearchRadius(double defaultAgentSearchRadius) {
-        this.defaultAgentSearchRadius = defaultAgentSearchRadius;
-    }
-
-    public double getDefaultHatchingProbability() {
-        return defaultHatchingProbability;
-    }
-
-    public void setDefaultHatchingProbability(double defaultHatchingProbability) {
-        this.defaultHatchingProbability = defaultHatchingProbability;
-    }
-
-    public double getDefaultAgentStep() {
-        return defaultAgentStep;
-    }
-
-    public void setDefaultAgentStep(double defaultAgentStep) {
-        this.defaultAgentStep = defaultAgentStep;
-    }
-
-    public int getDefaultBirthRate() {
-        return defaultBirthRate;
-    }
-
-    public void setDefaultBirthRate(int defaultBirthRate) {
-        this.defaultBirthRate = defaultBirthRate;
-    }
-
-    public int getDefaultMaxAgentAge() {
-        return defaultMaxAgentAge;
-    }
-
-    public void setDefaultMaxAgentAge(int defaultMaxAgentAge) {
-        this.defaultMaxAgentAge = defaultMaxAgentAge;
-    }
-    
-    public void setLifecycleModel(LifecycleModel model) {
-    this.lifecycleModel = model;
-}
-
-    public LifecycleModel getLifecycleModel() {
-        return lifecycleModel;
-    }
-
-
-    
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/Agent.java ===
+package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 
@@ -6771,6 +6978,7 @@ public abstract class Agent implements Serializable {
     }
     
 }
+=== src/main/java/com/monadvsim/app/models/entities/LifecycleStage.java ===
 package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -6788,6 +6996,7 @@ public enum LifecycleStage {
     ADULT,
     UNDEFINED
 }
+=== src/main/java/com/monadvsim/app/models/entities/InertAgent.java ===
 package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.config.SimulationConfig.InertAgentParams;
@@ -7200,7 +7409,8 @@ public class InertAgent extends Agent {
         // Automatically update capacity when water volume changes
         updateCapacityFromVolume();
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/GridCell.java ===
+package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 
@@ -7274,6 +7484,7 @@ public class GridCell {
     }
     
 }
+=== src/main/java/com/monadvsim/app/models/entities/VectorLayer.java ===
 package com.monadvsim.app.models.entities;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
@@ -7336,7 +7547,8 @@ public class VectorLayer extends Layer {
     public double getValueAt(double x, double y) {
         return 0.0;
     }
-}package com.monadvsim.app.models.entities;
+}=== src/main/java/com/monadvsim/app/models/entities/LivingAgent.java ===
+package com.monadvsim.app.models.entities;
 
 import com.monadvsim.app.models.engine.TimeManager;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -7410,6 +7622,29 @@ public class LivingAgent extends Agent {
         this.volatileX = x;
         this.volatileY = y;
     }
+    
+    // ------------------------------------------------------------------
+    // Persistent tank target for gravid females.
+    // Not part of the serialized state: if the simulation is snapshotted
+    // and reloaded, the female simply reacquires a target on the next tick.
+    // ------------------------------------------------------------------
+    private transient volatile String targetTankId = null;
+    private transient final AtomicInteger targetTankAgeTicks = new AtomicInteger(0);
+
+    public String getTargetTankId() { return targetTankId; }
+
+    public void setTargetTankId(String id) {
+        this.targetTankId = id;
+        this.targetTankAgeTicks.set(0);
+    }
+
+    public void clearTargetTank() {
+        this.targetTankId = null;
+        this.targetTankAgeTicks.set(0);
+    }
+
+    public int getTargetTankAgeTicks() { return targetTankAgeTicks.get(); }
+    public void incrementTargetTankAgeTicks() { targetTankAgeTicks.incrementAndGet(); }
     
     /**
      * Set the global max age for this agent.
@@ -7541,7 +7776,8 @@ public class LivingAgent extends Agent {
     public int getMaxRestingDuration() { return maxRestingDuration.get(); }
     public void setMaxRestingDuration(int duration) { maxRestingDuration.set(duration); }
     public void resetTimeWithoutRest() { timeWithoutRest.set(0); }
-}package com.monadvsim.app;
+}=== src/main/java/com/monadvsim/app/App.java ===
+package com.monadvsim.app;
 
 import com.monadvsim.app.models.utils.SimulationLogger;
 import com.monadvsim.app.models.config.SimulationConfig;
@@ -7572,6 +7808,8 @@ import org.locationtech.jts.geom.Geometry;
 import org.locationtech.jts.geom.GeometryFactory;
 import org.locationtech.jts.geom.Point;
 import org.locationtech.jts.geom.Coordinate;
+import com.monadvsim.app.models.engine.HabitatSuitabilityScorer;
+import com.monadvsim.app.models.engine.WeightedRasterSuitability;
 
 /**
  * Main Application Entry Point
@@ -7747,38 +7985,46 @@ public class App {
     // ======================================================================
 
     private static SimulationConfig loadConfig(String configPath) {
-        // Try classpath
+        // 1. Classpath
         try {
             String cpPath = configPath.startsWith("/") ? configPath : "/" + configPath;
-            return ConfigLoader.loadFromYaml(cpPath);
+            SimulationConfig c = ConfigLoader.loadFromYaml(cpPath);
+            SimulationLogger.info("Loaded config from classpath: %s", cpPath);
+            return c;
         } catch (Exception e) {
-            SimulationLogger.fine("Could not load from classpath: %s", e.getMessage());
+            SimulationLogger.info("Classpath load failed: %s", e.getMessage());
         }
 
-        // Try file system
+        // 2. File system (exact)
         try {
             File configFile = new File(configPath);
             if (configFile.exists()) {
-                return ConfigLoader.loadFromFile(configPath);
+                SimulationConfig c = ConfigLoader.loadFromFile(configPath);
+                SimulationLogger.info("Loaded config from file: %s", configFile.getAbsolutePath());
+                return c;
             }
         } catch (Exception e) {
-            SimulationLogger.fine("Could not load from file: %s", e.getMessage());
+            SimulationLogger.warning("File load failed for '%s': %s", configPath, e.getMessage());
         }
 
-        // Try with config/ prefix
+        // 3. config/ prefix
         try {
-            String prefixedPath = "config/" + configPath;
-            File configFile = new File(prefixedPath);
+            String prefixed = "config/" + configPath;
+            File configFile = new File(prefixed);
             if (configFile.exists()) {
-                return ConfigLoader.loadFromFile(prefixedPath);
+                SimulationConfig c = ConfigLoader.loadFromFile(prefixed);
+                SimulationLogger.info("Loaded config from file: %s", configFile.getAbsolutePath());
+                return c;
             }
         } catch (Exception e) {
-            SimulationLogger.fine("Could not load from config/ path: %s", e.getMessage());
+            SimulationLogger.warning("Prefixed file load failed: %s", e.getMessage());
         }
 
+        SimulationLogger.severe("❌ Config not found or unreadable: %s", configPath);
         return null;
     }
 
+    
     private static SimulationConfig createDefaultConfig() {
         SimulationLogger.info("Creating default configuration...");
         SimulationConfig defaultConfig = new SimulationConfig();
@@ -7952,6 +8198,11 @@ public class App {
             project.setDefaultAgentSearchRadius(config.project.defaultAgentSearchRadius);
             project.setDefaultAgentStep(config.project.defaultAgentStep);
             project.setDefaultMaxAgentAge(config.project.defaultMaxAgentAge);
+            project.setMaxAgeMultipliers(
+                config.project.maxAgeMultiplierEgg,
+                config.project.maxAgeMultiplierLarva,
+                config.project.maxAgeMultiplierPupa,
+                config.project.maxAgeMultiplierAdult);
 
             // ---- Species parameters and lifecycle model ----
             SpeciesParameters params = new SpeciesParameters();
@@ -7963,7 +8214,7 @@ public class App {
             LayerFactory layerFactory = new LayerFactory(timeManager);
 
             // ============================================================
-            // DATA-DRIVEN LAYER LOADING (PREFERRED)
+            // DATA-DRIVEN LAYER LOADING
             // ============================================================
             if (config.layers != null && !config.layers.isEmpty()) {
                 SimulationLogger.info("Loading layers from data-driven configuration...");
@@ -7988,18 +8239,16 @@ public class App {
                     layer.addRule(rule.condition, rule.action, rule.priority);
                 }
                 project.addLayer(layer);
-                SimulationLogger.info("Added agent layer '%s' with %d rules", 
+                SimulationLogger.info("Added agent layer '%s' with %d rules",
                     layerConfig.name, layerConfig.rules.size());
             }
 
             // ---- Tokens for rule engine ----
-            // IMPORTANT: Tokens should map to actual layer names
             List<String> tokens = new ArrayList<>();
             List<String> layerNames = new ArrayList<>();
             if (config.tokens != null) {
                 for (var tokenMapping : config.tokens) {
                     tokens.add(tokenMapping.token);
-                    // Use the actual layer name from config
                     layerNames.add(tokenMapping.layer);
                 }
             }
@@ -8007,72 +8256,88 @@ public class App {
             project.setLayerNames(layerNames);
             SimulationLogger.info("Loaded %d tokens: %s", tokens.size(), tokens);
 
-            // ---- Standardise geographic bounds for ALL raster layers ----
-            double minLon = worldBounds.getMinX();
-            double maxLon = worldBounds.getMaxX();
-            double minLat = worldBounds.getMinY();
-            double maxLat = worldBounds.getMaxY();
-
+            // ============================================================
+            // BOUNDS: DO NOT override with the study-site extent.
+            // Each RasterLayer already carries its own geotransform from
+            // loadRasterData(). We only VALIDATE + LOG here.
+            // ============================================================
             for (Layer layer : project.getLayers()) {
                 if (layer instanceof RasterLayer rl) {
-                    rl.setBounds(minLon, maxLon, minLat, maxLat);
-                    SimulationLogger.info("Set bounds for raster layer: %s", layer.getName());
+                    double lMinLon = rl.getMinLon(), lMaxLon = rl.getMaxLon();
+                    double lMinLat = rl.getMinLat(), lMaxLat = rl.getMaxLat();
+                    if (lMaxLon <= lMinLon || lMaxLat <= lMinLat) {
+                        SimulationLogger.warning(
+                            "Raster '%s' has invalid bounds (%.4f,%.4f)–(%.4f,%.4f) — "
+                            + "falling back to study-site extent.",
+                            layer.getName(), lMinLon, lMinLat, lMaxLon, lMaxLat);
+                        rl.setBounds(worldBounds.getMinX(), worldBounds.getMaxX(),
+                                     worldBounds.getMinY(), worldBounds.getMaxY());
+                        continue;
+                    }
+                    // Coverage sanity check
+                    double ovW = Math.min(lMaxLon, worldBounds.getMaxX())
+                               - Math.max(lMinLon, worldBounds.getMinX());
+                    double ovH = Math.min(lMaxLat, worldBounds.getMaxY())
+                               - Math.max(lMinLat, worldBounds.getMinY());
+                    double frac = (ovW > 0 && ovH > 0)
+                        ? (ovW * ovH) / (worldBounds.getWidth() * worldBounds.getHeight())
+                        : 0.0;
+                    SimulationLogger.info(
+                        "Raster '%s' bounds=(%.4f,%.4f)–(%.4f,%.4f), overlap with study site=%.1f%%",
+                        layer.getName(), lMinLon, lMinLat, lMaxLon, lMaxLat, frac * 100);
+                    if (frac < 0.5) {
+                        SimulationLogger.warning(
+                            "   ↳ Raster '%s' covers less than half the study site. "
+                            + "Check CRS / extent.", layer.getName());
+                    }
                 } else if (layer instanceof InterpolatedRasterLayer irl) {
-                    // InterpolatedRasterLayer has its own bounds from NetCDF
-                    // Log the bounds for verification
-                    SimulationLogger.info("Climate layer '%s' bounds: lat [%.4f, %.4f], lon [%.4f, %.4f]",
-                        layer.getName(), irl.getMinLat(), irl.getMaxLat(), 
+                    SimulationLogger.info(
+                        "Climate layer '%s' bounds: lat [%.4f, %.4f], lon [%.4f, %.4f]",
+                        layer.getName(), irl.getMinLat(), irl.getMaxLat(),
                         irl.getMinLon(), irl.getMaxLon());
                 }
             }
 
             // ---- Seed initial population ----
             SimulationLogger.info("Seeding initial agents...");
-            RasterLayer buildings = (RasterLayer) project.getLayerByName("Buildings");
+            RasterLayer buildings  = (RasterLayer) project.getLayerByName("Buildings");
             RasterLayer population = (RasterLayer) project.getLayerByName("Population");
 
             if (buildings == null || population == null) {
-                SimulationLogger.warning("Buildings or Population layer not found. Available layers: %s", 
+                SimulationLogger.warning(
+                    "Buildings or Population layer not found. Available: %s",
                     project.getLayers().stream().map(Layer::getName).toList());
-                // Try to find them with different names
-                buildings = (RasterLayer) project.getLayerByName("building_density");
+                buildings  = (RasterLayer) project.getLayerByName("building_density");
                 population = (RasterLayer) project.getLayerByName("Population");
             }
 
-            // If still null, create fallback
             if (buildings == null) {
                 SimulationLogger.warning("Creating fallback Buildings layer");
                 buildings = new MemoryMappedRasterLayer("Buildings", 100, 100, 1);
-                buildings.setBounds(minLon, maxLon, minLat, maxLat);
+                buildings.setBounds(worldBounds.getMinX(), worldBounds.getMaxX(),
+                                    worldBounds.getMinY(), worldBounds.getMaxY());
                 project.addLayer(buildings);
             }
             if (population == null) {
                 SimulationLogger.warning("Creating fallback Population layer");
                 population = new MemoryMappedRasterLayer("Population", 100, 100, 1);
-                population.setBounds(minLon, maxLon, minLat, maxLat);
+                population.setBounds(worldBounds.getMinX(), worldBounds.getMaxX(),
+                                     worldBounds.getMinY(), worldBounds.getMaxY());
                 project.addLayer(population);
             }
 
-            seedInitialPopulation(project, config.seeding, buildings, population, 
-                spatialRegistry, worldBounds, studyAreaGeometry);
+            seedInitialPopulation(project, config, spatialRegistry, worldBounds, studyAreaGeometry);
 
             // ---- Print summary ----
             int totalTanks = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("WaterTanks"))
-                .findFirst()
-                .map(l -> l.getAgents().size())
-                .orElse(0);
-
+                .findFirst().map(l -> l.getAgents().size()).orElse(0);
             int totalMosquitoes = project.getAgentLayers().stream()
                 .filter(l -> l.getName().equals("Mosquitoes"))
-                .findFirst()
-                .map(l -> l.getAgents().size())
-                .orElse(0);
-
-            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes", totalTanks, totalMosquitoes);
-
-            // Print all layer names for debugging
-            SimulationLogger.info("All layers in project: %s", 
+                .findFirst().map(l -> l.getAgents().size()).orElse(0);
+            SimulationLogger.info("Initial agents: %d tanks, %d mosquitoes",
+                totalTanks, totalMosquitoes);
+            SimulationLogger.info("All layers in project: %s",
                 project.getLayers().stream().map(Layer::getName).toList());
 
         } catch (Exception e) {
@@ -8120,8 +8385,8 @@ public class App {
     // HELPER METHODS
     // ============================================================
 
-    private static void copySpeciesParams(SpeciesParameters target, 
-                                          SimulationConfig.SpeciesParameters source) {
+    private static void copySpeciesParams(SpeciesParameters target,
+                                      SimulationConfig.SpeciesParameters source) {
         target.eggDev_rho = source.egg_dev_rho;
         target.eggDev_k = source.egg_dev_k;
         target.eggDev_Delta = source.egg_dev_Delta;
@@ -8146,11 +8411,13 @@ public class App {
         target.fecundity_rmax = source.fecundity_rmax;
         target.fecundity_Topt = source.fecundity_Topt;
         target.fecundity_c = source.fecundity_c;
+        target.fecundityScale = source.fecundity_scale;      // <-- NEW
         target.adultMortalityPerDay = source.adult_mortality_per_day;
         target.adultMort_b1 = source.adult_mort_b1;
         target.adultMort_b2 = source.adult_mort_b2;
         target.adultMort_b3 = source.adult_mort_b3;
         target.sexRatio = source.sex_ratio;
+        target.hostCarryingCapacityBase = source.host_carrying_capacity_base;
     }
 
 
@@ -8159,23 +8426,19 @@ public class App {
     // ============================================================
 
     private static void seedInitialPopulation(Project project,
-                                              SimulationConfig.SeedingConfig seeding,
-                                              RasterLayer buildings,
-                                              RasterLayer population,
-                                              SpatialRegistry spatialRegistry,
-                                              Rectangle2D worldBounds,
-                                              Geometry studyAreaGeometry) {
-        Random rand = SeedManager.getRandom();
+                                          SimulationConfig config,
+                                          SpatialRegistry spatialRegistry,
+                                          Rectangle2D worldBounds,
+                                          Geometry studyAreaGeometry) {
+        SimulationConfig.SeedingConfig seeding = config.seeding;
 
         AgentLayer habitatLayer = project.getAgentLayers().stream()
             .filter(l -> l.getName().equals("WaterTanks"))
-            .findFirst()
-            .orElse(null);
+            .findFirst().orElse(null);
 
         AgentLayer mosquitoLayer = project.getAgentLayers().stream()
             .filter(l -> l.getName().equals("Mosquitoes"))
-            .findFirst()
-            .orElse(null);
+            .findFirst().orElse(null);
 
         if (habitatLayer == null || mosquitoLayer == null) {
             SimulationLogger.severe("ERROR: Cannot find agent layers for seeding");
@@ -8193,7 +8456,6 @@ public class App {
                 occurrencePoints = OccurrenceLoader.loadOccurrences(seeding.occurrenceFilePath);
                 occurrencePoints = OccurrenceLoader.filterByYear(occurrencePoints,
                     seeding.occurrenceYearStart, seeding.occurrenceYearEnd);
-
                 if (occurrencePoints.isEmpty()) {
                     SimulationLogger.warning("No occurrence points found. Using uniform seeding.");
                     useOccurrences = false;
@@ -8206,105 +8468,124 @@ public class App {
             }
         }
 
-        // Uniform seeding (fallback)
         if (seeding.seedAcrossFullStudySite || !useOccurrences) {
-            seedUniformly(project, seeding, buildings, population, spatialRegistry,
-                worldBounds, studyAreaGeometry, habitatLayer, mosquitoLayer);
+            seedUniformly(project, config, spatialRegistry, worldBounds,
+                          studyAreaGeometry, habitatLayer, mosquitoLayer);
             return;
         }
 
-        // Occurrence-based seeding
-        seedFromOccurrences(project, seeding, buildings, population, spatialRegistry,
-            worldBounds, studyAreaGeometry, habitatLayer, mosquitoLayer, occurrencePoints);
+        seedFromOccurrences(project, config, spatialRegistry, worldBounds,
+                            studyAreaGeometry, habitatLayer, mosquitoLayer, occurrencePoints);
+    }
+    
+    
+    /**
+    * Assemble a {@link WeightedRasterSuitability} from the tankSuitability
+    * section of the config. Missing layers are dropped with a warning;
+    * if the resulting spec list is empty, a uniform-in-bounds scorer is
+    * produced (floor only) so seeding still works.
+    */
+    private static HabitatSuitabilityScorer buildHabitatScorer(
+            Project project,
+            SimulationConfig config,
+            Rectangle2D worldBounds,
+            Geometry studyAreaGeometry) {
+
+        SimulationConfig.TankSuitabilityConfig sc = config.seeding.tankSuitability;
+        if (sc == null) {
+            SimulationLogger.warning("[Suitability] No tankSuitability block in config; "
+                + "falling back to uniform-with-floor sampling.");
+            sc = new SimulationConfig.TankSuitabilityConfig();
+        }
+
+        List<WeightedRasterSuitability.LayerSpec> specs = new ArrayList<>();
+        for (SimulationConfig.SuitabilityLayer sl : sc.layers) {
+            if (sl == null || sl.name == null) continue;
+            if (sl.weight == 0.0) {
+                SimulationLogger.info("[Suitability] Layer '%s' disabled (weight=0).", sl.name);
+                continue;
+            }
+            Layer l = project.getLayerByName(sl.name);
+            if (l == null) {
+                SimulationLogger.warning("[Suitability] Layer '%s' referenced in config "
+                    + "but not found in project; skipping.", sl.name);
+                continue;
+            }
+            specs.add(new WeightedRasterSuitability.LayerSpec(l, sl.weight, sl.cap, sl.power));
+            SimulationLogger.info("[Suitability] Layer '%s' enabled: weight=%.3f, cap=%.3g, power=%.3f",
+                sl.name, sl.weight, sl.cap, sl.power);
+        }
+
+        int gx = Math.max(8, config.seeding.habitatGridSizeX);
+        int gy = Math.max(8, config.seeding.habitatGridSizeY);
+
+        // Deterministic per-run jitter: same seed → same jitter pattern.
+        long jitterSeed = SeedManager.getCurrentSeed() * 31L + 17L;
+
+        WeightedRasterSuitability scorer = new WeightedRasterSuitability(
+            specs, worldBounds, studyAreaGeometry,
+            gx, gy,
+            sc.floorSuitability,
+            sc.stochasticJitter,
+            jitterSeed);
+
+        // Force grid build now so we log stats before seeding (and any
+        // errors surface before we start placing agents).
+        scorer.sample(SeedManager.getRandom());
+        SimulationLogger.info("[Suitability] Scorer ready: %s", scorer.getStats());
+
+        return scorer;
     }
 
     private static void seedUniformly(Project project,
-                                      SimulationConfig.SeedingConfig seeding,
-                                      RasterLayer buildings,
-                                      RasterLayer population,
-                                      SpatialRegistry spatialRegistry,
-                                      Rectangle2D worldBounds,
-                                      Geometry studyAreaGeometry,
-                                      AgentLayer habitatLayer,
-                                      AgentLayer mosquitoLayer) {
+                                  SimulationConfig config,
+                                  SpatialRegistry spatialRegistry,
+                                  Rectangle2D worldBounds,
+                                  Geometry studyAreaGeometry,
+                                  AgentLayer habitatLayer,
+                                  AgentLayer mosquitoLayer) {
+
+        SimulationConfig.SeedingConfig seeding = config.seeding;
         Random rand = SeedManager.getRandom();
-        boolean isUniform = seeding.seedAcrossFullStudySite;
 
-        SimulationLogger.info("Seeding %s across the study area",
-            isUniform ? "uniformly" : "using weighted habitat selection");
-        
-        // Get InertAgent parameters from config
+        SimulationLogger.info("Seeding (population-density-weighted): "
+            + "%d tanks, %d mosquitoes",
+            seeding.tanksToSeed, seeding.mosquitoesToSeed);
+
+        // Single scorer for both tanks and mosquitoes. Both agents
+        // preferentially get placed where the suitability field is high.
+        HabitatSuitabilityScorer scorer = buildHabitatScorer(
+            project, config, worldBounds, studyAreaGeometry);
+
         SimulationConfig.InertAgentParams inertParams = config.inert_agents;
-        if (inertParams == null) {
-            inertParams = new SimulationConfig.InertAgentParams();
-            SimulationLogger.info("Using default InertAgent parameters");
-        }
+        if (inertParams == null) inertParams = new SimulationConfig.InertAgentParams();
 
-        // Point generator
-        java.util.function.Supplier<double[]> pointGenerator;
-        if (studyAreaGeometry != null && !studyAreaGeometry.isEmpty()) {
-            GeometryFactory geomFactory = new GeometryFactory();
-            pointGenerator = () -> {
-                double x, y;
-                do {
-                    x = worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth();
-                    y = worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight();
-                } while (!studyAreaGeometry.contains(geomFactory.createPoint(new Coordinate(x, y))));
-                return new double[]{x, y};
-            };
-        } else {
-            pointGenerator = () -> new double[]{
-                worldBounds.getMinX() + rand.nextDouble() * worldBounds.getWidth(),
-                worldBounds.getMinY() + rand.nextDouble() * worldBounds.getHeight()
-            };
-        }
-
-        // Habitat calculator for weighted seeding
-        HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
-            seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
-
-        // Seed water tanks
+        // ---- Tanks --------------------------------------------------------
         int tanksPlaced = 0;
-        for (int i = 0; i < seeding.tanksToSeed; i++) {
-            double[] point = habitatCalc.getRandomWeightedPoint();
-            double rx = point[0], ry = point[1];
-            double buildingDensity = buildings.getValueAt(rx, ry);
-            double popDensity = population.getValueAt(rx, ry);
+        int maxTankAttempts = Math.max(seeding.tanksToSeed * 3, 100);
+        for (int attempt = 0; attempt < maxTankAttempts && tanksPlaced < seeding.tanksToSeed; attempt++) {
+            double[] pt = scorer.sample(rand);
+            double rx = pt[0], ry = pt[1];
 
-            if (buildingDensity > seeding.tankBuildingThreshold &&
-                popDensity > seeding.tankPopulationThreshold) {
-                // Pass the config parameters to the constructor
-                InertAgent tank = new InertAgent(rx, ry, inertParams);
-                tank.setWaterVolume(70 + rand.nextDouble() * 30);
-                tank.setLarvalCount(rand.nextInt(30) + 10);
-                tank.setEggCount(rand.nextInt(80) + 20);
-                tank.updateCapacityFromVolume(); // Now uses config values
-                habitatLayer.addAgent(tank);
-                spatialRegistry.registerAgent(tank);
-                tanksPlaced++;
-            }
+            InertAgent tank = new InertAgent(rx, ry, inertParams);
+            tank.setWaterVolume(70 + rand.nextDouble() * 30);
+            tank.setLarvalCount(rand.nextInt(30) + 10);
+            tank.setEggCount(rand.nextInt(80) + 20);
+            tank.updateCapacityFromVolume();
+            habitatLayer.addAgent(tank);
+            spatialRegistry.registerAgent(tank);
+            tanksPlaced++;
         }
         SimulationLogger.info("Seeded %d water tanks", tanksPlaced);
 
-
-        // Seed mosquitoes
+        // ---- Mosquitoes ---------------------------------------------------
         int mosquitoesPlaced = 0;
-        for (int i = 0; i < seeding.mosquitoesToSeed; i++) {
-            double[] point = isUniform ? pointGenerator.get() : habitatCalc.getRandomWeightedPoint();
-            double rx = point[0], ry = point[1];
+        int maxMosquitoAttempts = Math.max(seeding.mosquitoesToSeed * 2, 200);
+        for (int attempt = 0; attempt < maxMosquitoAttempts
+                && mosquitoesPlaced < seeding.mosquitoesToSeed; attempt++) {
 
-            if (!isUniform) {
-                double buildingDensity = buildings.getValueAt(rx, ry);
-                double popDensity = population.getValueAt(rx, ry);
-                if (Double.isNaN(popDensity) || popDensity < 0) {
-                    popDensity = 0.0;
-                }
-                if (!(buildingDensity > seeding.mosquitoBuildingThreshold ||
-                      popDensity > seeding.mosquitoPopulationThreshold)) {
-                    i--;
-                    continue;
-                }
-            }
+            double[] pt = scorer.sample(rand);
+            double rx = pt[0], ry = pt[1];
 
             LivingAgent mosquito = createMosquito(rand, rx, ry);
             mosquitoLayer.addAgent(mosquito);
@@ -8316,197 +8597,103 @@ public class App {
 
 
     private static void seedFromOccurrences(Project project,
-                                        SimulationConfig.SeedingConfig seeding,
-                                        RasterLayer buildings,
-                                        RasterLayer population,
+                                        SimulationConfig config,
                                         SpatialRegistry spatialRegistry,
                                         Rectangle2D worldBounds,
                                         Geometry studyAreaGeometry,
                                         AgentLayer habitatLayer,
                                         AgentLayer mosquitoLayer,
                                         List<OccurrenceLoader.OccurrencePoint> occurrencePoints) {
+
+        SimulationConfig.SeedingConfig seeding = config.seeding;
         Random rand = SeedManager.getRandom();
         double bufferDegrees = seeding.occurrenceBufferKm / 111.32;
-
-        // Create GeometryFactory for point validation
-        GeometryFactory geometryFactory = new GeometryFactory();
 
         SimulationLogger.info("Occurrence-based seeding: %d points, buffer %.2f km",
             occurrencePoints.size(), seeding.occurrenceBufferKm);
 
-        // Convert to coordinates
-        List<double[]> occurrenceCoords = new ArrayList<>();
+        // Reuse the suitability scorer for placement (points still filtered
+        // by proximity to occurrences). This keeps the two seeding paths
+        // behaviorally consistent and drops the old hardcoded thresholds.
+        HabitatSuitabilityScorer scorer = buildHabitatScorer(
+            project, config, worldBounds, studyAreaGeometry);
+
+        // Precompute occurrence coordinates
+        List<double[]> occCoords = new ArrayList<>(occurrencePoints.size());
         for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
-            occurrenceCoords.add(new double[]{p.longitude, p.latitude});
+            occCoords.add(new double[]{p.longitude, p.latitude});
         }
 
-        HabitatCalculator habitatCalc = new HabitatCalculator(buildings, population, worldBounds,
-            seeding.habitatGridSizeX, seeding.habitatGridSizeY, studyAreaGeometry);
+        SimulationConfig.InertAgentParams inertParams = config.inert_agents;
+        if (inertParams == null) inertParams = new SimulationConfig.InertAgentParams();
 
-        // After loading occurrence points, log the building/population values at each point
-        for (OccurrenceLoader.OccurrencePoint p : occurrencePoints) {
-            double b = buildings.getValueAt(p.longitude, p.latitude);
-            double pop = population.getValueAt(p.longitude, p.latitude);
-            if (Double.isNaN(pop) || pop < 0) {
-                pop = 0.0;
-            }
-            SimulationLogger.info("Occurrence at (%.6f, %.6f): building=%.6f, pop=%.6f", 
-                p.longitude, p.latitude, b, pop);
-        }
-
-        // Seed water tanks near occurrences - MUCH MORE AGGRESSIVE
+        // ---- Tanks --------------------------------------------------------
         int tanksPlaced = 0;
-        int maxAttempts = seeding.tanksToSeed * 20; // More attempts
+        int maxAttempts = Math.max(seeding.tanksToSeed * 20, 2000);
+        for (int attempt = 0; attempt < maxAttempts
+                && tanksPlaced < seeding.tanksToSeed; attempt++) {
 
-        // LOWER thresholds for seeding - use values that exist in the data
-        double tankBuildingThreshold = Math.max(0.00001, seeding.tankBuildingThreshold / 10);
-        double tankPopulationThreshold = Math.max(0.00001, seeding.tankPopulationThreshold / 10);
+            double[] pt = scorer.sample(rand);
+            double rx = pt[0], ry = pt[1];
 
-        SimulationLogger.info("Using tank thresholds: building=%.6f, population=%.6f", 
-            tankBuildingThreshold, tankPopulationThreshold);
-
-        for (int attempt = 0; attempt < maxAttempts && tanksPlaced < seeding.tanksToSeed; attempt++) {
-            double[] point;
-            if (rand.nextDouble() < 0.7 && !occurrenceCoords.isEmpty()) {
-                double[] base = occurrenceCoords.get(rand.nextInt(occurrenceCoords.size()));
-                double lon = base[0] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
-                double lat = base[1] + (rand.nextDouble() - 0.5) * bufferDegrees * 2;
-                lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
-                lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
-                point = new double[]{lon, lat};
-            } else {
-                point = habitatCalc.getRandomWeightedPoint();
+            if (!withinBuffer(rx, ry, occCoords, bufferDegrees)) {
+                // If we've tried a lot and still placed nothing, relax to the
+                // whole study area so the run doesn't start empty.
+                if (attempt < maxAttempts / 2) continue;
             }
 
-            double rx = point[0], ry = point[1];
-            double buildingDensity = buildings.getValueAt(rx, ry);
-            double popDensity = population.getValueAt(rx, ry);
-
-            // MUCH MORE PERMISSIVE: place tank if building OR population exists
-            // If we can't find suitable spots, place them ANYWAY near occurrences
-            boolean placeTank = false;
-
-            // Try to place in suitable habitat first
-            if (buildingDensity > tankBuildingThreshold && popDensity > tankPopulationThreshold) {
-                placeTank = true;
-            } 
-            // If we've tried many times and still not enough tanks, place anywhere near occurrences
-            else if (attempt > seeding.tanksToSeed * 2) {
-                // Place ANYWHERE near occurrence points
-                placeTank = true;
-            }
-
-            if (placeTank) {
-                InertAgent tank = new InertAgent(rx, ry);
-                // Ensure water volume exists (starts with water)
-                double waterVolume = 50 + rand.nextDouble() * 50;
-                tank.setWaterVolume(waterVolume);
-                tank.setLarvalCount(rand.nextInt(20) + 5);
-                tank.setEggCount(rand.nextInt(50) + 10);
-                tank.setCapacity(100 + rand.nextDouble() * 200);
-                habitatLayer.addAgent(tank);
-                spatialRegistry.registerAgent(tank);
-                tanksPlaced++;
-
-                if (tanksPlaced % 10 == 0 && tanksPlaced < 100) {
-                    SimulationLogger.fine("[TANK] Placed tank %d at (%.6f, %.6f), building=%.6f, pop=%.6f", 
-                        tanksPlaced, rx, ry, buildingDensity, popDensity);
-                }
-            }
+            InertAgent tank = new InertAgent(rx, ry, inertParams);
+            tank.setWaterVolume(70 + rand.nextDouble() * 30);
+            tank.setLarvalCount(rand.nextInt(30) + 10);
+            tank.setEggCount(rand.nextInt(80) + 20);
+            tank.updateCapacityFromVolume();
+            habitatLayer.addAgent(tank);
+            spatialRegistry.registerAgent(tank);
+            tanksPlaced++;
         }
-
         SimulationLogger.info("Seeded %d water tanks near occurrences", tanksPlaced);
 
-        // If still no tanks, force-place them with study area validation
-        if (tanksPlaced == 0 && !occurrenceCoords.isEmpty()) {
-            SimulationLogger.warning("No tanks placed with thresholds, force-placing at occurrence points!");
-            int forcePlaced = 0;
-            int maxForceAttempts = Math.min(50, occurrenceCoords.size() * 5);
-
-            for (int attempt = 0; attempt < maxForceAttempts && forcePlaced < 20; attempt++) {
-                double[] base = occurrenceCoords.get(attempt % occurrenceCoords.size());
-                double lon, lat;
-                Point point;
-                int retries = 0;
-                boolean validPoint = false;
-
-                // Keep trying to find a point inside the study area
-                do {
-                    lon = base[0] + (rand.nextDouble() - 0.5) * 0.01;
-                    lat = base[1] + (rand.nextDouble() - 0.5) * 0.01;
-                    lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
-                    lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
-
-                    point = geometryFactory.createPoint(new Coordinate(lon, lat));
-                    retries++;
-
-                    // If we've tried too many times, use the bounding box center
-                    if (retries > 100) {
-                        lon = worldBounds.getCenterX();
-                        lat = worldBounds.getCenterY();
-                        point = geometryFactory.createPoint(new Coordinate(lon, lat));
-                        break;
-                    }
-                } while (studyAreaGeometry != null && !studyAreaGeometry.contains(point));
-
-                // Create the tank with the validated coordinates
-                InertAgent tank = new InertAgent(lon, lat);
-                tank.setWaterVolume(70 + rand.nextDouble() * 30);
-                tank.setLarvalCount(rand.nextInt(15) + 5);
-                tank.setEggCount(rand.nextInt(30) + 10);
-                tank.setCapacity(150 + rand.nextDouble() * 150);
-                habitatLayer.addAgent(tank);
-                spatialRegistry.registerAgent(tank);
-                forcePlaced++;
-                tanksPlaced++;
-            }
-            SimulationLogger.info("Force-placed %d tanks within study area", forcePlaced);
-        }
-
-        // Seed mosquitoes at occurrence points with study area validation
+        // ---- Mosquitoes ---------------------------------------------------
         int mosquitoesPlaced = 0;
-        int perPoint = Math.max(1, seeding.mosquitoesToSeed / occurrencePoints.size());
-
-        for (OccurrenceLoader.OccurrencePoint occPoint : occurrencePoints) {
+        int perPoint = Math.max(1, seeding.mosquitoesToSeed / Math.max(1, occurrencePoints.size()));
+        for (OccurrenceLoader.OccurrencePoint occ : occurrencePoints) {
+            if (mosquitoesPlaced >= seeding.mosquitoesToSeed) break;
             int count = Math.min(perPoint, seeding.mosquitoesToSeed - mosquitoesPlaced);
             for (int i = 0; i < count; i++) {
-                double lon, lat;
-                Point point;
-                int retries = 0;
-                boolean validPoint = false;
-
-                // Keep trying to find a point inside the study area
-                do {
-                    lon = occPoint.longitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
-                    lat = occPoint.latitude + (rand.nextDouble() - 0.5) * bufferDegrees * 0.5;
-                    lon = Math.max(worldBounds.getMinX(), Math.min(worldBounds.getMaxX(), lon));
-                    lat = Math.max(worldBounds.getMinY(), Math.min(worldBounds.getMaxY(), lat));
-
-                    point = geometryFactory.createPoint(new Coordinate(lon, lat));
-                    retries++;
-
-                    // If we've tried too many times, use the occurrence point itself
-                    if (retries > 50) {
-                        lon = occPoint.longitude;
-                        lat = occPoint.latitude;
-                        point = geometryFactory.createPoint(new Coordinate(lon, lat));
-                        break;
-                    }
-                } while (studyAreaGeometry != null && !studyAreaGeometry.contains(point));
-
+                double lon = occ.longitude + (rand.nextDouble() - 0.5) * bufferDegrees;
+                double lat = occ.latitude  + (rand.nextDouble() - 0.5) * bufferDegrees;
                 LivingAgent mosquito = createMosquito(rand, lon, lat);
                 mosquitoLayer.addAgent(mosquito);
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
             }
-            if (mosquitoesPlaced >= seeding.mosquitoesToSeed) break;
         }
         SimulationLogger.info("Seeded %d mosquitoes at occurrences", mosquitoesPlaced);
+    }
+    
+
+    private static boolean withinBuffer(double x, double y,
+                                        List<double[]> coords,
+                                        double bufferDeg) {
+        double b2 = bufferDeg * bufferDeg;
+        for (double[] c : coords) {
+            double dx = c[0] - x, dy = c[1] - y;
+            if (dx * dx + dy * dy <= b2) return true;
+        }
+        return false;
     }    
     
     
-    private static LivingAgent createMosquito(Random rand, double x, double y) {
+    private static LivingAgent createMosquito(Project project, Random rand, double x, double y) {
         LivingAgent mosquito = new LivingAgent(x, y);
+        if (project != null) {
+            mosquito.setGlobalMaxAge(project.getDefaultMaxAgentAge());
+            mosquito.setAgeMultipliers(
+                project.getMaxAgeMultiplierEgg(),
+                project.getMaxAgeMultiplierLarva(),
+                project.getMaxAgeMultiplierPupa(),
+                project.getMaxAgeMultiplierAdult());
+        }
         double r = rand.nextDouble();
         LifecycleStage stage = r < 0.6 ? LifecycleStage.ADULT :
                                (r < 0.85 ? LifecycleStage.LARVA : LifecycleStage.PUPA);
@@ -8514,7 +8701,7 @@ public class App {
 
         switch (stage) {
             case ADULT:
-                mosquito.setAge(rand.nextInt(20 * 24 * 4));
+                mosquito.setAge(rand.nextInt(10 * 24 * 4));
                 mosquito.setGravid(rand.nextDouble() < 0.2);
                 mosquito.setEnergy(0.3 + rand.nextDouble() * 0.5);
                 if (rand.nextDouble() < 0.3) {
@@ -8607,7 +8794,7 @@ public class App {
                 long lastTickTime = System.currentTimeMillis();
 
                 while (simulationThread.isAlive() && !simulationThread.isInterrupted()) {
-                    Thread.sleep(10000);
+                    Thread.sleep(30000);
                     try {
                         Map<String, Object> state = engine.getState();
                         long currentTick = (Long) state.get("tick");
@@ -8615,7 +8802,7 @@ public class App {
 
                         if (currentTick == lastTick) {
                             stuckCount++;
-                            if (stuckCount > 3) {
+                            if (stuckCount > 20) {
                                 SimulationLogger.severe("CRITICAL: Simulation stuck, forcing shutdown");
                                 saveFinalStatisticsToFile(project, spatialRegistry, engine, outputDir);
                                 SnapshotMerger.mergeAfterSimulation();
@@ -8879,7 +9066,8 @@ public class App {
             }
         }
     }
-}package com.monadvsim.app;
+}=== src/test/java/com/monadvsim/app/AppTest.java ===
+package com.monadvsim.app;
 import com.monadvsim.app.models.utils.SimulationLogger;
 
 import static org.junit.jupiter.api.Assertions.assertTrue;

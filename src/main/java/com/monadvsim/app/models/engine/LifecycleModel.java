@@ -77,121 +77,52 @@ public class LifecycleModel {
         return p.adultMortalityPerDay;
     }
 
+    
+    /**
+    * Raw temperature response of fecundity, in "eggs per female per day"
+    * BEFORE sex ratio and host-density scaling. The Gaussian-on-log form
+    * follows Komi et al. 2025.
+    */
     public double fecundityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
-        double val = Math.exp(p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2));
-        return Math.max(0, val * p.sexRatio);
+        double exponent = p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2);
+        return p.fecundityScale * Math.max(0.0, Math.exp(exponent));
     }
 
-    public double hostCarryingCapacity(double livestockDensity) {
-        return p.hostCarryingCapacityBase + Math.log1p(livestockDensity);
+
+    /**
+    * Density-dependent host-availability multiplier on fecundity.
+    * Uses log1p so an empty landscape still has a small non-zero factor.
+    */
+    public double hostCarryingCapacity(double hostDensity) {
+        double host = Math.max(0.0, hostDensity);
+        return p.hostCarryingCapacityBase + Math.log1p(host);
     }
 
-    public double effectiveFecundity(double tempKelvin, double livestockDensity) {
-        double F = fecundityRate(tempKelvin);
-        double K = hostCarryingCapacity(livestockDensity);
-        return F * K * dtDays;
+    
+    /**
+    * Expected eggs per female per tick. This is the quantity the Poisson
+    * sampler consumes; it is intentionally the full product of every
+    * dimensioned factor so the calibration knob ({@link SpeciesParameters#fecundityScale})
+    * has a single, predictable effect.
+    */
+    public double effectiveFecundity(double tempKelvin, double hostDensity) {
+        return fecundityRate(tempKelvin)
+             * p.sexRatio
+             * hostCarryingCapacity(hostDensity)
+             * dtDays;
     }
 
+    
     public double transitionProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
+    
     public double mortalityProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//        double pAdv = transitionProb(dL);
-//        double pDie = mortalityProb(mL);
-//        
-//        if (agent.getAge() % 100 == 0) {
-//            SimulationLogger.fine("[DEBUG] Larva age=%d, T=%.2fK, dL=%.6f, pAdv=%.6f, pDie=%.6f",
-//                agent.getAge(), tempKelvin, dL, pAdv, pDie);
-//        }
-//
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//        if (rng.nextDouble() < pAdv) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setEnergy(0.6);
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
-    /**
-     * Updates larval development using accumulated progress.
-     * This replaces the previous stochastic transition method.
-     */
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//
-//        // 1. Accumulate development progress (in days)
-//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-//        agent.setDevelopmentProgress(newProgress);
-//
-//        // Log progress periodically
-//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
-//        }
-//
-//        // 2. When accumulated progress reaches 1.0 (100%), pupate
-//        if (newProgress >= 1.0) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setDevelopmentProgress(0.0);
-//            agent.setEnergy(0.6);
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//
-//        // 3. Apply mortality with the same probability as before
-//        double pDie = mortalityProb(mL);
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                    agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
-//    public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
-//        double dL = larvaDevelopmentRate(tempKelvin);
-//        double mL = larvaMortalityRate(tempKelvin);
-//
-//        double newProgress = agent.getDevelopmentProgress() + dL * dtDays;
-//        agent.setDevelopmentProgress(newProgress);
-//
-//        if (agent.getAge() % 100 == 0 && agent.getId().hashCode() % 20 == 0) {
-//            SimulationLogger.fine("[LARVA] %s progress=%.4f, dL=%.6f, temp=%.2fK",
-//                agent.getId().substring(0, 8), newProgress, dL, tempKelvin);
-//        }
-//
-//        if (newProgress >= 1.0) {
-//            agent.setStage(LifecycleStage.PUPA);
-//            agent.setDevelopmentProgress(0.0);
-//            agent.setEnergy(0.6);
-//            agent.setAge(0); // <-- RESET AGE HERE
-//            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at age %d, temp=%.2fK",
-//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin); // log will now show 0
-//            return;
-//        }
-//
-//        double pDie = mortalityProb(mL);
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as LARVA at age %d, temp=%.2fK",
-//                agent.getId().substring(0, 8), agent.getAge(), tempKelvin);
-//        }
-//    }
     
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
@@ -233,27 +164,6 @@ public class LifecycleModel {
         }
     }
 
-//    public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
-//        double dP = pupaDevelopmentRate(tempKelvin);
-//        double mP = pupaMortalityRate(tempKelvin);
-//        double pAdv = transitionProb(dP);
-//        double pDie = mortalityProb(mP);
-//
-//        if (rng.nextDouble() < pDie) {
-//            agent.setAlive(false);
-//            SimulationLogger.info("[DEATH] %s died as PUPA at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//            return;
-//        }
-//        if (rng.nextDouble() < pAdv) {
-//            agent.setStage(LifecycleStage.ADULT);
-//            agent.setEnergy(0.9);
-//            agent.setAge(0); // <-- RESET AGE HERE
-//            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at age %d, temp=%.2fK",
-//                    agent.getId(), agent.getAge(), tempKelvin);
-//        }
-//    }
-    
 
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
@@ -294,6 +204,7 @@ public class LifecycleModel {
         }
     }
     
+    
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double mA = adultMortalityRate(tempKelvin);
         double pDie = mortalityProb(mA);
@@ -304,6 +215,7 @@ public class LifecycleModel {
         }
     }
 
+    
     public int tryHatchEggs(int currentEggs, double tempKelvin) {
         if (currentEggs <= 0) return 0;
         double de = eggDevelopmentRate(tempKelvin);
@@ -334,10 +246,46 @@ public class LifecycleModel {
         return hatched;
     }
 
+    
+    /**
+    * Poisson sample of the expected egg count per tick, capped at the
+    * biological maximum per laying event.
+    *
+    * <p>Knuth's algorithm is exact for λ ≲ 30 (which covers our range)
+    * and O(λ) — negligible next to everything else the tick does.
+    * Falls back to a normal approximation above that.
+    */
     public int eggsToLay(double tempKelvin, double hostDensity) {
-        double expected = effectiveFecundity(tempKelvin, hostDensity);
-        int eggs = (int) expected;
-        if (rng.nextDouble() < (expected - eggs)) eggs++;
+        double lambda = effectiveFecundity(tempKelvin, hostDensity);
+        if (lambda <= 0.0) return 0;
+
+        int eggs = poisson(lambda);
+
+        // Cap at a biologically defensible single-lay maximum.
         return Math.min(eggs, 50);
     }
+    
+    
+    /**
+    * Poisson sample using Knuth's algorithm (λ < 30) or a rounded normal
+    * approximation (λ ≥ 30). Uses the shared LifecycleModel RNG so the
+    * global seed still governs repeatability.
+    */
+    private int poisson(double lambda) {
+        if (lambda >= 30.0) {
+            // Normal approximation is fine here; integrality is preserved
+            // by rounding. stddev = sqrt(lambda).
+            double g = rng.nextGaussian() * Math.sqrt(lambda) + lambda;
+            return Math.max(0, (int) Math.round(g));
+        }
+        double L = Math.exp(-lambda);
+        int k = 0;
+        double p = 1.0;
+        do {
+            k++;
+            p *= rng.nextDouble();
+        } while (p > L);
+        return k - 1;
+    }
+
 }

@@ -64,6 +64,29 @@ public class SpeciesParameters implements Serializable {
     public double fecundity_Topt = 32.908160;
     @JsonProperty("fecundity_c")
     public double fecundity_c = -0.007832;
+    
+    /**
+    * Multiplicative calibration on the raw Gaussian fecundity curve.
+    * The literature value of {@code exp(fecundity_rmax)} is on a different
+    * dimensional footing from "eggs per female per day" once sex ratio,
+    * host factor, and dt are folded in; this factor lets you tune the
+    * realized per-day output without touching the biologically-grounded
+    * shape parameters.
+    *
+    * <p>Sanity check: at T = fecundity_Topt, hostCarryingCapacity = 2,
+    * the realized daily egg output per female is approximately:
+    * <pre>
+    *   fecundityScale * exp(fecundity_rmax) * sexRatio
+    *                  * hostCarryingCapacity * 1.0
+    * </pre>
+    * For {@code rmax=1.6, sexRatio=0.5, hostBase=2}, that's
+    * {@code fecundityScale * 4.95}. With the default scale of 1.0 you get
+    * ~5 eggs/female/day before density attenuation, which is on the low
+    * end for {@code An. stephensi}; the shipped value of 5.0 gives ~25,
+    * matching moderate laboratory/field estimates.
+    */
+   @JsonProperty("fecundity_scale")
+   public double fecundityScale = 5.0;
 
     @JsonProperty("adult_mortality_per_day")
     public double adultMortalityPerDay = 1.0 / 240.0;

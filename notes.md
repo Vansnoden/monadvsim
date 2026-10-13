@@ -8,6 +8,17 @@ If you use this framework in a publication, cite:
 
 > [Your name et al., "MONADSIM: A high‑performance multi‑agent mosquito simulation", Year, Journal/DOI] -->
 
+
+#### bundle code
+```
+find src -name "*.java" -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \; > my_code.txt
+
+
+---inspect log:
+
+LOG=$(ls -t results/logs/simulation_*.log | head -1)
+grep "\[Suitability\]" "$LOG"
+
 ```
 
 

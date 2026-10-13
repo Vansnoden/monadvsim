@@ -3,9 +3,10 @@
 # ================================================================
 
 #105216 
+# 35040
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 35040
+  totalTicks:  5000  
   tickMinutes: 15
 
 files:
@@ -47,6 +48,7 @@ species:
   adult_mortality_per_day: 0.1198
   sex_ratio: 0.5
   host_carrying_capacity_base: 2.0
+  fecundity_scale: 5.0
 
 # ================================================================
 # DATA LAYER DEFINITIONS
@@ -95,19 +97,8 @@ tokens:
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      - condition: "stage == 'LARVA' && stageAgeTick > 200 && energy > 0.4"
-        action: "pupate"
-        priority: 5
 
-      - condition: "stage == 'PUPA' && stageAgeTick > 150"
-        action: "emerge"
-        priority: 5
-
-      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && stageAgeTick > 100"
-        action: "pupate"
-        priority: 6
-
-      - condition: "stage == 'ADULT' && energy < 0.6 && !resting"
+      - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
         action: "feed"
         priority: 9
 
@@ -119,13 +110,9 @@ agentLayers:
         action: "feed"
         priority: 8
 
-      - condition: "stage == 'ADULT' && energy > 0.5 && !gravid"
+      - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
         action: "get_gravid"
         priority: 8
-
-      - condition: "gravid == true && temperature > 280.15 && getTotalLarvae < 30000"
-        action: "lay_eggs"
-        priority: 7
 
       - condition: "temperature < 273.15 || temperature > 318.15"
         action: "die"
@@ -135,7 +122,7 @@ agentLayers:
         action: "rest_in_building"
         priority: 6
 
-      - condition: "stage == 'ADULT' && !resting && stageAgeTick < 2000"
+      - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
         action: "move_random"
         priority: 3
 
@@ -160,10 +147,6 @@ agentLayers:
       - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
         action: "thin_larvae"
         priority: 5
-
-      - condition: "eggCount > 150 && waterVolume > 15"
-        action: "hatch_eggs"
-        priority: 6
 
       - condition: "waterVolume <= 5 && waterVolume > 0"
         action: "dry_out"
@@ -198,14 +181,35 @@ seeding:
   occurrenceYearStart: 2016
   occurrenceYearEnd: 2023
   occurrenceBufferKm: 0.05
-  tanksToSeed: 5000
-  mosquitoesToSeed: 20000
+  tanksToSeed: 500
+  mosquitoesToSeed: 5000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  tankBuildingThreshold: 0.15
-  tankPopulationThreshold: 0.05
-  mosquitoBuildingThreshold: 0.05
-  mosquitoPopulationThreshold: 0.02
+
+  # ----------------------------------------------------------------
+  # Pluggable habitat suitability — drives stochastic tank & mosquito
+  # placement. When you later have trustworthy building-density data,
+  # simply set its weight to a non-zero value. No code changes needed.
+  # ----------------------------------------------------------------
+  tankSuitability:
+    floorSuitability: 0.05       # baseline everywhere in the study area
+    stochasticJitter: 0.30       # ±30% multiplicative noise per cell
+
+    layers:
+      - name: Population
+        weight: 1.0              # current primary signal
+        cap:    100.0            # saturate above 100 people/pixel
+        power:  1.0              # linear
+
+      - name: Buildings
+        weight: 0.0              # disabled until data is trustworthy
+        cap:    1.0
+        power:  1.0
+
+      # - name: Elevation          # uncomment once you have a penalty form
+      #   weight: -0.1             # negative weight = penalty
+      #   cap:    2000.0
+      #   power:  1.0
 
 # ================================================================
 # PROJECT DEFAULTS
@@ -217,4 +221,4 @@ project:
   maxAgeMultiplierEgg: 0.05
   maxAgeMultiplierLarva: 0.45
   maxAgeMultiplierPupa: 0.15
-  maxAgeMultiplierAdult: 0.35
+  maxAgeMultiplierAdult: 0.50

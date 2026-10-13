@@ -17,7 +17,36 @@ public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
     private final Map<String, Boolean> evaluationCache = new ConcurrentHashMap<>();
+    
+    // ---- Targeting behavior for gravid females -------------------------------
+    private static final int    TARGET_ACQUIRE_TIMEOUT_TICKS = 600;   // ~6 days
+    private static final double TARGET_ACQUIRE_RADIUS_MULT   = 20.0;  // was 5.0
+    private static final double SEEK_STEP_MULT               = 5.0;
+    private static final double MIN_TANK_WATER               = 1.0;
+    private static final double LAY_RADIUS_MULT              = 20.0;  // was 3.0
+    
+    
+    /** Cache for getTotalLarvae, invalidated once per tick by AgentLayer. */
+    private volatile int cachedTotalLarvae = 0;
+    private volatile long cacheTick = -1L;
+    
+    
+    /** Called by AgentLayer at the top of each tick, once. */
+    public void updateTickCache(Project project, long tick) {
+        if (tick == cacheTick) return;
+        int total = 0;
+        for (AgentLayer layer : project.getAgentLayers()) {
+            for (Agent a : layer.getAgents()) {
+                if (a instanceof InertAgent ia) {
+                    total += ia.getLarvalCount();
+                }
+            }
+        }
+        cachedTotalLarvae = total;
+        cacheTick = tick;
+    }
 
+    
     private final ThreadLocal<Context> threadLocalContext = ThreadLocal.withInitial(() -> {
         try {
             return Context.newBuilder("js")
@@ -136,7 +165,7 @@ public class RuleEngine {
                 }
             }
         }
-        bindings.putMember("getTotalLarvae", totalLarvae);
+        bindings.putMember("getTotalLarvae", cachedTotalLarvae);
     }
 
     public void execute(String action, Agent agent, Project project, AgentLayer layer) {
@@ -164,37 +193,78 @@ public class RuleEngine {
     
     private void executeSeekTank(Agent agent, Project project, AgentLayer layer) {
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
-        if (!la.isGravid()) return;
 
-        // Search a larger radius for tanks
-        double searchRadius = project.getDefaultAgentSearchRadius() * 10;
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
+        if (!la.isGravid()) {
+            la.clearTargetTank();
+            return;
+        }
 
-        Agent nearestTank = null;
-        double nearestDist = Double.MAX_VALUE;
+        SpatialRegistry registry = project.getSpatialRegistry();
+        double step         = project.getDefaultAgentStep();
+        double acquireRadius = project.getDefaultAgentSearchRadius() * TARGET_ACQUIRE_RADIUS_MULT;
 
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent tank && tank.getWaterVolume() > 10) {
-                double dist = Math.hypot(n.getX() - agent.getX(), n.getY() - agent.getY());
-                if (dist < nearestDist) {
-                    nearestDist = dist;
-                    nearestTank = n;
-                }
+        // 1. Resolve the current target, if any; drop it if it is now unusable.
+        InertAgent target = null;
+        if (la.getTargetTankId() != null) {
+            Agent a = registry.getAgentById(la.getTargetTankId());
+            if (a instanceof InertAgent t && t.getWaterVolume() > MIN_TANK_WATER) {
+                target = t;
+            } else {
+                la.clearTargetTank();
             }
         }
 
-        if (nearestTank != null) {
-            // Move toward the tank
-            double dx = nearestTank.getX() - agent.getX();
-            double dy = nearestTank.getY() - agent.getY();
-            double dist = Math.hypot(dx, dy);
-            if (dist > 0.0001) {
-                double step = project.getDefaultAgentStep() * 2;
-                la.move((dx / dist) * step, (dy / dist) * step);
+        // 2. Acquire a new target if needed.
+        if (target == null) {
+            target = findNearestUsableTank(registry, la, acquireRadius);
+            if (target == null) {
+                // No tank in range: perform a short random walk so she keeps searching.
+                Random rng = SeedManager.getRandom();
+                la.move((rng.nextDouble() - 0.5) * step * 2.0,
+                        (rng.nextDouble() - 0.5) * step * 2.0);
                 layer.updateAgentPositionImmediately(la);
+                return;
+            }
+            la.setTargetTankId(target.getId());
+        }
+
+        // 3. Move one step toward the target.
+        double dx = target.getX() - la.getX();
+        double dy = target.getY() - la.getY();
+        double dist = Math.hypot(dx, dy);
+
+        if (dist <= step) {
+            // Snap onto the tank.
+            la.setX(target.getX());
+            la.setY(target.getY());
+            layer.updateAgentPositionImmediately(la);
+        } else {
+            double moveStep = Math.min(step * SEEK_STEP_MULT, dist);
+            la.move((dx / dist) * moveStep, (dy / dist) * moveStep);
+            layer.updateAgentPositionImmediately(la);
+        }
+
+        // 4. Timeout: if she has been chasing too long, drop the target
+        //    so she can reconsider on subsequent ticks.
+        la.incrementTargetTankAgeTicks();
+        if (la.getTargetTankAgeTicks() > TARGET_ACQUIRE_TIMEOUT_TICKS) {
+            la.clearTargetTank();
+        }
+    }
+
+    private InertAgent findNearestUsableTank(SpatialRegistry registry,
+                                             LivingAgent la,
+                                             double radius) {
+        List<Agent> nearby = registry.getNearbyAgents(la.getX(), la.getY(), radius);
+        InertAgent best = null;
+        double bestD = Double.MAX_VALUE;
+        for (Agent a : nearby) {
+            if (a instanceof InertAgent tank && tank.getWaterVolume() > MIN_TANK_WATER) {
+                double d = Math.hypot(tank.getX() - la.getX(), tank.getY() - la.getY());
+                if (d < bestD) { bestD = d; best = tank; }
             }
         }
+        return best;
     }
     
     
@@ -357,34 +427,62 @@ public class RuleEngine {
         }
     }
 
+    
     private void executeGetGravid(Agent agent) {
         if (agent instanceof LivingAgent la) la.setGravid(true);
     }
 
+    
     private void executeLayEggs(Agent agent, Project project, AgentLayer layer) {
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
-        double temperature = getValueAt(project, "t2m", agent.getX(), agent.getY());
-        double livestock = getValueAt(project, "Livestock", agent.getX(), agent.getY());
-        if (livestock <= 0) livestock = getValueAt(project, "Population", agent.getX(), agent.getY());
-        
-        LifecycleModel model = project.getLifecycleModel();
-        if (model == null) return;
-        int eggsToLay = model.eggsToLay(temperature, livestock);
-        if (eggsToLay <= 0) return;
-        
-        double searchRadius = project.getDefaultAgentSearchRadius() * 10.0;
+        if (!la.isGravid()) return;
 
-        List<Agent> nearby = project.getSpatialRegistry()
-                .getNearbyAgents(agent.getX(), agent.getY(), searchRadius);
-        for (Agent n : nearby) {
-            if (n instanceof InertAgent tank) {
-                tank.addEggs(eggsToLay);
-                la.setGravid(false);
-                la.setEnergy(la.getEnergy() - 0.2);
-                break;
+        SpatialRegistry registry = project.getSpatialRegistry();
+        double layRadius = Math.max(project.getDefaultAgentStep() * LAY_RADIUS_MULT, 1e-4);
+
+        // 1. Prefer the persistent target if she is currently on / at it.
+        InertAgent tank = null;
+        if (la.getTargetTankId() != null) {
+            Agent a = registry.getAgentById(la.getTargetTankId());
+            if (a instanceof InertAgent t
+                    && t.getWaterVolume() > MIN_TANK_WATER
+                    && Math.hypot(t.getX() - la.getX(), t.getY() - la.getY()) <= layRadius) {
+                tank = t;
             }
         }
+
+        // 2. Fall back to the nearest usable tank within layRadius.
+        if (tank == null) {
+            List<Agent> nearby = registry.getNearbyAgents(la.getX(), la.getY(), layRadius);
+            double bestD = Double.MAX_VALUE;
+            for (Agent a : nearby) {
+                if (a instanceof InertAgent t && t.getWaterVolume() > MIN_TANK_WATER) {
+                    double d = Math.hypot(t.getX() - la.getX(), t.getY() - la.getY());
+                    if (d < bestD) { bestD = d; tank = t; }
+                }
+            }
+        }
+
+        if (tank == null) return;   // not at a tank yet — try again next tick
+
+        // 3. Compute eggs and lay.
+        double temperature = getValueAt(project, "t2m", la.getX(), la.getY());
+        double population  = getValueAt(project, "Population", la.getX(), la.getY());
+        if (population <= 0) population = 1.0;
+
+        LifecycleModel model = project.getLifecycleModel();
+        if (model == null) return;
+        int eggs = model.eggsToLay(temperature, population);
+        if (eggs <= 0) return;
+
+        tank.addEggs(eggs);
+        tank.updateCapacityFromVolume();
+
+        la.setGravid(false);
+        la.clearTargetTank();
+        la.setEnergy(Math.max(0.0, la.getEnergy() - 0.2));
     }
+    
     
     private void executeEvaporate(Agent agent, Project project, AgentLayer layer) {
         if (agent instanceof InertAgent ia) {
