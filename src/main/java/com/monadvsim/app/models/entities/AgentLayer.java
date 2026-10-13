@@ -224,6 +224,7 @@ public class AgentLayer extends Layer {
                                 larva.setEnergy(0.8);
                                 larva.setDevelopmentProgress(0.0);
                                 larva.setAccumulatedDegreeDays(0.0);
+                                larva.setParentTankId(ia.getId());
                             }
                         }
                     }

@@ -41,6 +41,20 @@ public class LivingAgent extends Agent {
     
     // The global max age (set by project defaults)
     private int globalMaxAge = 2880; // Default: 30 days at 15-min ticks
+    
+    /**
+    * Id of the tank from which this larva was hatched. Populated when
+    * AgentLayer spawns the larva from a tank's hatch event. Null for
+    * initial-seeded larvae and for agents that are not in the LARVA stage.
+    *
+    * Transient: not part of the serialized snapshot, since the parent tank
+    * will simply be re-resolved on the next tick after deserialization.
+    */
+    private transient volatile String parentTankId = null;
+
+    public String getParentTankId() { return parentTankId; }
+    public void   setParentTankId(String id) { this.parentTankId = id; }
+    public void   clearParentTankId() { this.parentTankId = null; }
 
     public double getDevelopmentProgress() {
         return developmentProgress;

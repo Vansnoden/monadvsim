@@ -428,7 +428,7 @@ public class App {
             // ---- Species parameters and lifecycle model ----
             SpeciesParameters params = new SpeciesParameters();
             copySpeciesParams(params, config.species);
-            LifecycleModel lifecycleModel = new LifecycleModel(params, config.time.tickMinutes);
+            LifecycleModel lifecycleModel = new LifecycleModel(params, config.time.tickMinutes, spatialRegistry);
             project.setLifecycleModel(lifecycleModel);
 
             // ---- Layer Factory ----

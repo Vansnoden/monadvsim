@@ -1,12 +1,35 @@
 # ================================================================
-# SIMULATION CONFIGURATION - REVISED FOR ACTIVE POPULATION DYNAMICS
+# SIMULATION CONFIGURATION
+# ================================================================
+#
+# Notes on this revision:
+#   * `pupate` and `emerge` rules have been REMOVED from the
+#     Mosquitoes layer. Those actions call tryAdvanceFromLarva /
+#     tryAdvanceFromPupa, which accumulate degree-days. But
+#     AgentLayer.processAgentRules already calls those same methods
+#     unconditionally via its stage switch, so any larva/pupa that
+#     satisfied the rule condition would accumulate DD twice per
+#     tick, halving development time. Deleting the rules restores
+#     the correct (single) DD accumulation.
+#
+#   * The `dry_out` and tank `die` rules have been removed. In the
+#     current code there is no mechanism for a dried-out tank to
+#     become usable again, so removing tanks just erodes the
+#     breeding-site pool over the run.
+#
+#   * `thin_larvae` is kept but note it can only fire when
+#     InertAgent.larvalCount exceeds 0.8*capacity. Because
+#     larvalCount never decrements (see code bug below), this rule
+#     is effectively inert for now.
+#
+#   * `fecundity_scale: 5.0` and adult max age 15 days are the
+#     calibration values we landed on in Step 5. Change only one
+#     at a time if you need to retune.
 # ================================================================
 
-#105216 
-# 35040
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks:  5000  
+  totalTicks: 5000
   tickMinutes: 15
 
 files:
@@ -18,9 +41,9 @@ gridCellSizeDegrees: 0.001
 # SPECIES PARAMETERS
 # ================================================================
 species:
-  egg_dev_rho: 0.005000000000000001
+  egg_dev_rho: 0.005
   egg_dev_k: 39.20841161317061
-  egg_dev_Delta: 1.9999999999999998
+  egg_dev_Delta: 2.0
   egg_dev_lambda: -0.854916887158478
   larva_dev_a: 2.7054689312186438e-05
   larva_dev_Tmin: 5.123026541348266
@@ -28,12 +51,12 @@ species:
   larva_dev_m: 1.663077023745059
   pupa_dev_rho: 0.005115463305281753
   pupa_dev_k: 39.940257466039114
-  pupa_dev_Delta: 1.9999999999999998
+  pupa_dev_Delta: 2.0
   pupa_dev_lambda: -0.9081661833839708
   egg_mort_b1: 3.572876
   egg_mort_b2: -0.323474
   egg_mort_b3: 0.004941
-  larva_mort_b1: 1.9999999999999998
+  larva_mort_b1: 2.0
   larva_mort_b2: -0.7395036647759831
   larva_mort_b3: 0.017491023810106067
   pupa_mort_b1: 5.882576
@@ -92,11 +115,17 @@ tokens:
     layer: "Elevation"
 
 # ================================================================
-# AGENT LAYERS WITH ENHANCED RULES
+# AGENT LAYERS
 # ================================================================
 agentLayers:
   - name: "Mosquitoes"
+    # No pupate/emerge rules here on purpose — those transitions are
+    # handled internally by AgentLayer.processAgentRules (stage switch).
+    # Adding them as rules double-counts degree-day accumulation.
     rules:
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
 
       - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
         action: "feed"
@@ -105,7 +134,7 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy < 0.8 && resting"
         action: "rest"
         priority: 8
-      
+
       - condition: "stage == 'ADULT' && gravid && energy < 0.8"
         action: "feed"
         priority: 8
@@ -113,10 +142,6 @@ agentLayers:
       - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
         action: "get_gravid"
         priority: 8
-
-      - condition: "temperature < 273.15 || temperature > 318.15"
-        action: "die"
-        priority: 10
 
       - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
         action: "rest_in_building"
@@ -129,16 +154,21 @@ agentLayers:
       - condition: "true"
         action: "rest"
         priority: 2
-        
+
       - condition: "agent.gravid && agent.alive"
         action: "seek_tank"
         priority: 90
-        
+
       - condition: "agent.gravid && agent.alive"
         action: "lay_eggs"
         priority: 80
 
   - name: "WaterTanks"
+    # Note: the `dry_out` rule and the `die` rule have been removed.
+    # In the current codebase nothing restores water to a dried-out
+    # tank, so removing tanks just erodes the breeding-site pool.
+    # Tanks persist through dry spells and refill when precipitation
+    # arrives (handled internally by RuleEngine.executeEvaporate).
     rules:
       - condition: "true"
         action: "evaporate"
@@ -148,17 +178,9 @@ agentLayers:
         action: "thin_larvae"
         priority: 5
 
-      - condition: "waterVolume <= 5 && waterVolume > 0"
-        action: "dry_out"
-        priority: 4
-
       - condition: "temperature < 273.15 && waterVolume > 0"
         action: "freeze"
         priority: 3
-
-      - condition: "waterVolume == 0 && eggCount < 10 && larvalCount < 10"
-        action: "die"
-        priority: 4
 
 # ================================================================
 # InertAgent (Water Tank) Configuration
@@ -177,10 +199,7 @@ inert_agents:
 seeding:
   seedAcrossFullStudySite: true
   useOccurrencePoints: false
-  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
-  occurrenceYearStart: 2016
-  occurrenceYearEnd: 2023
-  occurrenceBufferKm: 0.05
+
   tanksToSeed: 500
   mosquitoesToSeed: 5000
   habitatGridSizeX: 100
@@ -192,24 +211,19 @@ seeding:
   # simply set its weight to a non-zero value. No code changes needed.
   # ----------------------------------------------------------------
   tankSuitability:
-    floorSuitability: 0.05       # baseline everywhere in the study area
-    stochasticJitter: 0.30       # ±30% multiplicative noise per cell
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
 
     layers:
       - name: Population
-        weight: 1.0              # current primary signal
-        cap:    100.0            # saturate above 100 people/pixel
-        power:  1.0              # linear
-
-      - name: Buildings
-        weight: 0.0              # disabled until data is trustworthy
-        cap:    1.0
+        weight: 1.0
+        cap:    100.0
         power:  1.0
 
-      # - name: Elevation          # uncomment once you have a penalty form
-      #   weight: -0.1             # negative weight = penalty
-      #   cap:    2000.0
-      #   power:  1.0
+      - name: Buildings
+        weight: 0.0
+        cap:    1.0
+        power:  1.0
 
 # ================================================================
 # PROJECT DEFAULTS
