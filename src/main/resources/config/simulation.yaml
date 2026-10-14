@@ -155,11 +155,11 @@ agentLayers:
         action: "rest"
         priority: 2
 
-      - condition: "agent.gravid && agent.alive"
+      - condition: "gravid && alive"
         action: "seek_tank"
         priority: 90
 
-      - condition: "agent.gravid && agent.alive"
+      - condition: "gravid && alive"
         action: "lay_eggs"
         priority: 80
 

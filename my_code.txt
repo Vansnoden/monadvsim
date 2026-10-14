@@ -1,6 +1,8 @@
 === src/main/java/com/monadvsim/app/models/engine/LifecycleModel.java ===
 package com.monadvsim.app.models.engine;
 
+import com.monadvsim.app.models.entities.Agent;
+import com.monadvsim.app.models.entities.InertAgent;
 import com.monadvsim.app.models.entities.LifecycleStage;
 import com.monadvsim.app.models.entities.LivingAgent;
 import com.monadvsim.app.models.utils.SeedManager;
@@ -10,28 +12,55 @@ import java.util.Random;
 /**
  * Temperature‑dependent life‑cycle model for Anopheles stephensi
  * following the ODE differential equations of Komi et al. 2025.
+ *
+ * <p>Two responsibilities are handled here:
+ * <ol>
+ *   <li>Temperature response surfaces for development, mortality, and
+ *       fecundity.</li>
+ *   <li>Per-tick stage progression, including the bookkeeping that keeps
+ *       the parent {@link InertAgent}'s larval counter aligned with the
+ *       number of live {@link LivingAgent} larvae it has spawned.</li>
+ * </ol>
+ *
+ * <p>The {@code larvalCount} on a tank is a live count, not a cumulative
+ * hatched count. It is incremented by {@code InertAgent.hatchEggs} when
+ * eggs hatch, and decremented here when a larva either pupates or dies.
+ * Without this, the tank's counter would saturate at
+ * {@code max_larvae_capacity} and hatching would stop permanently.
  */
 public class LifecycleModel {
 
     private final SpeciesParameters p;
-    private final double dtDays;          
-    private final Random rng;  
-    
-    private static final double T_BASE_LARVA = 13.3;        // Base temperature in Celsius
-    private static final double T_BASE_PUPA = 10.0;         // Base temperature for pupa
-    private static final double DEGREE_DAYS_LARVA_TO_PUPA = 66.5;  // Required thermal accumulation
-    private static final double DEGREE_DAYS_PUPA_TO_ADULT = 22.0;   // Required for pupa to adult
-    private static final double DEGREE_DAYS_TO_PUPA = 66.5; // Required thermal accumulation
-    
+    private final double dtDays;
+    private final Random rng;
 
-    public LifecycleModel(SpeciesParameters params, double tickMinutes) {
+    /**
+     * Registry handle for looking up the parent tank by id.
+     * Needed because {@link LivingAgent} only carries the parent tank's id
+     * (a String), not a direct reference, so that snapshots stay serializable.
+     */
+    private final SpatialRegistry spatialRegistry;
+
+    private static final double T_BASE_LARVA = 13.3;   // °C
+    private static final double T_BASE_PUPA  = 10.0;   // °C
+    private static final double DEGREE_DAYS_LARVA_TO_PUPA = 66.5;
+    private static final double DEGREE_DAYS_PUPA_TO_ADULT = 22.0;
+
+    public LifecycleModel(SpeciesParameters params, double tickMinutes,
+                          SpatialRegistry spatialRegistry) {
         this.p = params;
         this.dtDays = tickMinutes / (24.0 * 60.0);
-        this.rng = SeedManager.getRandom(); 
-        SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)", dtDays, tickMinutes);
+        this.rng = SeedManager.getRandom();
+        this.spatialRegistry = spatialRegistry;
+        SimulationLogger.info("[Lifecycle] dtDays = %.6f days (tickMinutes = %.1f)",
+                dtDays, tickMinutes);
     }
 
     private double celsius(double kelvin) { return kelvin - 273.15; }
+
+    // ========================================================================
+    // Temperature-response surfaces
+    // ========================================================================
 
     public double eggDevelopmentRate(double tempKelvin) {
         double T = celsius(tempKelvin);
@@ -78,53 +107,57 @@ public class LifecycleModel {
         return p.adultMortalityPerDay;
     }
 
-    
     /**
-    * Raw temperature response of fecundity, in "eggs per female per day"
-    * BEFORE sex ratio and host-density scaling. The Gaussian-on-log form
-    * follows Komi et al. 2025.
-    */
+     * Raw temperature response of fecundity, in "eggs per female per day"
+     * BEFORE sex ratio and host-density scaling. Gaussian-on-log form
+     * following Komi et al. 2025.
+     */
     public double fecundityRate(double tempKelvin) {
         double T = celsius(tempKelvin);
         double exponent = p.fecundity_rmax + p.fecundity_c * Math.pow(p.fecundity_Topt - T, 2);
         return p.fecundityScale * Math.max(0.0, Math.exp(exponent));
     }
 
-
     /**
-    * Density-dependent host-availability multiplier on fecundity.
-    * Uses log1p so an empty landscape still has a small non-zero factor.
-    */
+     * Density-dependent host-availability multiplier on fecundity.
+     * Uses log1p so an empty landscape still has a small non-zero factor.
+     */
     public double hostCarryingCapacity(double hostDensity) {
         double host = Math.max(0.0, hostDensity);
         return p.hostCarryingCapacityBase + Math.log1p(host);
     }
 
-    
     /**
-    * Expected eggs per female per tick. This is the quantity the Poisson
-    * sampler consumes; it is intentionally the full product of every
-    * dimensioned factor so the calibration knob ({@link SpeciesParameters#fecundityScale})
-    * has a single, predictable effect.
-    */
+     * Expected eggs per female per tick. This is the quantity the Poisson
+     * sampler consumes; it is the full product of every dimensioned factor
+     * so the calibration knob {@link SpeciesParameters#fecundityScale}
+     * has a single, predictable effect.
+     */
     public double effectiveFecundity(double tempKelvin, double hostDensity) {
         return fecundityRate(tempKelvin)
-             * p.sexRatio
-             * hostCarryingCapacity(hostDensity)
-             * dtDays;
+                * p.sexRatio
+                * hostCarryingCapacity(hostDensity)
+                * dtDays;
     }
 
-    
     public double transitionProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-    
     public double mortalityProb(double ratePerDay) {
         return 1.0 - Math.exp(-ratePerDay * dtDays);
     }
 
-    
+    // ========================================================================
+    // Stage transitions
+    // ========================================================================
+
+    /**
+     * Advance a larva by one tick.
+     *
+     * <p>On pupation, the parent tank's live larval count is decremented
+     * so that the tank can host a subsequent cohort.
+     */
     public void tryAdvanceFromLarva(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
         double mL = larvaMortalityRate(tempKelvin);
@@ -132,91 +165,100 @@ public class LifecycleModel {
         // 1. Accumulate degree-days
         if (tempC > T_BASE_LARVA) {
             double dd = (tempC - T_BASE_LARVA) * dtDays;
-            double newDD = agent.getAccumulatedDegreeDays() + dd;
-            agent.setAccumulatedDegreeDays(newDD);
+            agent.setAccumulatedDegreeDays(agent.getAccumulatedDegreeDays() + dd);
         }
 
-        // 2. Check if enough degree-days accumulated to pupate
+        // 2. Pupation
         if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_LARVA_TO_PUPA) {
             agent.setStage(LifecycleStage.PUPA);
             agent.setAccumulatedDegreeDays(0.0);
             agent.setStageAgeDays(0.0);
-            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setStageAgeTicks(0);
             agent.setDevelopmentProgress(0.0);
             agent.setEnergy(0.6);
-            // DO NOT reset age here - it's for total lifespan tracking
 
-            SimulationLogger.info("[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
-                agent.getId().substring(0, 8), 
-                agent.getStageAgeTicks(), // Will now show 0
-                DEGREE_DAYS_LARVA_TO_PUPA, 
+            decrementParentTank(agent);
+
+            SimulationLogger.info(
+                "[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8),
+                agent.getStageAgeTicks(),
+                DEGREE_DAYS_LARVA_TO_PUPA,
                 tempC);
             return;
         }
 
-        // 3. Apply mortality
+        // 3. Mortality
         double pDie = mortalityProb(mL);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
-                agent.getId().substring(0, 8), 
-                agent.getStageAgeTicks(), 
+            decrementParentTank(agent);
+            SimulationLogger.info(
+                "[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8),
+                agent.getStageAgeTicks(),
                 tempC);
         }
     }
 
-
+    /**
+     * Advance a pupa by one tick. On emergence the agent leaves the
+     * aquatic environment, so no tank counter is involved.
+     */
     public void tryAdvanceFromPupa(LivingAgent agent, double tempKelvin) {
         double tempC = celsius(tempKelvin);
         double mP = pupaMortalityRate(tempKelvin);
 
-        // 1. Accumulate degree-days for pupa
+        // 1. Accumulate degree-days
         if (tempC > T_BASE_PUPA) {
             double dd = (tempC - T_BASE_PUPA) * dtDays;
-            double newDD = agent.getAccumulatedDegreeDays() + dd;
-            agent.setAccumulatedDegreeDays(newDD);
+            agent.setAccumulatedDegreeDays(agent.getAccumulatedDegreeDays() + dd);
         }
 
-        // 2. Check if enough degree-days to emerge
+        // 2. Emergence
         if (agent.getAccumulatedDegreeDays() >= DEGREE_DAYS_PUPA_TO_ADULT) {
             agent.setStage(LifecycleStage.ADULT);
             agent.setAccumulatedDegreeDays(0.0);
             agent.setStageAgeDays(0.0);
-            agent.setStageAgeTicks(0); // <-- CRITICAL: Reset stage age
+            agent.setStageAgeTicks(0);
             agent.setEnergy(0.9);
-            // DO NOT reset age here - it's for total lifespan tracking
 
-            SimulationLogger.info("[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
-                agent.getId().substring(0, 8), 
-                agent.getStageAgeTicks(), // Will now show 0
-                DEGREE_DAYS_PUPA_TO_ADULT, 
+            SimulationLogger.info(
+                "[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
+                agent.getId().substring(0, 8),
+                agent.getStageAgeTicks(),
+                DEGREE_DAYS_PUPA_TO_ADULT,
                 tempC);
             return;
         }
 
-        // 3. Apply mortality
+        // 3. Mortality
         double pDie = mortalityProb(mP);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
-                agent.getId().substring(0, 8), 
-                agent.getStageAgeTicks(), 
+            SimulationLogger.info(
+                "[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
+                agent.getId().substring(0, 8),
+                agent.getStageAgeTicks(),
                 tempC);
         }
     }
-    
-    
+
     public void applyAdultMortality(LivingAgent agent, double tempKelvin) {
         double mA = adultMortalityRate(tempKelvin);
         double pDie = mortalityProb(mA);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info("[DEATH] %s died as ADULT at age %d, temp=%.2fK",
-                    agent.getId(), agent.getAge(), celsius(tempKelvin));
+            SimulationLogger.info(
+                "[DEATH] %s died as ADULT at age %d, temp=%.2fC",
+                agent.getId(), agent.getAge(), celsius(tempKelvin));
         }
     }
 
-    
+    // ========================================================================
+    // Egg hatching
+    // ========================================================================
+
     public int tryHatchEggs(int currentEggs, double tempKelvin) {
         if (currentEggs <= 0) return 0;
         double de = eggDevelopmentRate(tempKelvin);
@@ -247,35 +289,49 @@ public class LifecycleModel {
         return hatched;
     }
 
-    
     /**
-    * Poisson sample of the expected egg count per tick, capped at the
-    * biological maximum per laying event.
-    *
-    * <p>Knuth's algorithm is exact for λ ≲ 30 (which covers our range)
-    * and O(λ) — negligible next to everything else the tick does.
-    * Falls back to a normal approximation above that.
-    */
+     * Poisson sample of the expected egg count per tick, capped at the
+     * biological maximum per laying event.
+     *
+     * <p>Knuth's algorithm is exact for λ ≲ 30 (which covers our range)
+     * and O(λ) — negligible next to everything else the tick does.
+     * Falls back to a normal approximation above that.
+     */
     public int eggsToLay(double tempKelvin, double hostDensity) {
         double lambda = effectiveFecundity(tempKelvin, hostDensity);
         if (lambda <= 0.0) return 0;
-
         int eggs = poisson(lambda);
-
-        // Cap at a biologically defensible single-lay maximum.
         return Math.min(eggs, 50);
     }
-    
-    
+
+    // ========================================================================
+    // Internal helpers
+    // ========================================================================
+
     /**
-    * Poisson sample using Knuth's algorithm (λ < 30) or a rounded normal
-    * approximation (λ ≥ 30). Uses the shared LifecycleModel RNG so the
-    * global seed still governs repeatability.
-    */
+     * Decrement the live larval count on this larva's parent tank, if the
+     * larva was spawned from a tank (initial-seeded larvae have no parent).
+     *
+     * <p>Safe no-op if the registry is null (e.g. unit tests), if the
+     * parent tank has already been removed from the world, or if the
+     * lookup fails for any reason.
+     */
+    private void decrementParentTank(LivingAgent agent) {
+        String parentId = agent.getParentTankId();
+        if (parentId == null || spatialRegistry == null) return;
+        Agent parent = spatialRegistry.getAgentById(parentId);
+        if (parent instanceof InertAgent tank) {
+            tank.decrementLarvalCount(1);
+        }
+    }
+
+    /**
+     * Poisson sample using Knuth's algorithm (λ < 30) or a rounded normal
+     * approximation (λ ≥ 30). Uses the shared LifecycleModel RNG so the
+     * global seed still governs repeatability.
+     */
     private int poisson(double lambda) {
         if (lambda >= 30.0) {
-            // Normal approximation is fine here; integrality is preserved
-            // by rounding. stddev = sqrt(lambda).
             double g = rng.nextGaussian() * Math.sqrt(lambda) + lambda;
             return Math.max(0, (int) Math.round(g));
         }
@@ -288,7 +344,6 @@ public class LifecycleModel {
         } while (p > L);
         return k - 1;
     }
-
 }=== src/main/java/com/monadvsim/app/models/engine/SpatialRegistry.java ===
 package com.monadvsim.app.models.engine;
 
@@ -686,6 +741,33 @@ public class SimulationEngine implements Runnable {
 
         if (timeManager.getTickCount() % 10 == 0) {
             reportProgress();
+        }
+        
+        if (timeManager.getTickCount() % 50 == 0) {
+            long adults = 0, gravid = 0, withTarget = 0;
+            long tanks = 0, usable = 0;
+            double waterSum = 0, waterMin = Double.POSITIVE_INFINITY;
+            for (AgentLayer layer : project.getAgentLayers()) {
+                for (Agent a : layer.getAgents()) {
+                    if (a instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
+                        adults++;
+                        if (la.isGravid())                 gravid++;
+                        if (la.getTargetTankId() != null)  withTarget++;
+                    } else if (a instanceof InertAgent ia) {
+                        tanks++;
+                        double w = ia.getWaterVolume();
+                        waterSum += w;
+                        if (w < waterMin) waterMin = w;
+                        if (w > 1.0) usable++;
+                    }
+                }
+            }
+            SimulationLogger.info(
+                "[DIAG] tick=%d adults=%d gravid=%d withTarget=%d tanks=%d usable=%d avgWater=%.1f minWater=%.1f",
+                timeManager.getTickCount(), adults, gravid, withTarget,
+                tanks, usable,
+                tanks > 0 ? waterSum / tanks : 0.0,
+                Double.isFinite(waterMin) ? waterMin : 0.0);
         }
     }
     
@@ -1292,12 +1374,17 @@ public class RuleEngine {
     
     
     private void executeSeekTank(Agent agent, Project project, AgentLayer layer) {
+        
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
 
         if (!la.isGravid()) {
             la.clearTargetTank();
             return;
         }
+        
+        SimulationLogger.fine("[SEEK] %s at (%.5f,%.5f) target=%s",
+            la.getId().substring(0, 8), la.getX(), la.getY(),
+            la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
 
         SpatialRegistry registry = project.getSpatialRegistry();
         double step         = project.getDefaultAgentStep();
@@ -1561,10 +1648,12 @@ public class RuleEngine {
                     if (d < bestD) { bestD = d; tank = t; }
                 }
             }
+            SimulationLogger.info("[NOLAY] %s gravid at (%.5f,%.5f) target=%s",
+                la.getId().substring(0, 8), la.getX(), la.getY(),
+                la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
+            return;
         }
-
-        if (tank == null) return;   // not at a tank yet — try again next tick
-
+        
         // 3. Compute eggs and lay.
         double temperature = getValueAt(project, "t2m", la.getX(), la.getY());
         double population  = getValueAt(project, "Population", la.getX(), la.getY());
@@ -1577,6 +1666,11 @@ public class RuleEngine {
 
         tank.addEggs(eggs);
         tank.updateCapacityFromVolume();
+        
+        SimulationLogger.info("[LAY] %s laid %d eggs @ (%.5f,%.5f) tankWater=%.1f tankLarvae=%d",
+            la.getId().substring(0, 8), eggs, la.getX(), la.getY(),
+            tank.getWaterVolume(), tank.getLarvalCount()
+        );
 
         la.setGravid(false);
         la.clearTargetTank();
@@ -4770,6 +4864,10 @@ public class SimulationConfig {
         public double defaultAgentSearchRadius;
         public double defaultAgentStep;
         public int defaultMaxAgentAge; // in ticks
+        public double maxAgeMultiplierEgg   = 0.05;
+        public double maxAgeMultiplierLarva = 0.45;
+        public double maxAgeMultiplierPupa  = 0.15;
+        public double maxAgeMultiplierAdult = 0.35;
     }
 
     public static class TokenMapping {
@@ -5057,6 +5155,7 @@ public class AgentLayer extends Layer {
                                 larva.setEnergy(0.8);
                                 larva.setDevelopmentProgress(0.0);
                                 larva.setAccumulatedDegreeDays(0.0);
+                                larva.setParentTankId(ia.getId());
                             }
                         }
                     }
@@ -7166,188 +7265,6 @@ public class InertAgent extends Agent {
         return taken;
     }
 
-    // ------------------------------------------------------------------------
-    // Hatching with temperature dependence and density-dependent mortality
-    // ------------------------------------------------------------------------
-    /**
-     * Hatch eggs into larvae based on temperature‑dependent development and survival.
-     * Applies density‑dependent mortality after hatching if larval count exceeds capacity.
-     *
-     * @param temperature Current temperature in Kelvin
-     * @param model       LifecycleModel providing egg development rate and survival
-     * @return Number of eggs successfully hatched (after accounting for mortality)
-     */
-//    public int hatchEggs(double temperature, LifecycleModel model) {
-//        int currentEggs = eggCount.get();
-//        if (currentEggs == 0) return 0;
-//
-//        // 1. Egg development probability per tick
-//        double dE = model.eggDevelopmentRate(temperature);
-//        double SE = model.eggSurvival(temperature);
-//        double pHatch = model.transitionProb(dE) * SE;
-//
-//        // 2. Binomial sampling (efficient)
-//        ThreadLocalRandom rng = ThreadLocalRandom.current();
-//        int eggsHatched;
-//        if (currentEggs > 100) {
-//            double mean = currentEggs * pHatch;
-//            double var = mean * (1 - pHatch);
-//            int sample = (int) Math.round(mean + Math.sqrt(var) * rng.nextGaussian());
-//            eggsHatched = Math.max(0, Math.min(currentEggs, sample));
-//        } else {
-//            eggsHatched = 0;
-//            for (int i = 0; i < currentEggs; i++) {
-//                if (rng.nextDouble() < pHatch) eggsHatched++;
-//            }
-//        }
-//
-//        if (eggsHatched == 0) return 0;
-//
-//        // 3. Atomically update counts
-//        eggCount.addAndGet(-eggsHatched);
-//        int newLarvae = larvalCount.addAndGet(eggsHatched);
-//
-//        // 4. Density-dependent mortality if capacity exceeded
-//        double cap = capacity.get();
-//        if (cap > 0 && newLarvae > cap) {
-//            int excess = newLarvae - (int) cap;
-//            int toKill = rng.nextInt(excess + 1);
-//            if (toKill > 0) {
-//                larvalCount.addAndGet(-toKill);
-//                eggsHatched -= toKill;
-//                SimulationLogger.info("[TANK] Density-dependent mortality: killed %d larvae, capacity=%.1f",
-//                                      toKill, cap);
-//            }
-//        }
-//
-//        return eggsHatched;
-//    }
-
-//    public int hatchEggs(double temperature, LifecycleModel model) {
-//        int current = eggCount.get();
-//        if (current == 0) return 0;
-//        int hatched = model.tryHatchEggs(current, temperature);
-//        if (hatched > 0) {
-//            eggCount.addAndGet(-hatched);
-//            larvalCount.addAndGet(hatched);
-//            updateCapacityFromVolume();
-//        }
-//        return hatched;
-//    }
-    
-//    public int hatchEggs(double temperature, LifecycleModel model) {
-//        int current = eggCount.get();
-//        if (current == 0) return 0;
-//        
-//        // Accumulate egg development progress
-//        double de = model.eggDevelopmentRate(temperature);
-//        double newProgress = eggDevelopmentProgress.get() + de * 0.0104; // dtDays
-//        eggDevelopmentProgress.set(newProgress);
-//        
-//        // Only hatch when development is complete
-//        if (newProgress < 1.0) {
-//            return 0;
-//        }
-//        
-//        // Reset progress
-//        eggDevelopmentProgress.set(0.0);
-//        
-//        // Check capacity
-//        double cap = capacity.get();
-//        int currentLarvae = larvalCount.get();
-//        if (currentLarvae >= cap) {
-//            return 0;
-//        }
-//        
-//        int maxHatch = (int)(cap - currentLarvae);
-//        // Hatch all eggs that are ready
-//        int hatched = Math.min(current, maxHatch);
-//        
-//        if (hatched > 0) {
-//            eggCount.addAndGet(-hatched);
-//            larvalCount.addAndGet(hatched);
-//        }
-//        return hatched;
-//    }
-    
-//    public int hatchEggs(double temperature, LifecycleModel model) {
-//        int current = eggCount.get();
-//        if (current == 0) return 0;
-//
-//        double de = model.eggDevelopmentRate(temperature);
-//        double dtDays = 0.0104166667;
-//        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
-//        eggDevelopmentProgress.set(newProgress);
-//        
-//        if (this.getId().hashCode() % 20 == 0 && current > 0) {
-//            SimulationLogger.fine("[EGG] %s progress=%.4f, de=%.6f, temp=%.2fK, eggs=%d",
-//                this.getId().substring(0, 8), newProgress, de, temperature, current);
-//        }
-//
-//        if (newProgress < 1.0) return 0;
-//
-//        // STAGGERED HATCHING: Don't hatch all at once!
-//        // Only hatch a percentage based on how far past 1.0 progress is
-//        double excessProgress = newProgress - 1.0;
-//        double hatchFraction = Math.min(1.0, 0.1 + excessProgress * 0.5); // 10-60% per tick
-//
-//        // Reset progress (some eggs may continue developing)
-//        eggDevelopmentProgress.set(excessProgress);
-//
-//        double cap = capacity.get();
-//        int currentLarvae = larvalCount.get();
-//        if (currentLarvae >= cap) return 0;
-//
-//        int maxHatch = (int)(cap - currentLarvae);
-//        int eggsToHatch = (int)Math.min(current, maxHatch * hatchFraction);
-//        eggsToHatch = Math.max(1, eggsToHatch);
-//        eggsToHatch = Math.min(eggsToHatch, current);
-//
-//        if (eggsToHatch > 0) {
-//            eggCount.addAndGet(-eggsToHatch);
-//            larvalCount.addAndGet(eggsToHatch);
-//            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
-//                eggsToHatch, hatchFraction * 100, newProgress);
-//        }
-//        return eggsToHatch;
-//    }
-    
-//    public int hatchEggs(double temperature, LifecycleModel model) {
-//        int current = eggCount.get();
-//        if (current == 0) return 0;
-//
-//        double de = model.eggDevelopmentRate(temperature);
-//        double dtDays = 0.0104166667;
-//        double newProgress = eggDevelopmentProgress.get() + de * dtDays;
-//        eggDevelopmentProgress.set(newProgress);
-//
-//        if (newProgress < 1.0) return 0;
-//
-//        // Get hatch fraction from config
-//        double hatchFractionMin = (params != null) ? params.hatch_fraction_min : 0.1;
-//        double hatchFractionMax = (params != null) ? params.hatch_fraction_max : 0.6;
-//        
-//        double excessProgress = newProgress - 1.0;
-//        double hatchFraction = Math.min(hatchFractionMax, hatchFractionMin + excessProgress * 0.5);
-//        eggDevelopmentProgress.set(excessProgress);
-//
-//        // Check capacity
-//        int maxCapacity = (params != null) ? params.max_larvae_capacity : DEFAULT_MAX_LARVAE_CAPACITY;
-//        int currentLarvae = larvalCount.get();
-//        if (currentLarvae >= maxCapacity) return 0;
-//
-//        int maxHatch = maxCapacity - currentLarvae;
-//        int eggsToHatch = (int) Math.min(current, maxHatch * hatchFraction);
-//        eggsToHatch = Math.max(1, Math.min(eggsToHatch, current));
-//
-//        if (eggsToHatch > 0) {
-//            eggCount.addAndGet(-eggsToHatch);
-//            larvalCount.addAndGet(eggsToHatch);
-//            SimulationLogger.fine("[TANK] Hatched %d eggs (%.1f%%), progress=%.3f", 
-//                eggsToHatch, hatchFraction * 100, newProgress);
-//        }
-//        return eggsToHatch;
-//    }
     
     public int hatchEggs(double temperature, LifecycleModel model) {
         int current = eggCount.get();
@@ -7591,6 +7508,20 @@ public class LivingAgent extends Agent {
     
     // The global max age (set by project defaults)
     private int globalMaxAge = 2880; // Default: 30 days at 15-min ticks
+    
+    /**
+    * Id of the tank from which this larva was hatched. Populated when
+    * AgentLayer spawns the larva from a tank's hatch event. Null for
+    * initial-seeded larvae and for agents that are not in the LARVA stage.
+    *
+    * Transient: not part of the serialized snapshot, since the parent tank
+    * will simply be re-resolved on the next tick after deserialization.
+    */
+    private transient volatile String parentTankId = null;
+
+    public String getParentTankId() { return parentTankId; }
+    public void   setParentTankId(String id) { this.parentTankId = id; }
+    public void   clearParentTankId() { this.parentTankId = null; }
 
     public double getDevelopmentProgress() {
         return developmentProgress;
@@ -8207,7 +8138,7 @@ public class App {
             // ---- Species parameters and lifecycle model ----
             SpeciesParameters params = new SpeciesParameters();
             copySpeciesParams(params, config.species);
-            LifecycleModel lifecycleModel = new LifecycleModel(params, config.time.tickMinutes);
+            LifecycleModel lifecycleModel = new LifecycleModel(params, config.time.tickMinutes, spatialRegistry);
             project.setLifecycleModel(lifecycleModel);
 
             // ---- Layer Factory ----
@@ -8587,7 +8518,7 @@ public class App {
             double[] pt = scorer.sample(rand);
             double rx = pt[0], ry = pt[1];
 
-            LivingAgent mosquito = createMosquito(rand, rx, ry);
+            LivingAgent mosquito = createMosquito(project, rand, rx, ry);
             mosquitoLayer.addAgent(mosquito);
             spatialRegistry.registerAgent(mosquito);
             mosquitoesPlaced++;
@@ -8662,7 +8593,7 @@ public class App {
             for (int i = 0; i < count; i++) {
                 double lon = occ.longitude + (rand.nextDouble() - 0.5) * bufferDegrees;
                 double lat = occ.latitude  + (rand.nextDouble() - 0.5) * bufferDegrees;
-                LivingAgent mosquito = createMosquito(rand, lon, lat);
+                LivingAgent mosquito = createMosquito(project, rand, lon, lat);
                 mosquitoLayer.addAgent(mosquito);
                 spatialRegistry.registerAgent(mosquito);
                 mosquitoesPlaced++;
@@ -8934,138 +8865,6 @@ public class App {
         }
     }
 
-    // ============================================================
-    // HABITAT CALCULATOR INNER CLASS
-    // ============================================================
-
-    private static class HabitatCalculator {
-        private final double[][] suitabilityGrid;
-        private final double[] cumulativeDistribution;
-        private final double cellSize;
-        private final double minX, minY, maxX, maxY;
-        private final int gridSizeX, gridSizeY;
-        private final Random random = SeedManager.getRandom();
-        private final Geometry studyArea;
-
-        public HabitatCalculator(RasterLayer buildings, RasterLayer population,
-                                 Rectangle2D worldBounds, int gridSizeX, int gridSizeY,
-                                 Geometry studyArea) {
-            this.gridSizeX = gridSizeX;
-            this.gridSizeY = gridSizeY;
-            this.cellSize = Math.min(worldBounds.getWidth() / gridSizeX,
-                                     worldBounds.getHeight() / gridSizeY);
-            this.minX = worldBounds.getMinX();
-            this.minY = worldBounds.getMinY();
-            this.maxX = worldBounds.getMaxX();
-            this.maxY = worldBounds.getMaxY();
-            this.studyArea = studyArea;
-            this.suitabilityGrid = new double[gridSizeX][gridSizeY];
-            calculateSuitability(buildings, population);
-            this.cumulativeDistribution = buildCumulativeDistribution();
-        }
-
-        private void calculateSuitability(RasterLayer buildings, RasterLayer population) {
-            double total = 0.0;
-            GeometryFactory geomFactory = new GeometryFactory();
-
-            for (int i = 0; i < gridSizeX; i++) {
-                for (int j = 0; j < gridSizeY; j++) {
-                    double x = minX + (i + 0.5) * cellSize;
-                    double y = minY + (j + 0.5) * cellSize;
-
-                    if (studyArea != null) {
-                        Point point = geomFactory.createPoint(new Coordinate(x, y));
-                        if (!studyArea.contains(point)) {
-                            suitabilityGrid[i][j] = 0.0;
-                            continue;
-                        }
-                    }
-
-                    double b = Math.max(0, buildings.getValueAt(x, y));
-                    double p = Math.max(0, population.getValueAt(x, y));
-                    double suit;
-
-                    if (b > config.seeding.tankBuildingThreshold &&
-                        p > config.seeding.tankPopulationThreshold) {
-                        suit = b * 0.6 + (Math.min(p, 100) / 100.0) * 0.4;
-                    } else if (b > config.seeding.tankBuildingThreshold ||
-                               p > config.seeding.tankPopulationThreshold) {
-                        suit = (b * 0.3 + (Math.min(p, 50) / 50.0) * 0.2) * 0.5;
-                    } else {
-                        suit = 0.01;
-                    }
-                    suit *= (0.9 + random.nextDouble() * 0.2);
-                    suitabilityGrid[i][j] = suit;
-                    total += suit;
-                }
-            }
-
-            if (total > 0) {
-                for (int i = 0; i < gridSizeX; i++) {
-                    for (int j = 0; j < gridSizeY; j++) {
-                        suitabilityGrid[i][j] /= total;
-                    }
-                }
-            }
-        }
-
-        private double[] buildCumulativeDistribution() {
-            double[] cdf = new double[gridSizeX * gridSizeY];
-            double cum = 0.0;
-            for (int i = 0; i < gridSizeX; i++) {
-                for (int j = 0; j < gridSizeY; j++) {
-                    cum += suitabilityGrid[i][j];
-                    cdf[i * gridSizeY + j] = cum;
-                }
-            }
-            if (cum > 0) {
-                for (int i = 0; i < cdf.length; i++) cdf[i] /= cum;
-            }
-            return cdf;
-        }
-
-//        public double[] getRandomWeightedPoint() {
-//            double r = random.nextDouble();
-//            int idx = java.util.Arrays.binarySearch(cumulativeDistribution, r);
-//            if (idx < 0) idx = -(idx + 1);
-//            if (idx >= cumulativeDistribution.length) idx = cumulativeDistribution.length - 1;
-//            int i = idx / gridSizeY;
-//            int j = idx % gridSizeY;
-//            double x = minX + (i + random.nextDouble()) * cellSize;
-//            double y = minY + (j + random.nextDouble()) * cellSize;
-//            return new double[]{x, y};
-//        }
-        
-        public double[] getRandomWeightedPoint() {
-            if (studyArea == null) {
-                // Fallback to bounding box if no study area is defined
-                double x = minX + random.nextDouble() * (maxX - minX);
-                double y = minY + random.nextDouble() * (maxY - minY);
-                return new double[]{x, y};
-            }
-
-            // Keep trying until we find a point inside the study area.
-            // The while loop ensures we don't return a point outside.
-            while (true) {
-                double r = random.nextDouble();
-                int idx = java.util.Arrays.binarySearch(cumulativeDistribution, r);
-                if (idx < 0) idx = -(idx + 1);
-                if (idx >= cumulativeDistribution.length) idx = cumulativeDistribution.length - 1;
-                int i = idx / gridSizeY;
-                int j = idx % gridSizeY;
-                double x = minX + (i + random.nextDouble()) * cellSize;
-                double y = minY + (j + random.nextDouble()) * cellSize;
-
-                // Check if the point is inside the study area.
-                GeometryFactory geomFactory = new GeometryFactory();
-                Point point = geomFactory.createPoint(new Coordinate(x, y));
-                if (studyArea.contains(point)) {
-                    return new double[]{x, y};
-                }
-                // If not, the loop will retry with a new random point.
-            }
-        }
-    }
 }=== src/test/java/com/monadvsim/app/AppTest.java ===
 package com.monadvsim.app;
 import com.monadvsim.app.models.utils.SimulationLogger;

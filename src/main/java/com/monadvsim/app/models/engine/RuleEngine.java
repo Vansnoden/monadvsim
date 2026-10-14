@@ -192,12 +192,17 @@ public class RuleEngine {
     
     
     private void executeSeekTank(Agent agent, Project project, AgentLayer layer) {
+        
         if (!(agent instanceof LivingAgent la) || la.getStage() != LifecycleStage.ADULT) return;
 
         if (!la.isGravid()) {
             la.clearTargetTank();
             return;
         }
+        
+        SimulationLogger.fine("[SEEK] %s at (%.5f,%.5f) target=%s",
+            la.getId().substring(0, 8), la.getX(), la.getY(),
+            la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
 
         SpatialRegistry registry = project.getSpatialRegistry();
         double step         = project.getDefaultAgentStep();
@@ -461,10 +466,12 @@ public class RuleEngine {
                     if (d < bestD) { bestD = d; tank = t; }
                 }
             }
+            SimulationLogger.info("[NOLAY] %s gravid at (%.5f,%.5f) target=%s",
+                la.getId().substring(0, 8), la.getX(), la.getY(),
+                la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
+            return;
         }
-
-        if (tank == null) return;   // not at a tank yet — try again next tick
-
+        
         // 3. Compute eggs and lay.
         double temperature = getValueAt(project, "t2m", la.getX(), la.getY());
         double population  = getValueAt(project, "Population", la.getX(), la.getY());
@@ -477,6 +484,11 @@ public class RuleEngine {
 
         tank.addEggs(eggs);
         tank.updateCapacityFromVolume();
+        
+        SimulationLogger.info("[LAY] %s laid %d eggs @ (%.5f,%.5f) tankWater=%.1f tankLarvae=%d",
+            la.getId().substring(0, 8), eggs, la.getX(), la.getY(),
+            tank.getWaterVolume(), tank.getLarvalCount()
+        );
 
         la.setGravid(false);
         la.clearTargetTank();

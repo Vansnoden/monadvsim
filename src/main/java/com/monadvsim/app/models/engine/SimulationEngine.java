@@ -182,6 +182,33 @@ public class SimulationEngine implements Runnable {
         if (timeManager.getTickCount() % 10 == 0) {
             reportProgress();
         }
+        
+        if (timeManager.getTickCount() % 50 == 0) {
+            long adults = 0, gravid = 0, withTarget = 0;
+            long tanks = 0, usable = 0;
+            double waterSum = 0, waterMin = Double.POSITIVE_INFINITY;
+            for (AgentLayer layer : project.getAgentLayers()) {
+                for (Agent a : layer.getAgents()) {
+                    if (a instanceof LivingAgent la && la.getStage() == LifecycleStage.ADULT) {
+                        adults++;
+                        if (la.isGravid())                 gravid++;
+                        if (la.getTargetTankId() != null)  withTarget++;
+                    } else if (a instanceof InertAgent ia) {
+                        tanks++;
+                        double w = ia.getWaterVolume();
+                        waterSum += w;
+                        if (w < waterMin) waterMin = w;
+                        if (w > 1.0) usable++;
+                    }
+                }
+            }
+            SimulationLogger.info(
+                "[DIAG] tick=%d adults=%d gravid=%d withTarget=%d tanks=%d usable=%d avgWater=%.1f minWater=%.1f",
+                timeManager.getTickCount(), adults, gravid, withTarget,
+                tanks, usable,
+                tanks > 0 ? waterSum / tanks : 0.0,
+                Double.isFinite(waterMin) ? waterMin : 0.0);
+        }
     }
     
     private void exportPeriodicSnapshot() {
