@@ -157,14 +157,14 @@ public class RuleEngine {
             bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
         }
         
-        int totalLarvae = 0;
-        for (AgentLayer layer : project.getAgentLayers()) {
-            for (Agent a : layer.getAgents()) {
-                if (a instanceof InertAgent ia) {
-                    totalLarvae += ia.getLarvalCount();
-                }
-            }
-        }
+//        int totalLarvae = 0;
+//        for (AgentLayer layer : project.getAgentLayers()) {
+//            for (Agent a : layer.getAgents()) {
+//                if (a instanceof InertAgent ia) {
+//                    totalLarvae += ia.getLarvalCount();
+//                }
+//            }
+//        }
         bindings.putMember("getTotalLarvae", cachedTotalLarvae);
     }
 

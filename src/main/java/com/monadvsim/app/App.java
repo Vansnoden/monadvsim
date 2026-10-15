@@ -993,7 +993,7 @@ public class App {
                     tick, totalAgents, avgTickTime);
 
                 if (avgTickTime > 10000) {
-                    SimulationLogger.severe("CRITICAL: Tick time too slow (" + avgTickTime + "ms)");
+                    SimulationLogger.warning("Tick time too slow (" + avgTickTime + "ms)");
                 }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();

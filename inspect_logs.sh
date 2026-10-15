@@ -1,15 +1,12 @@
 #!/bin/bash
 
-LOG=$(ls -t results/logs/simulation_*.log | head -1)
+LOG=results/logs/simulation_20261014_201405.log
 
-echo "=== first 5 ticks ==="
-grep "\[Monitor\]" "$LOG" | head -5
+# Most common SEVERE messages, deduped
+grep '\[SEVERE\]' "$LOG" | sed -E 's/^\[[^]]+\] \[SEVERE\] //' | sort | uniq -c | sort -rn | head -20
 
-echo "=== every ~500 agents ==="
-grep "\[Monitor\]" "$LOG" | awk 'NR % 20 == 1'
+# First occurrence — when did it start
+grep -n '\[SEVERE\]' "$LOG" | head -5
 
-echo "=== last 5 ticks ==="
-grep "\[Monitor\]" "$LOG" | tail -5
-
-echo "=== timeout count ==="
-grep -c "Layer Mosquitoes timed out" "$LOG"
+# Are they clustered around specific ticks?
+grep '\[SEVERE\]' "$LOG" | grep -oE 'Tick: [0-9]+' | head -20
