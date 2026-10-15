@@ -6,14 +6,18 @@
 #   ./summarize_log.sh                     # auto-pick newest results/logs/simulation_*.log
 #   ./summarize_log.sh path/to/sim.log     # explicit log file
 #
-# Fixes vs. previous version:
+# Revision notes:
 #   * Timestamp is normalised to contain no whitespace, so awk field splitting
-#     no longer shifts every column by one. This was the bug that made the
-#     trajectory / tick-time / milestone tables print tick numbers where
-#     agent counts belonged.
+#     no longer shifts every column by one.
 #   * All field-separated operations force TAB as the separator.
-#   * Peak/trough oscillation check ignores the first 200 ticks, so the
-#     initial seed no longer masquerades as a trough.
+#   * Growth-rate table now emits a final partial window at the end of the run
+#     (previously the last window was dropped when the run length was not a
+#     multiple of 100 ticks).
+#   * Peak/trough oscillation check now measures only the plateau phase:
+#     it finds the first tick where agents >= 80% of peak, then computes the
+#     trough within that region. This stops the seed-expansion phase from
+#     masquerading as oscillation (which produced spurious 5x warnings on
+#     stable logistic-curve runs).
 #   * Verdict thresholds accept a final tick >= 1495 as "reached 1500".
 # ============================================================================
 
@@ -102,7 +106,7 @@ for T in 3000 5000 10000 15000 25000 40000 60000 100000 150000; do
 done
 
 # ---------------------------------------------------------------------------
-# 5. Coarse trajectory — every ~20th row, correct columns
+# 5. Coarse trajectory — every ~20th row
 # ---------------------------------------------------------------------------
 echo
 echo "--- TRAJECTORY (every ~20th monitor row) ------------------------------"
@@ -113,11 +117,13 @@ awk -F'\t' 'NR % 20 == 1 {
 }' "$TMP"
 
 # ---------------------------------------------------------------------------
-# 6. Growth rate per 100-tick window
+# 6. Growth rate per 100-tick window, plus a final partial window
 # ---------------------------------------------------------------------------
 echo
 echo "--- GROWTH RATE (agents per 100-tick window) --------------------------"
-awk -F'\t' '
+awk -F'\t' \
+    -v last_tick="$LAST_TICK" \
+    -v last_agents="$LAST_AGENTS" '
     { tick = $2; agents = $3 }
     tick >= next_win {
         if (prev_tick != "") {
@@ -130,6 +136,15 @@ awk -F'\t' '
         prev_tick   = tick
         prev_agents = agents
         next_win   += 100
+    }
+    END {
+        if (prev_tick != "" && prev_tick != last_tick) {
+            dt = last_tick - prev_tick
+            da = last_agents - prev_agents
+            rate = (dt > 0) ? da * 100.0 / dt : 0
+            printf "  tick %5d -> %5d   agents %8d -> %8d   (%+d, %+.1f per 100t)\n",
+                   prev_tick, last_tick, prev_agents, last_agents, da, rate
+        }
     }
 ' "$TMP"
 
@@ -178,14 +193,31 @@ if awk -v ms="$LAST_MS" 'BEGIN { exit (ms > 8000) ? 0 : 1 }'; then
     VERDICT_OK=0
 fi
 
-# Oscillation check — ignore the first 200 ticks so the seed is not counted
-# as a trough.
-TROUGH=$(awk -F'\t' '$2 > 200 { print $3 }' "$TMP" | sort -n | head -1 || true)
-if [[ -n "${TROUGH:-}" && "$TROUGH" -gt 0 ]]; then
-    OSC=$(awk -v p="$PEAK_AGENTS" -v t="$TROUGH" 'BEGIN{printf "%.2f", p/t}')
-    if awk -v o="$OSC" 'BEGIN { exit (o > 5) ? 0 : 1 }'; then
-        echo "  WARN: peak/trough ratio = ${OSC}x (> 5, post-transient) — density brake may be too weak."
-        VERDICT_OK=0
+# Oscillation check — only measure the plateau region. Find the first tick
+# where agents >= 80% of peak; from that point onward, compute trough and
+# plateau-peak. This excludes the seed-expansion phase, which is not
+# oscillation. If peak/trough within the plateau exceeds 5x, that indicates
+# real ringing rather than logistic growth.
+if [[ "$PEAK_AGENTS" -gt 0 ]]; then
+    PLATEAU_START=$(awk -F'\t' -v p="$PEAK_AGENTS" '
+        BEGIN { th = p * 0.8 }
+        $3 >= th { print $2; exit }
+    ' "$TMP")
+
+    if [[ -n "${PLATEAU_START:-}" ]]; then
+        TROUGH=$(awk -F'\t' -v ts="$PLATEAU_START" \
+            '$2 >= ts { print $3 }' "$TMP" | sort -n | head -1 || true)
+        PLATEAU_PEAK=$(awk -F'\t' -v ts="$PLATEAU_START" \
+            '$2 >= ts { print $3 }' "$TMP" | sort -n | tail -1 || true)
+
+        if [[ -n "${TROUGH:-}" && "$TROUGH" -gt 0 ]]; then
+            OSC=$(awk -v p="$PLATEAU_PEAK" -v t="$TROUGH" \
+                'BEGIN{printf "%.2f", p/t}')
+            if awk -v o="$OSC" 'BEGIN { exit (o > 5) ? 0 : 1 }'; then
+                echo "  WARN: plateau oscillation peak/trough = ${OSC}x (> 5, from tick $PLATEAU_START) — density brake may be too weak."
+                VERDICT_OK=0
+            fi
+        fi
     fi
 fi
 

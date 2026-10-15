@@ -16,7 +16,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class RuleEngine {
 
     private final ConcurrentHashMap<String, Source> scriptCache = new ConcurrentHashMap<>();
-    private final Map<String, Boolean> evaluationCache = new ConcurrentHashMap<>();
+    private volatile Map<String, Boolean> evaluationCache = new ConcurrentHashMap<>();
     
     // ---- Targeting behavior for gravid females -------------------------------
     private static final int    TARGET_ACQUIRE_TIMEOUT_TICKS = 600;   // ~6 days
@@ -142,11 +142,10 @@ public class RuleEngine {
         List<String> layerNames = project.getLayerNames();
         List<String> tokens = project.getTokens();
         if (layerNames != null && tokens != null && layerNames.size() == tokens.size()) {
+            double ax = (agent != null) ? agent.getX() : 0;
+            double ay = (agent != null) ? agent.getY() : 0;
             for (int i = 0; i < layerNames.size(); i++) {
-                String token = tokens.get(i);
-                double x = agent != null ? agent.getX() : 0;
-                double y = agent != null ? agent.getY() : 0;
-                bindings.putMember(token, getValueAt(project, layerNames.get(i), x, y));
+                bindings.putMember(tokens.get(i), getValueAt(project, layerNames.get(i), ax, ay));
             }
         }
 
@@ -156,15 +155,6 @@ public class RuleEngine {
         if (!bindings.hasMember("precipitation")) {
             bindings.putMember("precipitation", getValueAt(project, "tp", agent.getX(), agent.getY()));
         }
-        
-//        int totalLarvae = 0;
-//        for (AgentLayer layer : project.getAgentLayers()) {
-//            for (Agent a : layer.getAgents()) {
-//                if (a instanceof InertAgent ia) {
-//                    totalLarvae += ia.getLarvalCount();
-//                }
-//            }
-//        }
         bindings.putMember("getTotalLarvae", cachedTotalLarvae);
     }
 
@@ -526,6 +516,6 @@ public class RuleEngine {
 
     public void clearCache() {
         scriptCache.clear();
-        evaluationCache.clear();
+        evaluationCache = new ConcurrentHashMap<>();
     }
 }
