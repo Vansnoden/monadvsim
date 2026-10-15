@@ -202,12 +202,12 @@ public class SimulationEngine implements Runnable {
                     }
                 }
             }
-            SimulationLogger.info(
-                "[DIAG] tick=%d adults=%d gravid=%d withTarget=%d tanks=%d usable=%d avgWater=%.1f minWater=%.1f",
-                timeManager.getTickCount(), adults, gravid, withTarget,
-                tanks, usable,
-                tanks > 0 ? waterSum / tanks : 0.0,
-                Double.isFinite(waterMin) ? waterMin : 0.0);
+//            SimulationLogger.info(
+//                "[DIAG] tick=%d adults=%d gravid=%d withTarget=%d tanks=%d usable=%d avgWater=%.1f minWater=%.1f",
+//                timeManager.getTickCount(), adults, gravid, withTarget,
+//                tanks, usable,
+//                tanks > 0 ? waterSum / tanks : 0.0,
+//                Double.isFinite(waterMin) ? waterMin : 0.0);
         }
     }
     

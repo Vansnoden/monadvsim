@@ -178,13 +178,13 @@ public class LifecycleModel {
 
             decrementParentTank(agent);
 
-            SimulationLogger.info(
-                "[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
-                agent.getId().substring(0, 8),
-                agent.getStageAgeTicks(),
-                DEGREE_DAYS_LARVA_TO_PUPA,
-                tempC);
-            return;
+//            SimulationLogger.info(
+//                "[SUCCESS] %s LARVA → PUPA at stage age %d, DD=%.2f, temp=%.2fC",
+//                agent.getId().substring(0, 8),
+//                agent.getStageAgeTicks(),
+//                DEGREE_DAYS_LARVA_TO_PUPA,
+//                tempC);
+//            return;
         }
 
         // 3. Mortality
@@ -192,11 +192,11 @@ public class LifecycleModel {
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
             decrementParentTank(agent);
-            SimulationLogger.info(
-                "[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
-                agent.getId().substring(0, 8),
-                agent.getStageAgeTicks(),
-                tempC);
+//            SimulationLogger.info(
+//                "[DEATH] %s died as LARVA at stage age %d, temp=%.2fC",
+//                agent.getId().substring(0, 8),
+//                agent.getStageAgeTicks(),
+//                tempC);
         }
     }
 
@@ -222,12 +222,12 @@ public class LifecycleModel {
             agent.setStageAgeTicks(0);
             agent.setEnergy(0.9);
 
-            SimulationLogger.info(
-                "[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
-                agent.getId().substring(0, 8),
-                agent.getStageAgeTicks(),
-                DEGREE_DAYS_PUPA_TO_ADULT,
-                tempC);
+//            SimulationLogger.info(
+//                "[SUCCESS] %s PUPA → ADULT at stage age %d, DD=%.2f, temp=%.2fC",
+//                agent.getId().substring(0, 8),
+//                agent.getStageAgeTicks(),
+//                DEGREE_DAYS_PUPA_TO_ADULT,
+//                tempC);
             return;
         }
 
@@ -235,11 +235,11 @@ public class LifecycleModel {
         double pDie = mortalityProb(mP);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info(
-                "[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
-                agent.getId().substring(0, 8),
-                agent.getStageAgeTicks(),
-                tempC);
+//            SimulationLogger.info(
+//                "[DEATH] %s died as PUPA at stage age %d, temp=%.2fC",
+//                agent.getId().substring(0, 8),
+//                agent.getStageAgeTicks(),
+//                tempC);
         }
     }
 
@@ -248,9 +248,9 @@ public class LifecycleModel {
         double pDie = mortalityProb(mA);
         if (rng.nextDouble() < pDie) {
             agent.setAlive(false);
-            SimulationLogger.info(
-                "[DEATH] %s died as ADULT at age %d, temp=%.2fC",
-                agent.getId(), agent.getAge(), celsius(tempKelvin));
+//            SimulationLogger.info(
+//                "[DEATH] %s died as ADULT at age %d, temp=%.2fC",
+//                agent.getId(), agent.getAge(), celsius(tempKelvin));
         }
     }
 

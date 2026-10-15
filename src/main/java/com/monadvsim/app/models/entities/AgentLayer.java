@@ -294,11 +294,11 @@ public class AgentLayer extends Layer {
 
                         // Stage-specific max age check using stageAgeTicks
                         if (la.getStageAgeTicks() > la.getMaxAgeForStage()) {
-                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
-                                la.getId().substring(0, 8), 
-                                la.getStage(), 
-                                la.getStageAgeTicks(), 
-                                la.getMaxAgeForStage());
+//                            SimulationLogger.info("[DEATH] %s died of old age as %s at stage age %d (max %d)",
+//                                la.getId().substring(0, 8), 
+//                                la.getStage(), 
+//                                la.getStageAgeTicks(), 
+//                                la.getMaxAgeForStage());
                             la.setAlive(false);
                             lifecycleManager.scheduleDeath(agent.getId());
                             deathsThisTick.incrementAndGet();

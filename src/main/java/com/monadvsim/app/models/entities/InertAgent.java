@@ -58,31 +58,23 @@ public class InertAgent extends Agent {
      */
     public int applyDensityDependentMortality() {
         int currentLarvae = larvalCount.get();
-        if (currentLarvae <= params.max_larvae_capacity) {
-            return 0;
-        }
-        int excess = currentLarvae - params.max_larvae_capacity;
-        int toKill = (int) (excess * params.mortality_intensity);
+        if (currentLarvae <= params.max_larvae_capacity) return 0;
+
+        int excess  = currentLarvae - params.max_larvae_capacity;
+        int toKillRaw = (int) (excess * params.mortality_intensity);
         int maxKill = Math.max(0, currentLarvae - params.min_larvae_retain);
-        toKill = Math.min(toKill, maxKill);
+        final int toKill = Math.min(toKillRaw, maxKill);   // final, never reassigned
 
         if (toKill > 0) {
-            // Create a final copy for the lambda expression
-            final int killCount = toKill;
-
-            // Update the larval count (thread-safe)
-            int newCount = larvalCount.updateAndGet(current -> Math.max(0, current - killCount));
-
-            // Log the mortality event (optional, for debugging)
-            if (killCount > 10) {
-                SimulationLogger.fine("[TANK] Density-dependent mortality: killed %d larvae (was: %d, now: %d), capacity=%.1f", 
-                    killCount, currentLarvae, newCount, getCapacity());
+            int newCount = larvalCount.updateAndGet(c -> Math.max(0, c - toKill));
+            if (toKill > 10) {
+                SimulationLogger.fine("[TANK] Density mortality: killed %d (was %d, now %d)",
+                    toKill, currentLarvae, newCount);
             }
-            return killCount;
+            return toKill;
         }
         return 0;
     }
-    
 
     public InertAgent(double x, double y) {
         super(x, y);
@@ -217,7 +209,7 @@ public class InertAgent extends Agent {
      */
     public void updateCapacityFromVolume() {
         double vol = waterVolume.get();
-        double maxCap = 5000.0;   // maximum larvae when full
+        double maxCap = (params != null) ? params.max_larvae_capacity : DEFAULT_MAX_LARVAE_CAPACITY;
         double newCap = maxCap * (vol / 100.0);
         // Allow capacity to become 0 when water is 0
         capacity.set(Math.max(0.0, newCap));

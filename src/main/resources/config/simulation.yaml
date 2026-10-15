@@ -29,7 +29,7 @@
 
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 5000
+  totalTicks: 3000
   tickMinutes: 15
 
 files:
@@ -70,8 +70,8 @@ species:
   adult_mort_b3: 0.003908
   adult_mortality_per_day: 0.1198
   sex_ratio: 0.5
-  host_carrying_capacity_base: 2.0
-  fecundity_scale: 5.0
+  host_carrying_capacity_base: 1.0
+  fecundity_scale: 0.5
 
 # ================================================================
 # DATA LAYER DEFINITIONS
@@ -186,12 +186,12 @@ agentLayers:
 # InertAgent (Water Tank) Configuration
 # ================================================================
 inert_agents:
-  max_larvae_capacity: 1000
+  max_larvae_capacity: 300
   mortality_intensity: 0.4
   min_larvae_retain: 20
   max_water_volume: 100.0
   hatch_fraction_min: 0.1
-  hatch_fraction_max: 0.6
+  hatch_fraction_max: 0.3
 
 # ================================================================
 # SEEDING CONFIGURATION
@@ -200,8 +200,8 @@ seeding:
   seedAcrossFullStudySite: true
   useOccurrencePoints: false
 
-  tanksToSeed: 500
-  mosquitoesToSeed: 5000
+  tanksToSeed: 100
+  mosquitoesToSeed: 1000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
 
@@ -235,4 +235,4 @@ project:
   maxAgeMultiplierEgg: 0.05
   maxAgeMultiplierLarva: 0.45
   maxAgeMultiplierPupa: 0.15
-  maxAgeMultiplierAdult: 0.50
+  maxAgeMultiplierAdult: 0.35

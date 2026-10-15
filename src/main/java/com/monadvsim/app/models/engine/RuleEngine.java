@@ -466,9 +466,9 @@ public class RuleEngine {
                     if (d < bestD) { bestD = d; tank = t; }
                 }
             }
-            SimulationLogger.info("[NOLAY] %s gravid at (%.5f,%.5f) target=%s",
-                la.getId().substring(0, 8), la.getX(), la.getY(),
-                la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
+//            SimulationLogger.info("[NOLAY] %s gravid at (%.5f,%.5f) target=%s",
+//                la.getId().substring(0, 8), la.getX(), la.getY(),
+//                la.getTargetTankId() != null ? la.getTargetTankId().substring(0, 8) : "null");
             return;
         }
         
@@ -485,10 +485,10 @@ public class RuleEngine {
         tank.addEggs(eggs);
         tank.updateCapacityFromVolume();
         
-        SimulationLogger.info("[LAY] %s laid %d eggs @ (%.5f,%.5f) tankWater=%.1f tankLarvae=%d",
-            la.getId().substring(0, 8), eggs, la.getX(), la.getY(),
-            tank.getWaterVolume(), tank.getLarvalCount()
-        );
+//        SimulationLogger.info("[LAY] %s laid %d eggs @ (%.5f,%.5f) tankWater=%.1f tankLarvae=%d",
+//            la.getId().substring(0, 8), eggs, la.getX(), la.getY(),
+//            tank.getWaterVolume(), tank.getLarvalCount()
+//        );
 
         la.setGravid(false);
         la.clearTargetTank();
