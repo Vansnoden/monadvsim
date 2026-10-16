@@ -1,35 +1,38 @@
 # ================================================================
 # SIMULATION CONFIGURATION
+# Occurrence-based seeding + verified calibration parameters
 # ================================================================
 #
-# Notes on this revision:
-#   * `pupate` and `emerge` rules have been REMOVED from the
-#     Mosquitoes layer. Those actions call tryAdvanceFromLarva /
-#     tryAdvanceFromPupa, which accumulate degree-days. But
-#     AgentLayer.processAgentRules already calls those same methods
-#     unconditionally via its stage switch, so any larva/pupa that
-#     satisfied the rule condition would accumulate DD twice per
-#     tick, halving development time. Deleting the rules restores
-#     the correct (single) DD accumulation.
+# This config is the previously-verified calibration (which produced a
+# stable ~23k plateau at tick 2,999) with ONLY the seeding block changed
+# to drive placement from an occurrence CSV.
 #
-#   * The `dry_out` and tank `die` rules have been removed. In the
-#     current code there is no mechanism for a dried-out tank to
-#     become usable again, so removing tanks just erodes the
-#     breeding-site pool over the run.
+# Do not modify any other section without re-running the 3,000-tick
+# verification first.
 #
-#   * `thin_larvae` is kept but note it can only fire when
-#     InertAgent.larvalCount exceeds 0.8*capacity. Because
-#     larvalCount never decrements (see code bug below), this rule
-#     is effectively inert for now.
-#
-#   * `fecundity_scale: 5.0` and adult max age 15 days are the
-#     calibration values we landed on in Step 5. Change only one
-#     at a time if you need to retune.
+# Notes on the rule set:
+#   * `pupate` and `emerge` rules are absent on purpose. AgentLayer
+#     calls tryAdvanceFromLarva/tryAdvanceFromPupa unconditionally via
+#     its stage switch, so adding them as rules double-counts degree-day
+#     accumulation and halves development time.
+#   * `hatch_eggs` is not a real action — egg hatching is handled inside
+#     InertAgent.hatchEggs, invoked by AgentLayer.processAgentRules.
+#   * The tank `die` rule is removed — nothing recreates tanks once they
+#     are gone, so a die rule erodes the breeding-site pool across the
+#     run, biasing the population downward in a way that has nothing to
+#     do with mosquito biology.
+#   * `dry_out` is harmless (the tank stays in the layer and refills from
+#     precipitation via `evaporate`), but it is not needed either.
+#   * A single `lay_eggs` rule with the density ceiling folded in. Two
+#     copies of the rule with different conditions cause priority-based
+#     bypass of the tighter condition.
 # ================================================================
 
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 3000
+  # 3000 ticks = ~31 days, verification length.
+  # Change to 35040 for the year run once the verification is clean.
+  totalTicks: 35040
   tickMinutes: 15
 
 files:
@@ -119,14 +122,13 @@ tokens:
 # ================================================================
 agentLayers:
   - name: "Mosquitoes"
-    # No pupate/emerge rules here on purpose — those transitions are
-    # handled internally by AgentLayer.processAgentRules (stage switch).
-    # Adding them as rules double-counts degree-day accumulation.
     rules:
+      # Hard temperature kill — above/below thermal limits.
       - condition: "temperature < 273.15 || temperature > 318.15"
         action: "die"
         priority: 10
 
+      # Feeding / resting / gravid-state management.
       - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
         action: "feed"
         priority: 9
@@ -143,32 +145,34 @@ agentLayers:
         action: "get_gravid"
         priority: 8
 
+      # Refuge-seeking during rain or cool conditions.
       - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
         action: "rest_in_building"
         priority: 6
 
+      # Random walk for non-gravid adults.
       - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
         action: "move_random"
         priority: 3
 
+      # Fallback rest.
       - condition: "true"
         action: "rest"
         priority: 2
 
+      # Gravid behaviour: seek tank, then lay. The density ceiling that
+      # was previously expressed as a separate rule is folded into the
+      # single lay_eggs condition here so priority ordering cannot bypass
+      # it.
       - condition: "gravid && alive"
         action: "seek_tank"
         priority: 90
 
-      - condition: "gravid && alive"
+      - condition: "gravid && alive && temperature > 280.15 && getTotalLarvae < 30000"
         action: "lay_eggs"
         priority: 80
 
   - name: "WaterTanks"
-    # Note: the `dry_out` rule and the `die` rule have been removed.
-    # In the current codebase nothing restores water to a dried-out
-    # tank, so removing tanks just erodes the breeding-site pool.
-    # Tanks persist through dry spells and refill when precipitation
-    # arrives (handled internally by RuleEngine.executeEvaporate).
     rules:
       - condition: "true"
         action: "evaporate"
@@ -194,22 +198,38 @@ inert_agents:
   hatch_fraction_max: 0.3
 
 # ================================================================
-# SEEDING CONFIGURATION
+# SEEDING CONFIGURATION — occurrence-driven
 # ================================================================
 seeding:
-  seedAcrossFullStudySite: true
-  useOccurrencePoints: false
+  # Both flags must be set this way to reach seedFromOccurrences().
+  # seedAcrossFullStudySite true short-circuits to uniform seeding.
+  # useOccurrencePoints false also short-circuits to uniform seeding.
+  seedAcrossFullStudySite: false
+  useOccurrencePoints: true
+
+  # CSV with header: longitude,latitude,year,month,day,source
+  # Only the first three columns are strictly required; month/day
+  # default to 1, source defaults to "".
+  occurrenceFilePath: "prepared_data/somali/occurrences.csv"
+
+  # Year filter applied after loading. If your CSV only has records
+  # outside this window, the loader reports 0 points and the seeding
+  # path falls back to uniform placement silently — check the log.
+  occurrenceYearStart: 2020
+  occurrenceYearEnd: 2023
+
+  # Radius around each occurrence point where tanks and mosquitoes are
+  # placed. 5 km default; tighten to 2 km for denser clustering.
+  occurrenceBufferKm: 5.0
 
   tanksToSeed: 100
   mosquitoesToSeed: 1000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
 
-  # ----------------------------------------------------------------
-  # Pluggable habitat suitability — drives stochastic tank & mosquito
-  # placement. When you later have trustworthy building-density data,
-  # simply set its weight to a non-zero value. No code changes needed.
-  # ----------------------------------------------------------------
+  # Weighted raster sampler used to place tanks within the buffer
+  # footprint. Mosquitoes are placed uniformly within each point's
+  # buffer by design (concentrated near known habitat).
   tankSuitability:
     floorSuitability: 0.05
     stochasticJitter: 0.30

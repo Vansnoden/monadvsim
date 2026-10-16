@@ -1,48 +1,107 @@
-# Simulation configuration for Anopheles stephensi in Dire Dawa
+# ================================================================
+# SIMULATION CONFIGURATION
+# ================================================================
+#
+# Notes on this revision:
+#   * `pupate` and `emerge` rules have been REMOVED from the
+#     Mosquitoes layer. Those actions call tryAdvanceFromLarva /
+#     tryAdvanceFromPupa, which accumulate degree-days. But
+#     AgentLayer.processAgentRules already calls those same methods
+#     unconditionally via its stage switch, so any larva/pupa that
+#     satisfied the rule condition would accumulate DD twice per
+#     tick, halving development time. Deleting the rules restores
+#     the correct (single) DD accumulation.
+#
+#   * The `dry_out` and tank `die` rules have been removed. In the
+#     current code there is no mechanism for a dried-out tank to
+#     become usable again, so removing tanks just erodes the
+#     breeding-site pool over the run.
+#
+#   * `thin_larvae` is kept but note it can only fire when
+#     InertAgent.larvalCount exceeds 0.8*capacity. Because
+#     larvalCount never decrements (see code bug below), this rule
+#     is effectively inert for now.
+#
+#   * `fecundity_scale: 5.0` and adult max age 15 days are the
+#     calibration values we landed on in Step 5. Change only one
+#     at a time if you need to retune.
+# ================================================================
 
 time:
   startDateTime: "2020-01-01T00:00:00"
-  totalTicks: 34560      # 12 * 30 days * 24 * 4 (15‑min ticks) # 5760 --
+  totalTicks: 3000
   tickMinutes: 15
 
 files:
-  studySite: "prepared_data/dire_dawa/dire_dawa.qgz"   # or .shp – the bounding box will be read from this file
-  elevation: "prepared_data/dire_dawa/Dire_Dawa_Elevation_10m.tif"
-  buildings: "prepared_data/dire_dawa/Dire_Dawa_Building_Density_10m.tif"
-  population: "prepared_data/dire_dawa/Dire_Dawa_Population_10m.tif"
-  climateNetCDF: "prepared_data/dire_dawa/2020_data/2020_data_Dire_Dawa_ETDD.nc"
+  studySite: "prepared_data/somali/somali.shp"
 
-# Spatial registry grid cell size (degrees)
 gridCellSizeDegrees: 0.001
 
+# ================================================================
+# SPECIES PARAMETERS
+# ================================================================
 species:
-  fecundity_a: 0.378
-  fecundity_b: 0.173
-  fecundity_Tmax: 40.0
-  fecundity_c: 2.97
-  egg_dev_a: -0.0009
-  egg_dev_b: 0.048
-  egg_dev_c: -0.345
-  larva_dev_a: -0.0007
-  larva_dev_b: 0.039
-  larva_dev_c: -0.32
-  pupa_dev_a: -0.0005
-  pupa_dev_b: 0.026
-  pupa_dev_c: -0.2
-  egg_survival_amp: 1.01
-  egg_survival_mean: 24.5
-  egg_survival_sigma: 4.8
-  larva_survival_amp: 0.95
-  larva_survival_mean: 27.0
-  larva_survival_sigma: 3.5
-  pupa_survival_amp: 0.93
-  pupa_survival_mean: 26.8
-  pupa_survival_sigma: 3.8
-  adult_mort_a: -0.00065
-  adult_mort_b: 0.0364
-  adult_mort_c: -0.4882
+  egg_dev_rho: 0.005
+  egg_dev_k: 39.20841161317061
+  egg_dev_Delta: 2.0
+  egg_dev_lambda: -0.854916887158478
+  larva_dev_a: 2.7054689312186438e-05
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
+  larva_dev_m: 1.663077023745059
+  pupa_dev_rho: 0.005115463305281753
+  pupa_dev_k: 39.940257466039114
+  pupa_dev_Delta: 2.0
+  pupa_dev_lambda: -0.9081661833839708
+  egg_mort_b1: 3.572876
+  egg_mort_b2: -0.323474
+  egg_mort_b3: 0.004941
+  larva_mort_b1: 2.0
+  larva_mort_b2: -0.7395036647759831
+  larva_mort_b3: 0.017491023810106067
+  pupa_mort_b1: 5.882576
+  pupa_mort_b2: -0.578528
+  pupa_mort_b3: 0.009458
+  fecundity_rmax: 1.6021994175985133
+  fecundity_Topt: 30.634033187663604
+  fecundity_c: -0.0052723551194922445
+  adult_mort_b1: -1.4775
+  adult_mort_b2: -0.1377
+  adult_mort_b3: 0.003908
+  adult_mortality_per_day: 0.1198
+  sex_ratio: 0.5
+  host_carrying_capacity_base: 1.0
+  fecundity_scale: 0.5
 
-# Tokens for rule engine: each maps a token (used in rules) to a layer name
+# ================================================================
+# DATA LAYER DEFINITIONS
+# ================================================================
+layers:
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+# ================================================================
+# TOKENS FOR RULE ENGINE
+# ================================================================
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -54,58 +113,126 @@ tokens:
     layer: "Buildings"
   - token: "elevation"
     layer: "Elevation"
-  - token: "age"
-    layer: "Mosquitoes"
-  - token: "stage"
-    layer: "Mosquitoes"
-  - token: "gravid"
-    layer: "Mosquitoes"
 
+# ================================================================
+# AGENT LAYERS
+# ================================================================
 agentLayers:
   - name: "Mosquitoes"
+    # No pupate/emerge rules here on purpose — those transitions are
+    # handled internally by AgentLayer.processAgentRules (stage switch).
+    # Adding them as rules double-counts degree-day accumulation.
     rules:
-      - condition: "agent.stage == 'ADULT' && agent.energy < 0.5"
-        action: "feed"
-        priority: 5
-      - condition: "agent.stage == 'ADULT' && agent.energy > 0.3"
-        action: "get_gravid"
-        priority: 4
-      - condition: "agent.gravid == true && temperature > 293.15 && building_density > 0.1 && population > 0.05"
-        action: "lay_eggs"
-        priority: 6
-      - condition: "temperature < 283.15 || temperature > 313.15"
+      - condition: "temperature < 273.15 || temperature > 318.15"
         action: "die"
         priority: 10
-      - condition: "agent.stage == 'ADULT' && precipitation > 0.005 && building_density > 0.1 && !agent.resting"
+
+      - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
+        action: "feed"
+        priority: 9
+
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
+        action: "rest"
+        priority: 8
+
+      - condition: "stage == 'ADULT' && gravid && energy < 0.8"
+        action: "feed"
+        priority: 8
+
+      - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
+        action: "get_gravid"
+        priority: 8
+
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
         action: "rest_in_building"
-        priority: 4
-      # ... add all other behavioural rules here ...
-  - name: "WaterTanks"
-    rules:
-      - condition: "agent.waterVolume <= 5 && agent.waterVolume > 0"
-        action: "dry_out"
+        priority: 6
+
+      - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
+        action: "move_random"
         priority: 3
-      - condition: "temperature < 273.15 && agent.waterVolume > 0"
-        action: "freeze"
+
+      - condition: "true"
+        action: "rest"
         priority: 2
-      - condition: "temperature > 303.15 && precipitation < 0.001"
+
+      - condition: "gravid && alive"
+        action: "seek_tank"
+        priority: 90
+
+      - condition: "gravid && alive"
+        action: "lay_eggs"
+        priority: 80
+
+  - name: "WaterTanks"
+    # Note: the `dry_out` rule and the `die` rule have been removed.
+    # In the current codebase nothing restores water to a dried-out
+    # tank, so removing tanks just erodes the breeding-site pool.
+    # Tanks persist through dry spells and refill when precipitation
+    # arrives (handled internally by RuleEngine.executeEvaporate).
+    rules:
+      - condition: "true"
         action: "evaporate"
+        priority: 1
+
+      - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
+        action: "thin_larvae"
         priority: 5
-      - condition: "agent.waterVolume == 0 && agent.eggCount == 0 && agent.larvalCount == 0"
-        action: "die"
-        priority: 4
 
+      - condition: "temperature < 273.15 && waterVolume > 0"
+        action: "freeze"
+        priority: 3
+
+# ================================================================
+# InertAgent (Water Tank) Configuration
+# ================================================================
+inert_agents:
+  max_larvae_capacity: 300
+  mortality_intensity: 0.4
+  min_larvae_retain: 20
+  max_water_volume: 100.0
+  hatch_fraction_min: 0.1
+  hatch_fraction_max: 0.3
+
+# ================================================================
+# SEEDING CONFIGURATION
+# ================================================================
 seeding:
-  tanksToSeed: 10000
-  mosquitoesToSeed: 250000
-  habitatGridSizeX: 50
-  habitatGridSizeY: 50
-  tankBuildingThreshold: 0.15
-  tankPopulationThreshold: 0.05
-  mosquitoBuildingThreshold: 0.05
-  mosquitoPopulationThreshold: 0.02
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
 
+  tanksToSeed: 100
+  mosquitoesToSeed: 1000
+  habitatGridSizeX: 100
+  habitatGridSizeY: 100
+
+  # ----------------------------------------------------------------
+  # Pluggable habitat suitability — drives stochastic tank & mosquito
+  # placement. When you later have trustworthy building-density data,
+  # simply set its weight to a non-zero value. No code changes needed.
+  # ----------------------------------------------------------------
+  tankSuitability:
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
+
+    layers:
+      - name: Population
+        weight: 1.0
+        cap:    100.0
+        power:  1.0
+
+      - name: Buildings
+        weight: 0.0
+        cap:    1.0
+        power:  1.0
+
+# ================================================================
+# PROJECT DEFAULTS
+# ================================================================
 project:
-  defaultAgentSearchRadius: 0.0005    # ~55 m
-  defaultAgentStep: 0.00005           # ~5.5 m per tick
-  defaultMaxAgentAge: 1920            # 20 days * 96 ticks/day
+  defaultAgentSearchRadius: 0.02
+  defaultAgentStep: 0.0005
+  defaultMaxAgentAge: 2880
+  maxAgeMultiplierEgg: 0.05
+  maxAgeMultiplierLarva: 0.45
+  maxAgeMultiplierPupa: 0.15
+  maxAgeMultiplierAdult: 0.35

@@ -192,20 +192,42 @@ inert_agents:
 # SEEDING CONFIGURATION
 # ================================================================
 seeding:
-  seedAcrossFullStudySite: true
-  useOccurrencePoints: false
-  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
-  occurrenceYearStart: 2016
+  seedAcrossFullStudySite: false
+  useOccurrencePoints: true
+
+  # Path to your occurrence CSV. Relative to the working directory when the
+  # JVM is launched, or absolute. The App resolves it as-is.
+  occurrenceFilePath: "prepared_data/somali/occurrences.csv"
+
+  # Year filter applied after loading. Use the same range as your study
+  # period, or widen it if your file has sparse per-year coverage.
+  occurrenceYearStart: 2020
   occurrenceYearEnd: 2023
-  occurrenceBufferKm: 0.05
-  tanksToSeed: 5000
-  mosquitoesToSeed: 20000
+
+  # Radius around each occurrence point where tanks and mosquitoes are
+  # allowed to be seeded. 5 km is a reasonable default; tighten to 2 km
+  # if your points are dense and you want tighter clustering.
+  occurrenceBufferKm: 5.0
+
+  tanksToSeed: 100
+  mosquitoesToSeed: 1000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
-  tankBuildingThreshold: 0.15
-  tankPopulationThreshold: 0.05
-  mosquitoBuildingThreshold: 0.05
-  mosquitoPopulationThreshold: 0.02
+
+  tankSuitability:
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
+
+    layers:
+      - name: Population
+        weight: 1.0
+        cap:    100.0
+        power:  1.0
+
+      - name: Buildings
+        weight: 0.0
+        cap:    1.0
+        power:  1.0
 
 # ================================================================
 # PROJECT DEFAULTS

@@ -1,0 +1,258 @@
+# ================================================================
+# SIMULATION CONFIGURATION
+# Occurrence-based seeding + verified calibration parameters
+# ================================================================
+#
+# This config is the previously-verified calibration (which produced a
+# stable ~23k plateau at tick 2,999) with ONLY the seeding block changed
+# to drive placement from an occurrence CSV.
+#
+# Do not modify any other section without re-running the 3,000-tick
+# verification first.
+#
+# Notes on the rule set:
+#   * `pupate` and `emerge` rules are absent on purpose. AgentLayer
+#     calls tryAdvanceFromLarva/tryAdvanceFromPupa unconditionally via
+#     its stage switch, so adding them as rules double-counts degree-day
+#     accumulation and halves development time.
+#   * `hatch_eggs` is not a real action — egg hatching is handled inside
+#     InertAgent.hatchEggs, invoked by AgentLayer.processAgentRules.
+#   * The tank `die` rule is removed — nothing recreates tanks once they
+#     are gone, so a die rule erodes the breeding-site pool across the
+#     run, biasing the population downward in a way that has nothing to
+#     do with mosquito biology.
+#   * `dry_out` is harmless (the tank stays in the layer and refills from
+#     precipitation via `evaporate`), but it is not needed either.
+#   * A single `lay_eggs` rule with the density ceiling folded in. Two
+#     copies of the rule with different conditions cause priority-based
+#     bypass of the tighter condition.
+# ================================================================
+
+time:
+  startDateTime: "2020-01-01T00:00:00"
+  # 3000 ticks = ~31 days, verification length.
+  # Change to 35040 for the year run once the verification is clean.
+  totalTicks: 3000
+  tickMinutes: 15
+
+files:
+  studySite: "prepared_data/somali/somali.shp"
+
+gridCellSizeDegrees: 0.001
+
+# ================================================================
+# SPECIES PARAMETERS
+# ================================================================
+species:
+  egg_dev_rho: 0.005
+  egg_dev_k: 39.20841161317061
+  egg_dev_Delta: 2.0
+  egg_dev_lambda: -0.854916887158478
+  larva_dev_a: 2.7054689312186438e-05
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
+  larva_dev_m: 1.663077023745059
+  pupa_dev_rho: 0.005115463305281753
+  pupa_dev_k: 39.940257466039114
+  pupa_dev_Delta: 2.0
+  pupa_dev_lambda: -0.9081661833839708
+  egg_mort_b1: 3.572876
+  egg_mort_b2: -0.323474
+  egg_mort_b3: 0.004941
+  larva_mort_b1: 2.0
+  larva_mort_b2: -0.7395036647759831
+  larva_mort_b3: 0.017491023810106067
+  pupa_mort_b1: 5.882576
+  pupa_mort_b2: -0.578528
+  pupa_mort_b3: 0.009458
+  fecundity_rmax: 1.6021994175985133
+  fecundity_Topt: 30.634033187663604
+  fecundity_c: -0.0052723551194922445
+  adult_mort_b1: -1.4775
+  adult_mort_b2: -0.1377
+  adult_mort_b3: 0.003908
+  adult_mortality_per_day: 0.1198
+  sex_ratio: 0.5
+  host_carrying_capacity_base: 1.0
+  fecundity_scale: 0.5
+
+# ================================================================
+# DATA LAYER DEFINITIONS
+# ================================================================
+layers:
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+# ================================================================
+# TOKENS FOR RULE ENGINE
+# ================================================================
+tokens:
+  - token: "temperature"
+    layer: "t2m"
+  - token: "precipitation"
+    layer: "tp"
+  - token: "population"
+    layer: "Population"
+  - token: "building_density"
+    layer: "Buildings"
+  - token: "elevation"
+    layer: "Elevation"
+
+# ================================================================
+# AGENT LAYERS
+# ================================================================
+agentLayers:
+  - name: "Mosquitoes"
+    rules:
+      # Hard temperature kill — above/below thermal limits.
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
+
+      # Feeding / resting / gravid-state management.
+      - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
+        action: "feed"
+        priority: 9
+
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
+        action: "rest"
+        priority: 8
+
+      - condition: "stage == 'ADULT' && gravid && energy < 0.8"
+        action: "feed"
+        priority: 8
+
+      - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
+        action: "get_gravid"
+        priority: 8
+
+      # Refuge-seeking during rain or cool conditions.
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
+        action: "rest_in_building"
+        priority: 6
+
+      # Random walk for non-gravid adults.
+      - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
+        action: "move_random"
+        priority: 3
+
+      # Fallback rest.
+      - condition: "true"
+        action: "rest"
+        priority: 2
+
+      # Gravid behaviour: seek tank, then lay. The density ceiling that
+      # was previously expressed as a separate rule is folded into the
+      # single lay_eggs condition here so priority ordering cannot bypass
+      # it.
+      - condition: "gravid && alive"
+        action: "seek_tank"
+        priority: 90
+
+      - condition: "gravid && alive && temperature > 280.15 && getTotalLarvae < 30000"
+        action: "lay_eggs"
+        priority: 80
+
+  - name: "WaterTanks"
+    rules:
+      - condition: "true"
+        action: "evaporate"
+        priority: 1
+
+      - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
+        action: "thin_larvae"
+        priority: 5
+
+      - condition: "temperature < 273.15 && waterVolume > 0"
+        action: "freeze"
+        priority: 3
+
+# ================================================================
+# InertAgent (Water Tank) Configuration
+# ================================================================
+inert_agents:
+  max_larvae_capacity: 300
+  mortality_intensity: 0.4
+  min_larvae_retain: 20
+  max_water_volume: 100.0
+  hatch_fraction_min: 0.1
+  hatch_fraction_max: 0.3
+
+# ================================================================
+# SEEDING CONFIGURATION — occurrence-driven
+# ================================================================
+seeding:
+  # Both flags must be set this way to reach seedFromOccurrences().
+  # seedAcrossFullStudySite true short-circuits to uniform seeding.
+  # useOccurrencePoints false also short-circuits to uniform seeding.
+  seedAcrossFullStudySite: false
+  useOccurrencePoints: true
+
+  # CSV with header: longitude,latitude,year,month,day,source
+  # Only the first three columns are strictly required; month/day
+  # default to 1, source defaults to "".
+  occurrenceFilePath: "prepared_data/somali/occurrences.csv"
+
+  # Year filter applied after loading. If your CSV only has records
+  # outside this window, the loader reports 0 points and the seeding
+  # path falls back to uniform placement silently — check the log.
+  occurrenceYearStart: 2020
+  occurrenceYearEnd: 2023
+
+  # Radius around each occurrence point where tanks and mosquitoes are
+  # placed. 5 km default; tighten to 2 km for denser clustering.
+  occurrenceBufferKm: 5.0
+
+  tanksToSeed: 100
+  mosquitoesToSeed: 1000
+  habitatGridSizeX: 100
+  habitatGridSizeY: 100
+
+  # Weighted raster sampler used to place tanks within the buffer
+  # footprint. Mosquitoes are placed uniformly within each point's
+  # buffer by design (concentrated near known habitat).
+  tankSuitability:
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
+
+    layers:
+      - name: Population
+        weight: 1.0
+        cap:    100.0
+        power:  1.0
+
+      - name: Buildings
+        weight: 0.0
+        cap:    1.0
+        power:  1.0
+
+# ================================================================
+# PROJECT DEFAULTS
+# ================================================================
+project:
+  defaultAgentSearchRadius: 0.02
+  defaultAgentStep: 0.0005
+  defaultMaxAgentAge: 2880
+  maxAgeMultiplierEgg: 0.05
+  maxAgeMultiplierLarva: 0.45
+  maxAgeMultiplierPupa: 0.15
+  maxAgeMultiplierAdult: 0.35
