@@ -174,7 +174,7 @@ public class SimulationEngine implements Runnable {
         long tickDuration = System.nanoTime() - tickStart;
         updatePerformanceMetrics(tickDuration);
 
-        if (timeManager.getTickCount() % 100 == 0) {
+        if (timeManager.getTickCount() % 500 == 0) { //every 500 ticks -> change if needed to a 100
             exportPeriodicSnapshot();
             printExportStatus();
         }

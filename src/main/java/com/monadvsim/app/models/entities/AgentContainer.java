@@ -81,7 +81,7 @@ public class AgentContainer {
     // thread safe operations
     public boolean addAgent(Agent agent) {
         newAgents.add(agent);
-        size.incrementAndGet();
+//        size.incrementAndGet();
         return true;
     }
     
@@ -90,7 +90,7 @@ public class AgentContainer {
     public void addAgents(Collection<Agent> agents) {
         synchronized (newAgents) {
             newAgents.addAll(agents);
-            size.addAndGet(agents.size());
+//            size.addAndGet(agents.size());
         }
     }
     
@@ -159,6 +159,7 @@ public class AgentContainer {
                 partitions.get(partitionIndex).remove(agent);
                 agentRegistry.remove(agent.getId());
                 agentPartitionMap.remove(agent.getId());
+                size.decrementAndGet();
             }
         } finally {
             registryLock.readLock().unlock();
@@ -265,7 +266,7 @@ public class AgentContainer {
     // Getters
     public int size() {
         // Apply pending operations to get accurate count
-        applyPendingOperations();
+//        applyPendingOperations();
         return Math.max(0, size.get());
     }
     
