@@ -26,3 +26,4 @@ buildNumber.properties
 results/
 logs/
 .Rproj.user
+mc_results/
