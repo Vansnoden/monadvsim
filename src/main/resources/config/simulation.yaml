@@ -204,13 +204,13 @@ seeding:
   # Both flags must be set this way to reach seedFromOccurrences().
   # seedAcrossFullStudySite true short-circuits to uniform seeding.
   # useOccurrencePoints false also short-circuits to uniform seeding.
-  seedAcrossFullStudySite: false
-  useOccurrencePoints: true
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
 
   # CSV with header: longitude,latitude,year,month,day,source
   # Only the first three columns are strictly required; month/day
   # default to 1, source defaults to "".
-  occurrenceFilePath: "prepared_data/somali/occurrences.csv"
+  #  occurrenceFilePath: "prepared_data/somali/occurrences.csv"
 
   # Year filter applied after loading. If your CSV only has records
   # outside this window, the loader reports 0 points and the seeding
@@ -222,8 +222,8 @@ seeding:
   # placed. 5 km default; tighten to 2 km for denser clustering.
   occurrenceBufferKm: 5.0
 
-  tanksToSeed: 100
-  mosquitoesToSeed: 1000
+  tanksToSeed: 200
+  mosquitoesToSeed: 5000
   habitatGridSizeX: 100
   habitatGridSizeY: 100
 

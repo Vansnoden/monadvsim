@@ -1,127 +1,156 @@
 #!/usr/bin/env python3
-# run_monte_carlo.py
-# Monte Carlo simulation runner for mosquito ABM with parameter variation
+# run_monte_carlo.py — Monte Carlo / sensitivity runner for monadvsim.
 #
-# Usage:
-#   python run_monte_carlo.py [--runs N] [--seed S] [--output DIR]
+# Revised for uniform full-study-site seeding and short (default 500-tick) runs.
+#
+# Differences vs. the previous version:
+#   * DEFAULT_TICKS = 500 (~5.2 simulated days at 15-min ticks). `--ticks` is
+#     now the primary duration flag; `--days` is kept for compatibility and
+#     converted to ticks (days × 96).
+#   * DEFAULT_TIMEOUT_SECONDS = 1800 (30 min per run) — 500-tick runs finish
+#     in ~5 minutes at realistic agent counts.
+#   * DEFAULT_HEAP_GB = 1 — at 500 ticks the population peaks well below
+#     ~15k agents, so 1 GB is comfortable.
+#   * Seeding is uniform across the full study site (`seedAcrossFullStudySite:
+#     true`, `useOccurrencePoints: false`). No occurrence file, year filter,
+#     or buffer appears in the YAML template.
+#   * `tanks_to_seed` base 200 / `mosquitoes_to_seed` base 5000 — larger than
+#     the occurrence-seeded bases because uniform seeding spreads agents
+#     across the whole study area.
+#   * Dormant Brière / Sharpe–Schoolfield development parameters removed from
+#     PARAMETER_RANGES — they are not called during stage transitions in the
+#     current degree-day implementation, so varying them has no effect.
+#   * Deterministic per-(seed, parameter) RNG via SHA-256, so re-running with
+#     `--seed 42` produces byte-identical YAML across processes.
+#   * `--parallel N` runs N JVMs concurrently; `--oat-replicates N` replicates
+#     each one-at-a-time factor cell with independent seeds.
+#   * One-at-a-time mode without `--oat-factors` uses each parameter's own
+#     `sensitivity_range` (e.g. ±20% mortality, ±50% movement distance).
+#
+# Scientific caveat: 500 ticks = ~5.2 simulated days. This is a screening
+# window, not a full validation window. Seasonal signal is present but small;
+# Boyce Index values reflect a non-equilibrium population distribution.
 
-import os
-import subprocess
-import glob
-import time
 import argparse
-import sys
-import json
 import csv
-import yaml
-from datetime import datetime
-from pathlib import Path
-import re
-import threading
+import glob
+import hashlib
+import json
+import os
 import random
-import numpy as np
-from typing import Dict, List, Optional, Tuple, Any
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+import yaml
 
 # ======================================================================
 # CONFIGURATION
 # ======================================================================
 
-DEFAULT_OUTPUT_DIR = "/mnt/monadworld/projects/phd/monte_carlo_results"
+DEFAULT_OUTPUT_DIR = "./monte_carlo_results"
 DEFAULT_BASE_SEED = 42
 DEFAULT_RUNS = 30
-TIMEOUT_SECONDS = 7200  # 2 hours per run
+DEFAULT_TICKS = 500
+DEFAULT_TIMEOUT_SECONDS = 1800
+DEFAULT_HEAP_GB = 1
+DEFAULT_PARALLEL = 1
 
 JAR_PATHS = [
     "target/monadvsim-1.0-SNAPSHOT.jar",
     "target/monadvsim-1.0-SNAPSHOT-shaded.jar",
     "target/monadvsim.jar",
     "monadvsim-1.0-SNAPSHOT.jar",
-    "monadvsim.jar"
+    "monadvsim.jar",
 ]
 
+STUDY_SITE = "prepared_data/somali/somali.shp"
+TICKS_PER_DAY = 96
+
+SEASON_START_DATES = {
+    "Bega":   "2020-01-01T00:00:00",
+    "Belg":   "2020-04-01T00:00:00",
+    "Kiremt": "2020-07-01T00:00:00",
+    "Tesdey": "2020-10-01T00:00:00",
+}
+
+SEASON_WEIGHTS = {"Bega": 11, "Belg": 7, "Kiremt": 6, "Tesdey": 6}
+
 # ======================================================================
-# BASE YAML CONFIGURATION - MATCHING YOUR simulation.yaml
+# YAML TEMPLATE — uniform seeding, total_ticks substituted per run.
 # ======================================================================
 
 BASE_YAML_TEMPLATE = """# ================================================================
-# SIMULATION CONFIGURATION - Monte Carlo Run {run_id}
-# Seed: {seed}
+# SIMULATION CONFIGURATION — Monte Carlo run {run_id}
+# Seed: {seed}   Strategy: {strategy}
 # ================================================================
 
 time:
-  startDateTime: "2020-01-01T00:00:00"
+  startDateTime: "{start_date}"
   totalTicks: {total_ticks}
   tickMinutes: 15
 
 files:
-  studySite: "prepared_data/somali/somali.shp"
+  studySite: "{study_site}"
 
 gridCellSizeDegrees: {grid_cell_size}
 
-# ================================================================
-# SPECIES PARAMETERS
-# ================================================================
 species:
-  egg_dev_rho: {egg_dev_rho}
-  egg_dev_k: {egg_dev_k}
-  egg_dev_Delta: {egg_dev_Delta}
-  egg_dev_lambda: {egg_dev_lambda}
-  larva_dev_a: {larva_dev_a}
-  larva_dev_Tmin: {larva_dev_Tmin}
-  larva_dev_Tmax: {larva_dev_Tmax}
-  larva_dev_m: {larva_dev_m}
-  pupa_dev_rho: {pupa_dev_rho}
-  pupa_dev_k: {pupa_dev_k}
-  pupa_dev_Delta: {pupa_dev_Delta}
-  pupa_dev_lambda: {pupa_dev_lambda}
+  egg_dev_rho: 0.005
+  egg_dev_k: 39.20841161317061
+  egg_dev_Delta: 2.0
+  egg_dev_lambda: -0.854916887158478
+  larva_dev_a: 2.7054689312186438e-05
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
+  larva_dev_m: 1.663077023745059
+  pupa_dev_rho: 0.005115463305281753
+  pupa_dev_k: 39.940257466039114
+  pupa_dev_Delta: 2.0
+  pupa_dev_lambda: -0.9081661833839708
   egg_mort_b1: {egg_mort_b1}
-  egg_mort_b2: {egg_mort_b2}
-  egg_mort_b3: {egg_mort_b3}
+  egg_mort_b2: -0.323474
+  egg_mort_b3: 0.004941
   larva_mort_b1: {larva_mort_b1}
-  larva_mort_b2: {larva_mort_b2}
-  larva_mort_b3: {larva_mort_b3}
+  larva_mort_b2: -0.7395036647759831
+  larva_mort_b3: 0.017491023810106067
   pupa_mort_b1: {pupa_mort_b1}
-  pupa_mort_b2: {pupa_mort_b2}
-  pupa_mort_b3: {pupa_mort_b3}
+  pupa_mort_b2: -0.578528
+  pupa_mort_b3: 0.009458
   fecundity_rmax: {fecundity_rmax}
   fecundity_Topt: {fecundity_Topt}
   fecundity_c: {fecundity_c}
   adult_mort_b1: {adult_mort_b1}
-  adult_mort_b2: {adult_mort_b2}
-  adult_mort_b3: {adult_mort_b3}
-  adult_mortality_per_day: {adult_mortality_per_day}
+  adult_mort_b2: -0.1377
+  adult_mort_b3: 0.003908
+  adult_mortality_per_day: 0.1198
   sex_ratio: {sex_ratio}
   host_carrying_capacity_base: {host_carrying_capacity_base}
+  fecundity_scale: {fecundity_scale}
 
-# ================================================================
-# DATA LAYER DEFINITIONS
-# ================================================================
 layers:
   - name: Elevation
     filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
     type: raster
-
   - name: Buildings
     filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
     type: raster
-
   - name: Population
     filePath: prepared_data/somali/population_2020_1km.tif
     type: raster
-
   - name: t2m
     filePath: prepared_data/somali/merged_2020_2023.nc
     type: timeseries
     variable: t2m
-
   - name: tp
     filePath: prepared_data/somali/merged_2020_2023.nc
     type: timeseries
     variable: tp
 
-# ================================================================
-# TOKENS FOR RULE ENGINE
-# ================================================================
 tokens:
   - token: "temperature"
     layer: "t2m"
@@ -134,65 +163,37 @@ tokens:
   - token: "elevation"
     layer: "Elevation"
 
-# ================================================================
-# AGENT LAYERS WITH ENHANCED RULES
-# ================================================================
 agentLayers:
   - name: "Mosquitoes"
     rules:
-      - condition: "stage == 'LARVA' && stageAgeTick > 200 && energy > 0.4"
-        action: "pupate"
-        priority: 5
-
-      - condition: "stage == 'PUPA' && stageAgeTick > 150"
-        action: "emerge"
-        priority: 5
-
-      - condition: "stage == 'LARVA' && getTotalLarvae > 15000 && stageAgeTick > 100"
-        action: "pupate"
-        priority: 6
-
-      - condition: "stage == 'ADULT' && energy < {feeding_energy_threshold} && !resting"
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
+      - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
         action: "feed"
         priority: 9
-
-      - condition: "stage == 'ADULT' && energy < {resting_energy_threshold} && resting"
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
         action: "rest"
         priority: 8
-
       - condition: "stage == 'ADULT' && gravid && energy < 0.8"
         action: "feed"
         priority: 8
-
-      - condition: "stage == 'ADULT' && energy > {gravid_energy_threshold} && !gravid"
+      - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
         action: "get_gravid"
         priority: 8
-
-      - condition: "gravid == true && temperature > {egg_laying_temp_min} && getTotalLarvae < 30000"
-        action: "lay_eggs"
-        priority: 7
-
-      - condition: "temperature < {temp_min_survival} || temperature > {temp_max_survival}"
-        action: "die"
-        priority: 10
-
-      - condition: "(precipitation > {rain_threshold} || temperature < {shelter_temp_threshold}) && building_density > {building_density_threshold} && !resting"
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
         action: "rest_in_building"
         priority: 6
-
-      - condition: "stage == 'ADULT' && !resting && stageAgeTick < 2000"
+      - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
         action: "move_random"
         priority: 3
-
       - condition: "true"
         action: "rest"
         priority: 2
-
-      - condition: "agent.gravid && agent.alive"
+      - condition: "gravid && alive"
         action: "seek_tank"
         priority: 90
-
-      - condition: "agent.gravid && agent.alive"
+      - condition: "gravid && alive && temperature > 280.15 && getTotalLarvae < 30000"
         action: "lay_eggs"
         priority: 80
 
@@ -201,30 +202,13 @@ agentLayers:
       - condition: "true"
         action: "evaporate"
         priority: 1
-
       - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
         action: "thin_larvae"
         priority: 5
-
-      - condition: "eggCount > 150 && waterVolume > 15"
-        action: "hatch_eggs"
-        priority: 6
-
-      - condition: "waterVolume <= {dry_out_threshold} && waterVolume > 0"
-        action: "dry_out"
-        priority: 4
-
-      - condition: "temperature < {freeze_temp} && waterVolume > 0"
+      - condition: "temperature < 273.15 && waterVolume > 0"
         action: "freeze"
         priority: 3
 
-      - condition: "waterVolume == 0 && eggCount < 10 && larvalCount < 10"
-        action: "die"
-        priority: 4
-
-# ================================================================
-# InertAgent (Water Tank) Configuration
-# ================================================================
 inert_agents:
   max_larvae_capacity: {max_larvae_capacity}
   mortality_intensity: {mortality_intensity}
@@ -233,28 +217,26 @@ inert_agents:
   hatch_fraction_min: {hatch_fraction_min}
   hatch_fraction_max: {hatch_fraction_max}
 
-# ================================================================
-# SEEDING CONFIGURATION
-# ================================================================
 seeding:
-  seedAcrossFullStudySite: {seed_across_full_study_site}
-  useOccurrencePoints: {use_occurrence_points}
-  occurrenceFilePath: "prepared_data/ethiopia_occurrence/merged_observations.csv"
-  occurrenceYearStart: {occurrence_year_start}
-  occurrenceYearEnd: {occurrence_year_end}
-  occurrenceBufferKm: {occurrence_buffer_km}
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
   tanksToSeed: {tanks_to_seed}
   mosquitoesToSeed: {mosquitoes_to_seed}
-  habitatGridSizeX: {habitat_grid_x}
-  habitatGridSizeY: {habitat_grid_y}
-  tankBuildingThreshold: {tank_building_threshold}
-  tankPopulationThreshold: {tank_population_threshold}
-  mosquitoBuildingThreshold: {mosquito_building_threshold}
-  mosquitoPopulationThreshold: {mosquito_population_threshold}
+  habitatGridSizeX: 100
+  habitatGridSizeY: 100
+  tankSuitability:
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
+    layers:
+      - name: Population
+        weight: 1.0
+        cap: 100.0
+        power: 1.0
+      - name: Buildings
+        weight: 0.0
+        cap: 1.0
+        power: 1.0
 
-# ================================================================
-# PROJECT DEFAULTS
-# ================================================================
 project:
   defaultAgentSearchRadius: {agent_search_radius}
   defaultAgentStep: {agent_step}
@@ -265,1272 +247,674 @@ project:
   maxAgeMultiplierAdult: 0.35
 """
 
-
 # ======================================================================
-# PARAMETER RANGES - Matches your species parameters
+# PARAMETER RANGES
 # ======================================================================
 
 PARAMETER_RANGES = {
-    # --- Grid & Spatial ---
-    'grid_cell_size': {
+    'fecundity_scale': {
         'type': 'uniform',
-        'min': 0.0005,
-        'max': 0.002,
-        'base': 0.001,
-        'description': 'Grid cell size in degrees',
-        'category': 'spatial'
+        'base': 0.5,
+        'monte_carlo_min': 0.30, 'monte_carlo_max': 0.70,
+        'sensitivity_range': 0.20,
+        'description': 'Fecundity calibration scale',
+        'category': 'fecundity',
     },
-    
-    # --- Egg Development ---
-    'egg_dev_rho': {
-        'type': 'uniform',
-        'min': 0.0045,
-        'max': 0.0055,
-        'base': 0.0050,
-        'description': 'Egg development rate parameter',
-        'category': 'development'
-    },
-    'egg_dev_k': {
-        'type': 'uniform',
-        'min': 38.0,
-        'max': 40.5,
-        'base': 39.208,
-        'description': 'Egg development thermal constant',
-        'category': 'development'
-    },
-    'egg_dev_Delta': {
-        'type': 'uniform',
-        'min': 1.8,
-        'max': 2.2,
-        'base': 2.0,
-        'description': 'Egg development temperature sensitivity',
-        'category': 'development'
-    },
-    'egg_dev_lambda': {
-        'type': 'uniform',
-        'min': -0.95,
-        'max': -0.75,
-        'base': -0.855,
-        'description': 'Egg development minimum rate',
-        'category': 'development'
-    },
-    
-    # --- Larval Development ---
-    'larva_dev_a': {
-        'type': 'uniform',
-        'min': 2.5e-5,
-        'max': 2.9e-5,
-        'base': 2.705e-5,
-        'description': 'Larval development rate coefficient',
-        'category': 'development'
-    },
-    'larva_dev_Tmin': {
-        'type': 'uniform',
-        'min': 4.5,
-        'max': 5.8,
-        'base': 5.123,
-        'description': 'Larval development minimum temperature (°C)',
-        'category': 'development'
-    },
-    'larva_dev_Tmax': {
-        'type': 'uniform',
-        'min': 43.0,
-        'max': 46.0,
-        'base': 45.0,
-        'description': 'Larval development maximum temperature (°C)',
-        'category': 'development'
-    },
-    'larva_dev_m': {
-        'type': 'uniform',
-        'min': 1.5,
-        'max': 1.8,
-        'base': 1.663,
-        'description': 'Larval development shape parameter',
-        'category': 'development'
-    },
-    
-    # --- Pupal Development ---
-    'pupa_dev_rho': {
-        'type': 'uniform',
-        'min': 0.0045,
-        'max': 0.0057,
-        'base': 0.005115,
-        'description': 'Pupal development rate parameter',
-        'category': 'development'
-    },
-    'pupa_dev_k': {
-        'type': 'uniform',
-        'min': 38.5,
-        'max': 41.0,
-        'base': 39.94,
-        'description': 'Pupal development thermal constant',
-        'category': 'development'
-    },
-    'pupa_dev_Delta': {
-        'type': 'uniform',
-        'min': 1.8,
-        'max': 2.2,
-        'base': 2.0,
-        'description': 'Pupal development temperature sensitivity',
-        'category': 'development'
-    },
-    'pupa_dev_lambda': {
-        'type': 'uniform',
-        'min': -1.0,
-        'max': -0.8,
-        'base': -0.908,
-        'description': 'Pupal development minimum rate',
-        'category': 'development'
-    },
-    
-    # --- Egg Mortality ---
-    'egg_mort_b1': {
-        'type': 'uniform',
-        'min': 3.2,
-        'max': 3.9,
-        'base': 3.573,
-        'description': 'Egg mortality intercept',
-        'category': 'mortality'
-    },
-    'egg_mort_b2': {
-        'type': 'uniform',
-        'min': -0.36,
-        'max': -0.28,
-        'base': -0.323,
-        'description': 'Egg mortality temperature coefficient',
-        'category': 'mortality'
-    },
-    'egg_mort_b3': {
-        'type': 'uniform',
-        'min': 0.0045,
-        'max': 0.0054,
-        'base': 0.00494,
-        'description': 'Egg mortality quadratic term',
-        'category': 'mortality'
-    },
-    
-    # --- Larval Mortality ---
-    'larva_mort_b1': {
-        'type': 'uniform',
-        'min': 1.7,
-        'max': 2.3,
-        'base': 2.0,
-        'description': 'Larval mortality intercept',
-        'category': 'mortality'
-    },
-    'larva_mort_b2': {
-        'type': 'uniform',
-        'min': -0.85,
-        'max': -0.65,
-        'base': -0.7395,
-        'description': 'Larval mortality temperature coefficient',
-        'category': 'mortality'
-    },
-    'larva_mort_b3': {
-        'type': 'uniform',
-        'min': 0.015,
-        'max': 0.020,
-        'base': 0.01749,
-        'description': 'Larval mortality quadratic term',
-        'category': 'mortality'
-    },
-    
-    # --- Pupal Mortality ---
-    'pupa_mort_b1': {
-        'type': 'uniform',
-        'min': 5.2,
-        'max': 6.5,
-        'base': 5.883,
-        'description': 'Pupal mortality intercept',
-        'category': 'mortality'
-    },
-    'pupa_mort_b2': {
-        'type': 'uniform',
-        'min': -0.64,
-        'max': -0.52,
-        'base': -0.579,
-        'description': 'Pupal mortality temperature coefficient',
-        'category': 'mortality'
-    },
-    'pupa_mort_b3': {
-        'type': 'uniform',
-        'min': 0.0085,
-        'max': 0.0105,
-        'base': 0.00946,
-        'description': 'Pupal mortality quadratic term',
-        'category': 'mortality'
-    },
-    
-    # --- Adult Mortality ---
-    'adult_mort_b1': {
-        'type': 'uniform',
-        'min': -1.7,
-        'max': -1.3,
-        'base': -1.478,
-        'description': 'Adult mortality intercept',
-        'category': 'mortality'
-    },
-    'adult_mort_b2': {
-        'type': 'uniform',
-        'min': -0.16,
-        'max': -0.11,
-        'base': -0.138,
-        'description': 'Adult mortality temperature coefficient',
-        'category': 'mortality'
-    },
-    'adult_mort_b3': {
-        'type': 'uniform',
-        'min': 0.0035,
-        'max': 0.0043,
-        'base': 0.00391,
-        'description': 'Adult mortality quadratic term',
-        'category': 'mortality'
-    },
-    'adult_mortality_per_day': {
-        'type': 'uniform',
-        'min': 0.08,
-        'max': 0.16,
-        'base': 0.12,
-        'description': 'Adult base daily mortality rate',
-        'category': 'mortality'
-    },
-    
-    # --- Host Carrying Capacity ---
-    'host_carrying_capacity_base': {
-        'type': 'uniform',
-        'min': 0.5,
-        'max': 3.0,
-        'base': 2.0,
-        'description': 'Base host carrying capacity',
-        'category': 'fecundity'
-    },
-    
-    # --- Fecundity ---
     'fecundity_rmax': {
         'type': 'uniform',
-        'min': 1.4,
-        'max': 1.8,
-        'base': 1.602,
-        'description': 'Maximum fecundity rate',
-        'category': 'fecundity'
+        'base': 1.6021994175985133,
+        'monte_carlo_min': 1.40, 'monte_carlo_max': 1.80,
+        'sensitivity_range': 0.20,
+        'description': 'Fecundity log-scale peak',
+        'category': 'fecundity',
     },
     'fecundity_Topt': {
         'type': 'uniform',
-        'min': 29.0,
-        'max': 32.0,
-        'base': 30.634,
-        'description': 'Optimal temperature for fecundity (°C)',
-        'category': 'fecundity'
+        'base': 30.634033187663604,
+        'monte_carlo_min': 29.0, 'monte_carlo_max': 32.0,
+        'sensitivity_range': 0.10,
+        'description': 'Temperature of max fecundity (°C)',
+        'category': 'fecundity',
     },
     'fecundity_c': {
         'type': 'uniform',
-        'min': -0.006,
-        'max': -0.0045,
-        'base': -0.00527,
-        'description': 'Fecundity temperature sensitivity',
-        'category': 'fecundity'
+        'base': -0.0052723551194922445,
+        'monte_carlo_min': -0.0065, 'monte_carlo_max': -0.0040,
+        'sensitivity_range': 0.20,
+        'description': 'Fecundity thermal breadth coefficient',
+        'category': 'fecundity',
     },
     'sex_ratio': {
         'type': 'uniform',
-        'min': 0.45,
-        'max': 0.55,
         'base': 0.5,
-        'description': 'Sex ratio (proportion female)',
-        'category': 'fecundity'
+        'monte_carlo_min': 0.45, 'monte_carlo_max': 0.55,
+        'sensitivity_range': 0.10,
+        'description': 'Proportion of females',
+        'category': 'fecundity',
     },
-    
-    # --- Behavioral Thresholds ---
-    'feeding_energy_threshold': {
+    'host_carrying_capacity_base': {
         'type': 'uniform',
-        'min': 0.5,
-        'max': 0.7,
-        'base': 0.6,
-        'description': 'Energy threshold for feeding',
-        'category': 'behavior'
+        'base': 1.0,
+        'monte_carlo_min': 0.5, 'monte_carlo_max': 1.5,
+        'sensitivity_range': 0.30,
+        'description': 'Baseline host-carrying factor κ in κ+log1p(pop)',
+        'category': 'fecundity',
     },
-    'resting_energy_threshold': {
+    'adult_mort_b1': {
         'type': 'uniform',
-        'min': 0.7,
-        'max': 0.9,
-        'base': 0.8,
-        'description': 'Energy threshold for resting while resting',
-        'category': 'behavior'
+        'base': -1.4775,
+        'monte_carlo_min': -1.80, 'monte_carlo_max': -1.15,
+        'sensitivity_range': 0.20,
+        'description': 'Adult mortality intercept (b1)',
+        'category': 'mortality',
     },
-    'gravid_energy_threshold': {
+    'larva_mort_b1': {
         'type': 'uniform',
-        'min': 0.4,
-        'max': 0.7,
-        'base': 0.5,
-        'description': 'Energy threshold for becoming gravid',
-        'category': 'behavior'
+        'base': 2.0,
+        'monte_carlo_min': 1.6, 'monte_carlo_max': 2.4,
+        'sensitivity_range': 0.20,
+        'description': 'Larval mortality intercept (b1)',
+        'category': 'mortality',
     },
-    'egg_laying_temp_min': {
+    'pupa_mort_b1': {
         'type': 'uniform',
-        'min': 278.0,
-        'max': 285.0,
-        'base': 280.15,
-        'description': 'Minimum temperature for egg laying (K)',
-        'category': 'behavior'
+        'base': 5.882576,
+        'monte_carlo_min': 5.2, 'monte_carlo_max': 6.5,
+        'sensitivity_range': 0.20,
+        'description': 'Pupal mortality intercept (b1)',
+        'category': 'mortality',
     },
-    'temp_min_survival': {
+    'egg_mort_b1': {
         'type': 'uniform',
-        'min': 270.0,
-        'max': 278.0,
-        'base': 273.15,
-        'description': 'Minimum temperature for survival (K)',
-        'category': 'behavior'
+        'base': 3.572876,
+        'monte_carlo_min': 3.2, 'monte_carlo_max': 3.9,
+        'sensitivity_range': 0.20,
+        'description': 'Egg mortality intercept (b1)',
+        'category': 'mortality',
     },
-    'temp_max_survival': {
-        'type': 'uniform',
-        'min': 310.0,
-        'max': 322.0,
-        'base': 318.15,
-        'description': 'Maximum temperature for survival (K)',
-        'category': 'behavior'
-    },
-    'rain_threshold': {
-        'type': 'uniform',
-        'min': 0.005,
-        'max': 0.015,
-        'base': 0.008,
-        'description': 'Rain threshold for seeking shelter',
-        'category': 'behavior'
-    },
-    'shelter_temp_threshold': {
-        'type': 'uniform',
-        'min': 283.0,
-        'max': 288.0,
-        'base': 285.15,
-        'description': 'Temperature threshold for seeking shelter (K)',
-        'category': 'behavior'
-    },
-    'building_density_threshold': {
-        'type': 'uniform',
-        'min': 0.05,
-        'max': 0.2,
-        'base': 0.1,
-        'description': 'Building density threshold for shelter',
-        'category': 'behavior'
-    },
-    
-    # --- Water Tank Rules ---
-    'dry_out_threshold': {
-        'type': 'uniform',
-        'min': 2.0,
-        'max': 8.0,
-        'base': 5.0,
-        'description': 'Water volume threshold for drying out',
-        'category': 'water'
-    },
-    'freeze_temp': {
-        'type': 'uniform',
-        'min': 268.0,
-        'max': 275.0,
-        'base': 273.15,
-        'description': 'Temperature for freezing (K)',
-        'category': 'water'
-    },
-    
-    # --- InertAgent Parameters ---
     'max_larvae_capacity': {
         'type': 'int_uniform',
-        'min': 500,
-        'max': 2000,
-        'base': 1000,
-        'description': 'Maximum larvae capacity per tank',
-        'category': 'water'
+        'base': 300,
+        'monte_carlo_min': 200, 'monte_carlo_max': 500,
+        'sensitivity_range': 0.30,
+        'description': 'Maximum larvae per tank',
+        'category': 'habitat',
     },
     'mortality_intensity': {
         'type': 'uniform',
-        'min': 0.2,
-        'max': 0.6,
         'base': 0.4,
+        'monte_carlo_min': 0.20, 'monte_carlo_max': 0.60,
+        'sensitivity_range': 0.30,
         'description': 'Density-dependent mortality intensity',
-        'category': 'water'
+        'category': 'habitat',
     },
     'min_larvae_retain': {
         'type': 'int_uniform',
-        'min': 10,
-        'max': 50,
         'base': 20,
-        'description': 'Minimum larvae to retain after density mortality',
-        'category': 'water'
+        'monte_carlo_min': 10, 'monte_carlo_max': 40,
+        'sensitivity_range': 0.30,
+        'description': 'Minimum larvae retained after density kill',
+        'category': 'habitat',
     },
     'hatch_fraction_min': {
         'type': 'uniform',
-        'min': 0.05,
-        'max': 0.2,
         'base': 0.1,
+        'monte_carlo_min': 0.05, 'monte_carlo_max': 0.15,
+        'sensitivity_range': 0.30,
         'description': 'Minimum hatch fraction per tick',
-        'category': 'water'
+        'category': 'habitat',
     },
     'hatch_fraction_max': {
         'type': 'uniform',
-        'min': 0.4,
-        'max': 0.8,
-        'base': 0.6,
+        'base': 0.3,
+        'monte_carlo_min': 0.15, 'monte_carlo_max': 0.45,
+        'sensitivity_range': 0.30,
         'description': 'Maximum hatch fraction per tick',
-        'category': 'water'
-    },
-    
-    # --- Simulation Duration ---
-    'total_ticks': {
-        'type': 'int_uniform',
-        'min': 1440,   # 15 days
-        'max': 4320,   # 45 days
-        'base': 2880,  # 30 days
-        'description': 'Total simulation ticks (15-min ticks)',
-        'category': 'simulation'
-    },
-    
-    # --- Seeding ---
-    'seed_across_full_study_site': {
-        'type': 'choice',
-        'options': [False, True],
-        'base': False,
-        'description': 'Seed across full study site or use weighted habitat',
-        'category': 'seeding'
-    },
-    'use_occurrence_points': {
-        'type': 'choice',
-        'options': [False, True],
-        'base': True,
-        'description': 'Use occurrence points for seeding',
-        'category': 'seeding'
+        'category': 'habitat',
     },
     'tanks_to_seed': {
         'type': 'int_uniform',
-        'min': 2000,
-        'max': 8000,
-        'base': 5000,
-        'description': 'Number of tanks to seed',
-        'category': 'seeding'
+        'base': 200,
+        'monte_carlo_min': 100, 'monte_carlo_max': 500,
+        'sensitivity_range': 0.50,
+        'description': 'Number of water tanks seeded',
+        'category': 'seeding',
     },
     'mosquitoes_to_seed': {
         'type': 'int_uniform',
-        'min': 10000,
-        'max': 30000,
-        'base': 20000,
-        'description': 'Number of mosquitoes to seed',
-        'category': 'seeding'
-    },
-    'habitat_grid_x': {
-        'type': 'int_uniform',
-        'min': 50,
-        'max': 150,
-        'base': 100,
-        'description': 'Habitat grid X dimension',
-        'category': 'seeding'
-    },
-    'habitat_grid_y': {
-        'type': 'int_uniform',
-        'min': 50,
-        'max': 150,
-        'base': 100,
-        'description': 'Habitat grid Y dimension',
-        'category': 'seeding'
-    },
-    'tank_building_threshold': {
-        'type': 'uniform',
-        'min': 0.05,
-        'max': 0.25,
-        'base': 0.15,
-        'description': 'Building threshold for tank seeding',
-        'category': 'seeding'
-    },
-    'tank_population_threshold': {
-        'type': 'uniform',
-        'min': 0.01,
-        'max': 0.1,
-        'base': 0.05,
-        'description': 'Population threshold for tank seeding',
-        'category': 'seeding'
-    },
-    'mosquito_building_threshold': {
-        'type': 'uniform',
-        'min': 0.01,
-        'max': 0.1,
-        'base': 0.05,
-        'description': 'Building threshold for mosquito seeding',
-        'category': 'seeding'
-    },
-    'mosquito_population_threshold': {
-        'type': 'uniform',
-        'min': 0.005,
-        'max': 0.05,
-        'base': 0.02,
-        'description': 'Population threshold for mosquito seeding',
-        'category': 'seeding'
-    },
-    'occurrence_year_start': {
-        'type': 'int_uniform',
-        'min': 2016,
-        'max': 2019,
-        'base': 2016,
-        'description': 'Earliest year to include from occurrence data',
-        'category': 'seeding'
-    },
-    'occurrence_year_end': {
-        'type': 'int_uniform',
-        'min': 2019,
-        'max': 2026,
-        'base': 2023,
-        'description': 'Latest year to include from occurrence data',
-        'category': 'seeding'
-    },
-    'occurrence_buffer_km': {
-        'type': 'uniform',
-        'min': 0.01,
-        'max': 0.1,
-        'base': 0.05,
-        'description': 'Buffer radius around occurrence points (km)',
-        'category': 'seeding'
-    },
-    
-    # --- Project Defaults ---
-    'agent_search_radius': {
-        'type': 'uniform',
-        'min': 0.005,
-        'max': 0.04,
-        'base': 0.02,
-        'description': 'Agent search radius (degrees)',
-        'category': 'project'
+        'base': 5000,
+        'monte_carlo_min': 2000, 'monte_carlo_max': 15000,
+        'sensitivity_range': 0.50,
+        'description': 'Number of mosquitoes seeded',
+        'category': 'seeding',
     },
     'agent_step': {
         'type': 'uniform',
-        'min': 0.0001,
-        'max': 0.001,
         'base': 0.0005,
-        'description': 'Agent step size (degrees)',
-        'category': 'project'
+        'monte_carlo_min': 0.00025, 'monte_carlo_max': 0.0010,
+        'sensitivity_range': 0.50,
+        'description': 'Per-tick random-walk step size (degrees)',
+        'category': 'movement',
     },
-    'max_agent_age': {
-        'type': 'int_uniform',
-        'min': 2000,
-        'max': 4000,
-        'base': 2880,
-        'description': 'Maximum agent age (ticks)',
-        'category': 'project'
+    'agent_search_radius': {
+        'type': 'uniform',
+        'base': 0.02,
+        'monte_carlo_min': 0.01, 'monte_carlo_max': 0.04,
+        'sensitivity_range': 0.50,
+        'description': 'Agent search radius (degrees)',
+        'category': 'movement',
+    },
+    'grid_cell_size': {
+        'type': 'uniform',
+        'base': 0.001,
+        'monte_carlo_min': 0.0005, 'monte_carlo_max': 0.002,
+        'sensitivity_range': 0.30,
+        'description': 'Spatial registry cell size (degrees)',
+        'category': 'spatial',
     },
 }
 
+TEMPLATE_CONSTANTS = {
+    'max_agent_age': 2880,
+}
 
 # ======================================================================
-# PARAMETER GENERATION FUNCTIONS
+# RNG and sampling
 # ======================================================================
 
-def generate_parameter_value(param_name: str, param_spec: Dict, seed_offset: int = 0) -> Any:
-    """Generate a parameter value within the specified range."""
-    
-    rng = random.Random(seed_offset + hash(param_name) % 1000000)
-    
-    param_type = param_spec.get('type', 'base')
-    
-    if param_type == 'uniform':
-        return rng.uniform(param_spec['min'], param_spec['max'])
-    elif param_type == 'int_uniform':
-        return rng.randint(param_spec['min'], param_spec['max'])
-    elif param_type == 'choice':
-        return rng.choice(param_spec['options'])
-    else:
-        return param_spec['base']
+def _rng_for(seed: int, param_name: str) -> random.Random:
+    h = hashlib.sha256(f"{seed}:{param_name}".encode("utf-8")).hexdigest()
+    return random.Random(int(h, 16) % (2**32))
 
 
-def generate_parameter_set(seed: int, param_ranges: Dict = PARAMETER_RANGES) -> Dict:
-    """Generate a complete set of parameters for a simulation run."""
-    
-    params = {}
-    
-    for param_name, param_spec in param_ranges.items():
-        params[param_name] = generate_parameter_value(
-            param_name, param_spec, seed
-        )
-    
-    # Ensure correlated parameters make sense
-    # Tmin < Tmax for larval development
-    if 'larva_dev_Tmin' in params and 'larva_dev_Tmax' in params:
-        if params['larva_dev_Tmin'] >= params['larva_dev_Tmax']:
-            params['larva_dev_Tmin'] = params['larva_dev_Tmax'] - 2.0
-    
-    # Topt should be between Tmin and Tmax for fecundity
-    if all(k in params for k in ['fecundity_Topt', 'larva_dev_Tmin', 'larva_dev_Tmax']):
-        if not (params['larva_dev_Tmin'] < params['fecundity_Topt'] < params['larva_dev_Tmax']):
-            params['fecundity_Topt'] = (params['larva_dev_Tmin'] + params['larva_dev_Tmax']) / 2
-    
-    # Temperature thresholds should be consistent
-    if 'egg_laying_temp_min' in params and 'temp_min_survival' in params:
-        if params['egg_laying_temp_min'] < params['temp_min_survival']:
-            params['egg_laying_temp_min'] = params['temp_min_survival'] + 3.0
-    
-    if 'temp_max_survival' in params and 'temp_min_survival' in params:
-        if params['temp_max_survival'] <= params['temp_min_survival']:
-            params['temp_max_survival'] = params['temp_min_survival'] + 20.0
-    
-    return params
+def _clamp_params(params: Dict[str, Any]) -> Dict[str, Any]:
+    p = dict(params)
+    if p['hatch_fraction_max'] < p['hatch_fraction_min'] + 0.01:
+        p['hatch_fraction_max'] = p['hatch_fraction_min'] + 0.01
+    for k in ('tanks_to_seed', 'mosquitoes_to_seed'):
+        if p[k] < 1:
+            p[k] = 1
+    if p['max_larvae_capacity'] < 10:
+        p['max_larvae_capacity'] = 10
+    if p['min_larvae_retain'] < 1:
+        p['min_larvae_retain'] = 1
+    if p['min_larvae_retain'] >= p['max_larvae_capacity']:
+        p['min_larvae_retain'] = max(1, p['max_larvae_capacity'] // 10)
+    p['sex_ratio'] = min(0.99, max(0.01, p['sex_ratio']))
+    if p['fecundity_c'] > 0:
+        p['fecundity_c'] = -abs(p['fecundity_c'])
+    for k in ('fecundity_scale', 'host_carrying_capacity_base', 'agent_step',
+              'agent_search_radius', 'grid_cell_size', 'mortality_intensity'):
+        if p[k] <= 0:
+            p[k] = max(1e-6, abs(p[k]))
+    return p
 
 
-def generate_yaml_config(seed: int, params: Dict, output_dir: str, run_id: int) -> str:
-    """Generate a YAML configuration string from parameters."""
-    
-    # Get all template keys
-    import re as regex
-    template_keys = regex.findall(r'\{([^}]+)\}', BASE_YAML_TEMPLATE)
-    
-    # Build the format dict with only keys that exist in the template
-    format_dict = {
-        'run_id': run_id,
-        'seed': seed,
-    }
-    for key in template_keys:
-        if key in params:
-            format_dict[key] = params[key]
+def sample_monte_carlo_params(seed: int) -> Dict[str, Any]:
+    params: Dict[str, Any] = {}
+    for pname, spec in PARAMETER_RANGES.items():
+        rng = _rng_for(seed, pname)
+        lo, hi = spec['monte_carlo_min'], spec['monte_carlo_max']
+        if spec['type'] == 'int_uniform':
+            params[pname] = rng.randint(int(lo), int(hi))
+        elif spec['type'] == 'uniform':
+            params[pname] = rng.uniform(lo, hi)
         else:
-            # Use a default value if parameter is not in params
-            print(f"Warning: Parameter '{key}' not found in params, using 0.0")
-            format_dict[key] = 0.0
-    
-    return BASE_YAML_TEMPLATE.format(**format_dict)
+            params[pname] = spec['base']
+    params.update(TEMPLATE_CONSTANTS)
+    return _clamp_params(params)
 
 
-def save_parameter_summary(seed: int, params: Dict, output_dir: str) -> str:
-    """Save a summary of parameters used for a run."""
-    
-    seed_dir = os.path.join(output_dir, f"seed_{seed}")
-    os.makedirs(seed_dir, exist_ok=True)
-    
-    summary_file = os.path.join(seed_dir, "parameters_used.yaml")
-    with open(summary_file, 'w') as f:
-        yaml.dump(params, f, default_flow_style=False)
-    
-    # Also save as CSV for easy comparison
-    csv_file = os.path.join(seed_dir, "parameters_used.csv")
-    with open(csv_file, 'w', newline='') as f:
-        writer = csv.writer(f)
-        writer.writerow(['parameter', 'value', 'category'])
-        for key, value in sorted(params.items()):
-            category = PARAMETER_RANGES.get(key, {}).get('category', 'unknown')
-            writer.writerow([key, value, category])
-    
-    return summary_file
+def base_params() -> Dict[str, Any]:
+    p = {k: v['base'] for k, v in PARAMETER_RANGES.items()}
+    p.update(TEMPLATE_CONSTANTS)
+    return p
 
 
-def get_parameter_descriptions() -> Dict:
-    """Get descriptions of all parameters for documentation."""
-    
-    descriptions = {}
-    for param_name, param_spec in PARAMETER_RANGES.items():
-        descriptions[param_name] = {
-            'description': param_spec.get('description', ''),
-            'range': f"{param_spec.get('min', 'N/A')} - {param_spec.get('max', 'N/A')}",
-            'base': param_spec.get('base', 'N/A'),
-            'category': param_spec.get('category', 'unknown')
-        }
-    return descriptions
-
+def swept_params(pname: str, factor: float) -> Dict[str, Any]:
+    p = base_params()
+    spec = PARAMETER_RANGES[pname]
+    swept = spec['base'] * (1.0 + factor)
+    if spec['type'] == 'int_uniform':
+        swept = int(round(swept))
+    p[pname] = swept
+    return _clamp_params(p)
 
 # ======================================================================
-# FILE MONITORING
+# Season allocation
 # ======================================================================
 
-def monitor_output_files(seed_dir: str, stop_event: threading.Event, check_interval: int = 10):
-    """Monitor output files being created in real-time."""
-    
-    seen_files = set()
-    print(f"\n[Monitor] Starting file watcher for {seed_dir}")
-    
-    while not stop_event.is_set():
-        try:
-            if os.path.exists(seed_dir):
-                current_files = set(os.listdir(seed_dir))
-                new_files = current_files - seen_files
-                
-                if new_files:
-                    for f in new_files:
-                        if f.endswith('.csv') or f.endswith('.log') or f.endswith('.txt'):
-                            fpath = os.path.join(seed_dir, f)
-                            size = os.path.getsize(fpath) if os.path.exists(fpath) else 0
-                            print(f"[Monitor] New file: {f} ({size/1024:.1f} KB)")
-                    
-                    snapshots = [f for f in new_files if f.startswith('snapshot_tick_') and f.endswith('.csv')]
-                    if snapshots:
-                        print(f"[Monitor] 📸 Found {len(snapshots)} new snapshot(s): {', '.join(snapshots[:5])}")
-                    
-                    merged = [f for f in new_files if f.startswith('merged_snapshots_') and f.endswith('.csv')]
-                    if merged:
-                        print(f"[Monitor] 📊 Found merged snapshot: {merged[0]}")
-                    
-                    seen_files.update(current_files)
-            
-            time.sleep(check_interval)
-        except Exception as e:
-            print(f"[Monitor] Error: {e}")
-            time.sleep(check_interval)
+def allocate_seasons(n_runs: int) -> List[str]:
+    total_w = sum(SEASON_WEIGHTS.values())
+    alloc: List[str] = []
+    for season, w in SEASON_WEIGHTS.items():
+        alloc.extend([season] * int(round(n_runs * w / total_w)))
+    while len(alloc) < n_runs:
+        alloc.append("Bega")
+    return alloc[:n_runs]
 
+
+def pick_start_date(args, run_index: int, season_alloc: Optional[List[str]]) -> str:
+    if args.start_date:
+        return args.start_date
+    if not args.allocate_seasons or season_alloc is None:
+        return SEASON_START_DATES["Bega"]
+    return SEASON_START_DATES[season_alloc[run_index]]
 
 # ======================================================================
-# SIMULATION RUNNER
+# YAML generation
+# ======================================================================
+
+def generate_yaml_config(seed, run_id, strategy_label, start_date,
+                         total_ticks, params) -> str:
+    fmt = {
+        'run_id': run_id, 'seed': seed, 'strategy': strategy_label,
+        'start_date': start_date, 'total_ticks': total_ticks,
+        'study_site': STUDY_SITE, **params,
+    }
+    return BASE_YAML_TEMPLATE.format(**fmt)
+
+# ======================================================================
+# Run plan
+# ======================================================================
+
+def build_run_plan(args) -> List[Dict[str, Any]]:
+    total_ticks = resolve_ticks(args)
+    season_alloc = allocate_seasons(args.runs) if args.allocate_seasons else None
+    plans: List[Dict[str, Any]] = []
+    run_id = 1
+
+    if args.strategy == "none":
+        for i in range(args.runs):
+            seed = args.seed + i * args.increment
+            plans.append({
+                'run_id': run_id, 'seed': seed,
+                'strategy_label': 'baseline',
+                'start_date': pick_start_date(args, i, season_alloc),
+                'total_ticks': total_ticks, 'params': base_params(),
+            })
+            run_id += 1
+
+    elif args.strategy == "monte-carlo":
+        for i in range(args.runs):
+            seed = args.seed + i * args.increment
+            plans.append({
+                'run_id': run_id, 'seed': seed,
+                'strategy_label': 'monte-carlo',
+                'start_date': pick_start_date(args, i, season_alloc),
+                'total_ticks': total_ticks,
+                'params': sample_monte_carlo_params(seed),
+            })
+            run_id += 1
+
+    elif args.strategy == "one-at-a-time":
+        key_params = args.key_params if args.key_params else list(PARAMETER_RANGES.keys())
+        for pname in key_params:
+            if pname not in PARAMETER_RANGES:
+                print(f"WARNING: unknown key parameter '{pname}', skipping")
+                continue
+            spec = PARAMETER_RANGES[pname]
+            if args.oat_factors:
+                factors = args.oat_factors
+            else:
+                r = spec['sensitivity_range']
+                factors = [-r, 0.0, r]
+            for f in factors:
+                for rep in range(args.oat_replicates):
+                    seed = args.seed + (run_id - 1) * args.increment
+                    plans.append({
+                        'run_id': run_id, 'seed': seed,
+                        'strategy_label': f'oat:{pname}@{f:+.0%}#r{rep}',
+                        'start_date': pick_start_date(args, run_id - 1, season_alloc),
+                        'total_ticks': total_ticks,
+                        'params': swept_params(pname, f),
+                    })
+                    run_id += 1
+
+    return plans
+
+
+def resolve_ticks(args) -> int:
+    if args.ticks is not None:
+        return args.ticks
+    if args.days is not None:
+        return args.days * TICKS_PER_DAY
+    return DEFAULT_TICKS
+
+# ======================================================================
+# Validation
+# ======================================================================
+
+def _available_ram_gb() -> float:
+    try:
+        with open('/proc/meminfo') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except Exception:
+        pass
+    return 8.0
+
+
+def validate_environment(args) -> List[str]:
+    problems: List[str] = []
+    if not os.path.exists(STUDY_SITE):
+        problems.append(f"Study site shapefile not found: {STUDY_SITE}")
+    try:
+        jar = args.jar or find_jar()
+        if not os.path.exists(jar):
+            problems.append(f"JAR not found: {jar}")
+    except SystemExit:
+        problems.append("No JAR found (Maven build skipped)")
+    ticks = resolve_ticks(args)
+    if ticks <= 0:
+        problems.append(f"ticks must be > 0 (got {ticks})")
+    if ticks > 35040:
+        problems.append(f"ticks={ticks} exceeds the 2020 climate data range")
+    avail = _available_ram_gb()
+    if args.parallel * args.heap > avail * 0.85:
+        problems.append(
+            f"--parallel {args.parallel} × --heap {args.heap} GB "
+            f"= {args.parallel*args.heap} GB > {avail*0.85:.1f} GB budget "
+            f"(available: {avail:.1f} GB)")
+    return problems
+
+# ======================================================================
+# Plan printing
+# ======================================================================
+
+def print_plan(plans: List[Dict[str, Any]], args) -> None:
+    ticks = resolve_ticks(args)
+    print(f"\n{'='*70}")
+    print(f"RUN PLAN ({len(plans)} runs, strategy={args.strategy}, "
+          f"ticks={ticks} ({ticks/TICKS_PER_DAY:.1f} d), "
+          f"parallel={args.parallel}, heap={args.heap} GB)")
+    print(f"{'='*70}")
+    for p in plans[:60]:
+        n_varied = sum(1 for k, v in p['params'].items()
+                       if k in PARAMETER_RANGES and v != PARAMETER_RANGES[k]['base'])
+        extra = f"  [{n_varied} varied]" if n_varied else ""
+        print(f"  run {p['run_id']:>3}  seed={p['seed']:<8}  "
+              f"start={p['start_date'][:10]}  ticks={p['total_ticks']}{extra}")
+    if len(plans) > 60:
+        print(f"  ... ({len(plans) - 60} more runs)")
+    print(f"{'='*70}\n")
+
+# ======================================================================
+# JAR discovery
 # ======================================================================
 
 def find_jar() -> str:
-    """Find the fat JAR file."""
-    
     for path in JAR_PATHS:
         if os.path.exists(path):
             return os.path.abspath(path)
-    
     if os.path.exists("pom.xml"):
         print("No JAR found. Building with Maven...")
         try:
-            result = subprocess.run(
-                ["mvn", "clean", "package", "-DskipTests"], 
-                check=True, capture_output=True, text=True
-            )
-            print(result.stdout)
+            r = subprocess.run(["mvn", "clean", "package", "-DskipTests"],
+                               check=True, capture_output=True, text=True)
+            print(r.stdout[-2000:])
             for path in JAR_PATHS:
                 if os.path.exists(path):
                     return os.path.abspath(path)
         except subprocess.CalledProcessError as e:
-            print(f"Build failed: {e.stderr if e.stderr else 'Unknown error'}")
-        except Exception as e:
-            print(f"Build error: {e}")
-    
-    jar_files = glob.glob("*.jar") + glob.glob("target/*.jar")
-    if jar_files:
-        return os.path.abspath(jar_files[0])
-    
-    print("ERROR: No JAR file found!")
-    print("Please build your project first:")
-    print("  mvn clean package")
+            print(f"Build failed: {e.stderr[-500:] if e.stderr else 'Unknown error'}")
+    jars = glob.glob("*.jar") + glob.glob("target/*.jar")
+    if jars:
+        return os.path.abspath(jars[0])
+    print("ERROR: No JAR file found. Run `mvn clean package` first.")
     sys.exit(1)
 
+# ======================================================================
+# Per-run execution
+# ======================================================================
 
-def run_simulation(seed: int, output_dir: str, jar_path: Optional[str] = None, 
-                   timeout: int = TIMEOUT_SECONDS, verbose: bool = True,
-                   params: Optional[Dict] = None, config_file: Optional[str] = None,
-                   run_id: Optional[int] = None) -> Optional[str]:
-    """
-    Run a single simulation with the given seed and parameters.
-    
-    Args:
-        seed: Random seed for the simulation
-        output_dir: Base output directory
-        jar_path: Path to the JAR file (auto-detected if None)
-        timeout: Timeout in seconds
-        verbose: Print verbose output
-        params: Parameter dictionary (generated if None)
-        config_file: Path to config file (generated if None)
-        run_id: Run identifier (used in config file)
-    
-    Returns:
-        Path to the seed output directory if successful, None otherwise
-    """
-    
-    if jar_path is None:
-        jar_path = find_jar()
-    
-    output_dir = os.path.abspath(output_dir)
+def save_parameter_summary(seed, params, output_dir, meta=None):
     seed_dir = os.path.join(output_dir, f"seed_{seed}")
     os.makedirs(seed_dir, exist_ok=True)
-    
-    jar_path = os.path.abspath(jar_path)
-    
-    # Generate config if not provided
-    if config_file is None:
-        if params is None:
-            params = generate_parameter_set(seed)
-        
-        if run_id is None:
-            run_id = seed
-        
-        # Save parameters
-        save_parameter_summary(seed, params, output_dir)
-        
-        # Generate YAML config
-        config_content = generate_yaml_config(seed, params, seed_dir, run_id)
-        config_file = os.path.join(seed_dir, "simulation_config.yaml")
-        with open(config_file, 'w') as f:
-            f.write(config_content)
-    
-    # Build command - JAR expects: seed outputDir configPath
-    cmd = [
-        "java",
-        "-jar", jar_path,
-        str(seed),
-        seed_dir,
-        config_file
-    ]
-    
-    if verbose:
-        print(f"\n{'='*60}")
-        print(f"Running simulation with seed {seed}")
-        print(f"Output: {seed_dir}")
-        print(f"Config: {config_file}")
-        print(f"Command: {' '.join(cmd)}")
-        print(f"{'='*60}")
-    
-    start_time = time.time()
-    
-    stop_monitor = threading.Event()
-    monitor_thread = None
-    
-    if verbose:
-        monitor_thread = threading.Thread(
-            target=monitor_output_files, 
-            args=(seed_dir, stop_monitor, 5)
-        )
-        monitor_thread.daemon = True
-        monitor_thread.start()
-    
+    payload = dict(params)
+    if meta:
+        payload.update({f"_meta_{k}": v for k, v in meta.items()})
+    with open(os.path.join(seed_dir, "parameters_used.yaml"), "w") as f:
+        yaml.dump(payload, f, default_flow_style=False, sort_keys=True)
+    with open(os.path.join(seed_dir, "parameters_used.csv"), "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["parameter", "value", "base", "category"])
+        for k, v in sorted(params.items()):
+            spec = PARAMETER_RANGES.get(k, {})
+            w.writerow([k, v, spec.get('base', ''), spec.get('category', '')])
+
+
+def run_one(plan, args, jar_path, output_dir) -> Optional[str]:
+    seed = plan['seed']
+    seed_dir = os.path.join(output_dir, f"seed_{seed}")
+    os.makedirs(seed_dir, exist_ok=True)
+
+    cfg_text = generate_yaml_config(
+        seed=seed, run_id=plan['run_id'],
+        strategy_label=plan['strategy_label'],
+        start_date=plan['start_date'],
+        total_ticks=plan['total_ticks'],
+        params=plan['params'])
+    cfg_path = os.path.join(seed_dir, "simulation_config.yaml")
+    with open(cfg_path, "w") as f:
+        f.write(cfg_text)
+
+    save_parameter_summary(seed, plan['params'], output_dir, meta={
+        'run_id': plan['run_id'], 'strategy': plan['strategy_label'],
+        'start_date': plan['start_date'], 'total_ticks': plan['total_ticks']})
+
+    heap_g = args.heap
+    xms = max(1, heap_g // 2)
+    cmd = ["java", f"-Xmx{heap_g}g", f"-Xms{xms}g",
+           "-XX:+UseG1GC", "-jar", jar_path,
+           str(seed), seed_dir, cfg_path]
+
+    if not args.quiet:
+        print(f"\n  run {plan['run_id']} | seed {seed} | {plan['strategy_label']}")
+
+    start = time.time()
     try:
-        env = os.environ.copy()
-        env["SIMULATION_SEED"] = str(seed)
-        
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env
-        )
-        
-        elapsed = time.time() - start_time
-        
+        result = subprocess.run(cmd, capture_output=True, text=True,
+                                timeout=args.timeout)
+        elapsed = time.time() - start
         if result.returncode != 0:
-            print(f"ERROR: Simulation with seed {seed} failed with code {result.returncode}")
+            print(f"  ✗ run {plan['run_id']} FAILED (code {result.returncode}) "
+                  f"in {elapsed/60:.1f} min")
             if result.stderr:
-                print(f"STDERR: {result.stderr[:500]}")
-            if result.stdout:
-                print(f"STDOUT (last 1000 chars):\n{result.stdout[-1000:]}")
-            stop_monitor.set()
-            if monitor_thread:
-                monitor_thread.join(timeout=2)
+                print(f"    stderr: {result.stderr[-500:]}")
             return None
-        
-        print(f"✓ Simulation with seed {seed} completed in {elapsed/60:.1f} minutes")
-        
-        stop_monitor.set()
-        if monitor_thread:
-            monitor_thread.join(timeout=2)
-        
-        time.sleep(2)
-        
-        if result.stdout:
-            print("\nLast lines of simulation output:")
-            for line in result.stdout.split('\n')[-10:]:
-                if line.strip():
-                    print(f"  {line.strip()}")
-        
+        print(f"  ✓ run {plan['run_id']} done in {elapsed/60:.1f} min")
         return seed_dir
-        
     except subprocess.TimeoutExpired:
-        print(f"ERROR: Simulation with seed {seed} timed out after {timeout/60:.1f} minutes")
-        stop_monitor.set()
-        if monitor_thread:
-            monitor_thread.join(timeout=2)
+        print(f"  ✗ run {plan['run_id']} TIMED OUT after {args.timeout/60:.1f} min")
         return None
     except Exception as e:
-        print(f"ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        stop_monitor.set()
-        if monitor_thread:
-            monitor_thread.join(timeout=2)
+        print(f"  ✗ run {plan['run_id']} ERROR: {e}")
         return None
 
-
 # ======================================================================
-# MONTE CARLO RUNNER
+# Main
 # ======================================================================
 
-def run_monte_carlo(n_runs: int, base_seed: Optional[int] = None, 
-                   output_dir: Optional[str] = None, 
-                   jar_path: Optional[str] = None, 
-                   seed_increment: int = 1, 
-                   timeout: int = TIMEOUT_SECONDS,
-                   verbose: bool = True, 
-                   resume: bool = False, 
-                   vary_params: bool = True,
-                   parameter_ranges: Optional[Dict] = None) -> Tuple[List, List]:
-    """
-    Run Monte Carlo simulation with parameter variation.
-    
-    Args:
-        n_runs: Number of runs to execute
-        base_seed: Base seed (incremented for each run)
-        output_dir: Output directory
-        jar_path: Path to JAR file
-        seed_increment: Increment between seeds
-        timeout: Timeout per run in seconds
-        verbose: Print verbose output
-        resume: Skip already completed runs
-        vary_params: Vary parameters or use base values
-        parameter_ranges: Custom parameter ranges
-    
-    Returns:
-        Tuple of (successful_runs, failed_runs)
-    """
-    
-    if output_dir is None:
-        output_dir = DEFAULT_OUTPUT_DIR
-    if base_seed is None:
-        base_seed = DEFAULT_BASE_SEED
-    if jar_path is None:
-        jar_path = find_jar()
-    
-    if parameter_ranges is None:
-        parameter_ranges = PARAMETER_RANGES
-    
-    output_dir = os.path.abspath(output_dir)
-    jar_path = os.path.abspath(jar_path)
-    
-    print(f"{'='*60}")
-    print(f"MONTE CARLO SIMULATION WITH PARAMETER VARIATION")
-    print(f"{'='*60}")
-    print(f"JAR: {jar_path}")
-    print(f"Output directory: {output_dir}")
-    print(f"Number of runs: {n_runs}")
-    print(f"Base seed: {base_seed}")
-    print(f"Seed increment: {seed_increment}")
-    print(f"Timeout: {timeout/60:.1f} minutes per run")
-    print(f"Resume mode: {'ON' if resume else 'OFF'}")
-    print(f"Parameter variation: {'ON' if vary_params else 'OFF'}")
-    print(f"Number of parameters varied: {len(parameter_ranges)}")
-    print(f"{'='*60}\n")
-    
-    os.makedirs(output_dir, exist_ok=True)
-    
-    # Save parameter descriptions for documentation
-    desc_file = os.path.join(output_dir, "parameter_descriptions.yaml")
-    with open(desc_file, 'w') as f:
-        yaml.dump(get_parameter_descriptions(), f, default_flow_style=False)
-    
-    # Check for existing runs if resuming
-    existing_seeds = set()
-    if resume:
-        seed_dirs = glob.glob(os.path.join(output_dir, "seed_*"))
-        for seed_dir in seed_dirs:
-            try:
-                seed = int(os.path.basename(seed_dir).split('_')[1])
-                merged_files = glob.glob(os.path.join(seed_dir, "merged_*.csv"))
-                if merged_files:
-                    existing_seeds.add(seed)
-            except:
-                pass
-        if existing_seeds:
-            print(f"Resuming: Found {len(existing_seeds)} existing successful runs")
-            print(f"Existing seeds: {sorted(existing_seeds)}\n")
-    
-    # Create metadata
-    metadata = {
+def main():
+    parser = argparse.ArgumentParser(
+        description="Monte Carlo / sensitivity runner for monadvsim "
+                    "(uniform seeding, short runs)")
+    parser.add_argument("--runs", "-n", type=int, default=DEFAULT_RUNS)
+    parser.add_argument("--seed", "-s", type=int, default=DEFAULT_BASE_SEED)
+    parser.add_argument("--increment", "-i", type=int, default=1)
+    parser.add_argument("--ticks", type=int, default=None,
+                        help=f"ticks per run (default: {DEFAULT_TICKS})")
+    parser.add_argument("--days", "-d", type=int, default=None,
+                        help="[deprecated] days per run; --ticks takes priority")
+    parser.add_argument("--output", "-o", type=str, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--jar", "-j", type=str, default=None)
+    parser.add_argument("--timeout", "-t", type=int, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument("--strategy", "-S",
+                        choices=["monte-carlo", "one-at-a-time", "none"],
+                        default="monte-carlo")
+    parser.add_argument("--oat-factors", type=float, nargs="+", default=None)
+    parser.add_argument("--oat-replicates", type=int, default=1)
+    parser.add_argument("--key-params", type=str, nargs="+", default=None)
+    parser.add_argument("--allocate-seasons", action="store_true")
+    parser.add_argument("--start-date", type=str, default=None)
+    parser.add_argument("--resume", "-r", action="store_true")
+    parser.add_argument("--parallel", "-p", type=int, default=DEFAULT_PARALLEL)
+    parser.add_argument("--heap", type=int, default=DEFAULT_HEAP_GB)
+    parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--quiet", "-q", action="store_true")
+    args = parser.parse_args()
+
+    if args.strategy == "one-at-a-time":
+        n_key = len(args.key_params) if args.key_params else len(PARAMETER_RANGES)
+        if args.oat_factors:
+            n_factors = len(args.oat_factors)
+        else:
+            n_factors = 3
+        print(f"INFO: one-at-a-time = {n_key} params × {n_factors} factors × "
+              f"{args.oat_replicates} reps = {n_key*n_factors*args.oat_replicates} runs")
+
+    if args.validate_only:
+        problems = validate_environment(args)
+        if problems:
+            print("VALIDATION FAILED:")
+            for p in problems:
+                print(f"  - {p}")
+            sys.exit(1)
+        print("Validation passed.")
+        print_plan(build_run_plan(args), args)
+        sys.exit(0)
+
+    plans = build_run_plan(args)
+    if args.dry_run:
+        print_plan(plans, args)
+        problems = validate_environment(args)
+        if problems:
+            print("NOTES:")
+            for p in problems:
+                print(f"  - {p}")
+        sys.exit(0)
+
+    problems = validate_environment(args)
+    if problems:
+        print("VALIDATION FAILED:")
+        for p in problems:
+            print(f"  - {p}")
+        sys.exit(1)
+
+    os.makedirs(args.output, exist_ok=True)
+    jar_path = args.jar or find_jar()
+
+    existing = set()
+    if args.resume:
+        for d in glob.glob(os.path.join(args.output, "seed_*")):
+            if glob.glob(os.path.join(d, "merged_*.csv")):
+                try:
+                    existing.add(int(os.path.basename(d).split('_')[1]))
+                except ValueError:
+                    pass
+        if existing:
+            print(f"Resuming: {len(existing)} already-completed seeds will be skipped")
+
+    print_plan(plans, args)
+
+    meta = {
         "started": datetime.now().isoformat(),
-        "n_runs": n_runs,
-        "base_seed": base_seed,
-        "seed_increment": seed_increment,
-        "output_dir": output_dir,
-        "jar_path": jar_path,
-        "timeout_seconds": timeout,
-        "command": " ".join(sys.argv),
-        "hostname": os.uname().nodename if hasattr(os, 'uname') else "unknown",
-        "resume": resume,
-        "vary_params": vary_params,
-        "n_parameters_varied": len(parameter_ranges),
-        "parameter_categories": {}
+        "strategy": args.strategy,
+        "runs": args.runs,
+        "ticks_per_run": resolve_ticks(args),
+        "simulated_days_per_run": resolve_ticks(args) / TICKS_PER_DAY,
+        "base_seed": args.seed,
+        "increment": args.increment,
+        "output_dir": os.path.abspath(args.output),
+        "jar_path": os.path.abspath(jar_path),
+        "timeout_seconds": args.timeout,
+        "heap_gb": args.heap,
+        "parallel": args.parallel,
+        "allocate_seasons": args.allocate_seasons,
+        "start_date": args.start_date,
+        "seeding_mode": "uniform_suitability_full_site",
+        "param_descriptions": {
+            k: {
+                "base": v["base"],
+                "mc_range": [v["monte_carlo_min"], v["monte_carlo_max"]],
+                "sensitivity_range": v["sensitivity_range"],
+                "category": v["category"],
+                "description": v["description"],
+            } for k, v in PARAMETER_RANGES.items()
+        },
     }
-    
-    for param_name, param_spec in parameter_ranges.items():
-        cat = param_spec.get('category', 'other')
-        if cat not in metadata["parameter_categories"]:
-            metadata["parameter_categories"][cat] = []
-        metadata["parameter_categories"][cat].append(param_name)
-    
-    with open(os.path.join(output_dir, "metadata.json"), 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    first_seed = base_seed
-    last_seed = base_seed + (n_runs - 1) * seed_increment
-    print(f"Seed range: {first_seed} to {last_seed}\n")
-    
-    successful_runs = []
-    failed_runs = []
-    run_times = []
-    skipped_runs = []
-    parameter_sets = []
-    
-    progress_file = os.path.join(output_dir, "progress.csv")
-    if not os.path.exists(progress_file):
-        with open(progress_file, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['run', 'seed', 'status', 'time_seconds', 'output_dir', 'param_count'])
-    
-    for i in range(n_runs):
-        seed = base_seed + (i * seed_increment)
-        run_id = i + 1
-        
-        if resume and seed in existing_seeds:
-            print(f"[{run_id}/{n_runs}] ⏭️  Seed {seed} - SKIPPED (already completed)")
-            skipped_runs.append(seed)
-            continue
-        
-        run_start = time.time()
-        
-        if vary_params:
-            params = generate_parameter_set(seed, parameter_ranges)
-            parameter_sets.append({'seed': seed, 'params': params})
-            
-            if verbose:
-                print(f"\nParameters for seed {seed}:")
-                categories = {}
-                for k, v in params.items():
-                    cat = PARAMETER_RANGES.get(k, {}).get('category', 'other')
-                    categories.setdefault(cat, []).append((k, v))
-                
-                for cat, items in categories.items():
-                    if cat != 'other':
-                        print(f"  [{cat}]")
-                        for k, v in items[:3]:
-                            print(f"    {k}: {v:.4f}" if isinstance(v, float) else f"    {k}: {v}")
-        else:
-            params = {k: v['base'] for k, v in parameter_ranges.items()}
-        
-        result = run_simulation(seed, output_dir, jar_path, timeout, verbose, params, run_id=run_id)
-        
-        run_time = time.time() - run_start
-        run_times.append(run_time)
-        
-        if result:
-            successful_runs.append({
-                'seed': seed,
-                'output_dir': result,
-                'time': run_time,
-                'params': params if vary_params else None
-            })
-            status = "SUCCESS"
-            print(f"\n[{run_id}/{n_runs}] ✓ Seed {seed} - {run_time/60:.1f} min")
-        else:
-            failed_runs.append(seed)
-            status = "FAILED"
-            print(f"\n[{run_id}/{n_runs}] ✗ Seed {seed} - FAILED")
-        
-        with open(progress_file, 'a', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow([run_id, seed, status, f"{run_time:.1f}", result or "", 
-                            len(params) if params else 0])
-        
-        time.sleep(1)
-    
-    # ======================================================================
-    # FINAL SUMMARY
-    # ======================================================================
-    
-    print(f"\n{'='*60}")
-    print("MONTE CARLO SIMULATION COMPLETE")
-    print(f"{'='*60}")
-    
-    successful_count = len(successful_runs)
-    failed_count = len(failed_runs)
-    skipped_count = len(skipped_runs)
-    total_count = successful_count + failed_count + skipped_count
-    
-    print(f"\nTotal runs: {total_count}")
-    print(f"Successful: {successful_count} ({successful_count/total_count*100:.1f}%)")
-    print(f"Failed: {failed_count} ({failed_count/total_count*100:.1f}%)")
-    if skipped_count:
-        print(f"Skipped: {skipped_count} ({skipped_count/total_count*100:.1f}%)")
-    
-    if failed_runs:
-        print(f"Failed seeds: {failed_runs}")
-    if skipped_runs:
-        print(f"Skipped seeds: {skipped_runs}")
-    
+    with open(os.path.join(args.output, "metadata.json"), "w") as f:
+        json.dump(meta, f, indent=2, default=str)
+
+    progress_path = os.path.join(args.output, "progress.csv")
+    progress_lock = threading.Lock()
+    if not os.path.exists(progress_path):
+        with open(progress_path, "w", newline="") as f:
+            csv.writer(f).writerow(
+                ["run_id", "seed", "strategy", "start_date", "status",
+                 "elapsed_seconds", "output_dir"])
+
+    def _log_progress(row):
+        with progress_lock:
+            with open(progress_path, "a", newline="") as f:
+                csv.writer(f).writerow(row)
+
+    successful, failed, skipped = [], [], []
+    run_times: List[float] = []
+
+    def _execute(plan):
+        start = time.time()
+        result = run_one(plan, args, jar_path, args.output)
+        elapsed = time.time() - start
+        status = "SUCCESS" if result else "FAILED"
+        _log_progress([plan['run_id'], plan['seed'], plan['strategy_label'],
+                       plan['start_date'], status, f"{elapsed:.1f}", result or ""])
+        return plan, result, elapsed
+
+    active_plans = [p for p in plans
+                    if not (args.resume and p['seed'] in existing)]
+    for p in plans:
+        if args.resume and p['seed'] in existing:
+            skipped.append(p['seed'])
+
+    if args.parallel <= 1:
+        for plan in active_plans:
+            _, result, elapsed = _execute(plan)
+            run_times.append(elapsed)
+            (successful if result else failed).append(plan['seed'])
+    else:
+        with ThreadPoolExecutor(max_workers=args.parallel) as ex:
+            futures = {ex.submit(_execute, p): p for p in active_plans}
+            for fut in as_completed(futures):
+                plan, result, elapsed = fut.result()
+                run_times.append(elapsed)
+                (successful if result else failed).append(plan['seed'])
+
+    print(f"\n{'='*70}")
+    print(f"DONE — {len(successful)} successful, {len(failed)} failed, "
+          f"{len(skipped)} skipped (of {len(plans)})")
     if run_times:
-        avg_time = sum(run_times) / len(run_times)
-        print(f"\nRun times:")
-        print(f"  Average: {avg_time/60:.1f} minutes")
-        print(f"  Min: {min(run_times)/60:.1f} minutes")
-        print(f"  Max: {max(run_times)/60:.1f} minutes")
-        print(f"  Total: {sum(run_times)/60:.1f} minutes ({sum(run_times)/3600:.1f} hours)")
-    
-    # Save summary
-    summary = {
-        "completed": datetime.now().isoformat(),
-        "total_runs": total_count,
-        "successful": successful_count,
-        "failed": failed_count,
-        "skipped": skipped_count,
-        "failed_seeds": failed_runs,
-        "skipped_seeds": skipped_runs,
-        "successful_seeds": [r['seed'] for r in successful_runs],
-        "run_times": {
-            "average_seconds": sum(run_times)/len(run_times) if run_times else 0,
-            "min_seconds": min(run_times) if run_times else 0,
-            "max_seconds": max(run_times) if run_times else 0,
-            "total_seconds": sum(run_times) if run_times else 0
-        }
-    }
-    
-    with open(os.path.join(output_dir, "summary.json"), 'w') as f:
-        json.dump(summary, f, indent=2)
-    
-    # Save a simple text summary
-    with open(os.path.join(output_dir, "summary.txt"), 'w') as f:
-        f.write(f"Monte Carlo Simulation Summary\n")
-        f.write(f"{'='*50}\n")
-        f.write(f"Completed: {datetime.now()}\n")
-        f.write(f"Total runs: {total_count}\n")
-        f.write(f"Successful: {successful_count}\n")
-        f.write(f"Failed: {failed_count}\n")
-        if skipped_count:
-            f.write(f"Skipped: {skipped_count}\n")
-        if failed_runs:
-            f.write(f"Failed seeds: {failed_runs}\n")
-        if run_times:
-            f.write(f"\nRun times:\n")
-            f.write(f"  Average: {avg_time/60:.1f} minutes\n")
-            f.write(f"  Total: {sum(run_times)/60:.1f} minutes ({sum(run_times)/3600:.1f} hours)\n")
-        f.write(f"\nResults saved to: {output_dir}\n")
-    
-    print(f"\nResults saved to: {output_dir}")
-    print(f"Summary file: {os.path.join(output_dir, 'summary.txt')}")
-    
-    print(f"\nOutput directory structure:")
-    print(f"  {output_dir}/")
-    print(f"    ├── metadata.json")
-    print(f"    ├── progress.csv")
-    print(f"    ├── summary.json")
-    print(f"    ├── summary.txt")
-    print(f"    ├── parameter_descriptions.yaml")
-    print(f"    └── seed_*/")
-    print(f"          ├── simulation_config.yaml")
-    print(f"          ├── parameters_used.yaml")
-    print(f"          ├── parameters_used.csv")
-    print(f"          ├── merged_snapshots_*.csv")
-    print(f"          ├── snapshot_tick_*.csv")
-    print(f"          ├── *_final_statistics_*.txt")
-    print(f"          └── run_info.json")
-    
-    return successful_runs, failed_runs
+        print(f"Avg per-run: {sum(run_times)/len(run_times)/60:.1f} min  "
+              f"(total {sum(run_times)/3600:.1f} h)")
+    print(f"Results: {os.path.abspath(args.output)}")
 
+    with open(os.path.join(args.output, "summary.json"), "w") as f:
+        json.dump({
+            "completed": datetime.now().isoformat(),
+            "total": len(plans),
+            "successful": successful,
+            "failed": failed,
+            "skipped": skipped,
+            "avg_run_seconds": sum(run_times) / len(run_times) if run_times else 0,
+            "total_run_seconds": sum(run_times),
+        }, f, indent=2, default=str)
 
-# ======================================================================
-# MAIN
-# ======================================================================
+    if failed:
+        sys.exit(1)
+
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Run Monte Carlo simulations for mosquito ABM with parameter variation",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Run 30 simulations with default settings
-  python run_monte_carlo.py
-  
-  # Run 10 simulations with custom seed
-  python run_monte_carlo.py --runs 10 --seed 100
-  
-  # Run with custom output directory
-  python run_monte_carlo.py --output /path/to/results
-  
-  # Resume a previous run (skip completed seeds)
-  python run_monte_carlo.py --resume --output /path/to/results
-  
-  # Disable parameter variation (use base parameters only)
-  python run_monte_carlo.py --no-vary
-  
-  # Run with custom JAR
-  python run_monte_carlo.py --jar target/my-simulation.jar
-  
-  # Quiet mode (less verbose output)
-  python run_monte_carlo.py --quiet
-"""
-    )
-    
-    parser.add_argument(
-        "--runs", "-n", 
-        type=int, 
-        default=DEFAULT_RUNS,
-        help=f"Number of runs (default: {DEFAULT_RUNS})"
-    )
-    
-    parser.add_argument(
-        "--seed", "-s", 
-        type=int, 
-        default=DEFAULT_BASE_SEED,
-        help=f"Base seed (default: {DEFAULT_BASE_SEED})"
-    )
-    
-    parser.add_argument(
-        "--output", "-o", 
-        type=str, 
-        default=DEFAULT_OUTPUT_DIR,
-        help=f"Output directory (default: {DEFAULT_OUTPUT_DIR})"
-    )
-    
-    parser.add_argument(
-        "--jar", "-j", 
-        type=str, 
-        help="Path to JAR file (auto-detected if not specified)"
-    )
-    
-    parser.add_argument(
-        "--increment", "-i", 
-        type=int, 
-        default=1,
-        help="Seed increment between runs (default: 1)"
-    )
-    
-    parser.add_argument(
-        "--timeout", "-t", 
-        type=int, 
-        default=TIMEOUT_SECONDS,
-        help=f"Timeout in seconds per run (default: {TIMEOUT_SECONDS})"
-    )
-    
-    parser.add_argument(
-        "--resume", "-r", 
-        action="store_true",
-        help="Resume a previous run (skip already completed seeds)"
-    )
-    
-    parser.add_argument(
-        "--no-vary", 
-        action="store_true",
-        help="Disable parameter variation (use base parameters only)"
-    )
-    
-    parser.add_argument(
-        "--quiet", "-q", 
-        action="store_true",
-        help="Quiet mode (less verbose output)"
-    )
-    
-    parser.add_argument(
-        "--dry-run", 
-        action="store_true",
-        help="Show what would be run without executing"
-    )
-    
-    args = parser.parse_args()
-    
-    if args.dry_run:
-        print("DRY RUN - Would execute:")
-        print(f"  runs: {args.runs}")
-        print(f"  base_seed: {args.seed}")
-        print(f"  output_dir: {args.output}")
-        print(f"  jar: {args.jar or 'auto-detect'}")
-        print(f"  increment: {args.increment}")
-        print(f"  timeout: {args.timeout}s")
-        print(f"  resume: {args.resume}")
-        print(f"  vary_params: {not args.no_vary}")
-        sys.exit(0)
-    
-    run_monte_carlo(
-        n_runs=args.runs,
-        base_seed=args.seed,
-        output_dir=args.output,
-        jar_path=args.jar,
-        seed_increment=args.increment,
-        timeout=args.timeout,
-        verbose=not args.quiet,
-        resume=args.resume,
-        vary_params=not args.no_vary
-    )
+    main()

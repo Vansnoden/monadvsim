@@ -1,0 +1,161 @@
+# ================================================================
+# SIMULATION CONFIGURATION — Monte Carlo run 18
+# Seed: 59   Strategy: monte-carlo
+# ================================================================
+
+time:
+  startDateTime: "2020-04-01T00:00:00"
+  totalTicks: 500
+  tickMinutes: 15
+
+files:
+  studySite: "prepared_data/somali/somali.shp"
+
+gridCellSizeDegrees: 0.001632806673854925
+
+species:
+  egg_dev_rho: 0.005
+  egg_dev_k: 39.20841161317061
+  egg_dev_Delta: 2.0
+  egg_dev_lambda: -0.854916887158478
+  larva_dev_a: 2.7054689312186438e-05
+  larva_dev_Tmin: 5.123026541348266
+  larva_dev_Tmax: 44.999999999835175
+  larva_dev_m: 1.663077023745059
+  pupa_dev_rho: 0.005115463305281753
+  pupa_dev_k: 39.940257466039114
+  pupa_dev_Delta: 2.0
+  pupa_dev_lambda: -0.9081661833839708
+  egg_mort_b1: 3.7955360035010717
+  egg_mort_b2: -0.323474
+  egg_mort_b3: 0.004941
+  larva_mort_b1: 2.2664659852657474
+  larva_mort_b2: -0.7395036647759831
+  larva_mort_b3: 0.017491023810106067
+  pupa_mort_b1: 6.124038737834358
+  pupa_mort_b2: -0.578528
+  pupa_mort_b3: 0.009458
+  fecundity_rmax: 1.5315811281807623
+  fecundity_Topt: 31.831970459687867
+  fecundity_c: -0.0063392498402676705
+  adult_mort_b1: -1.492552367129254
+  adult_mort_b2: -0.1377
+  adult_mort_b3: 0.003908
+  adult_mortality_per_day: 0.1198
+  sex_ratio: 0.5305043679241643
+  host_carrying_capacity_base: 1.2052163867745906
+  fecundity_scale: 0.410065150496125
+
+layers:
+  - name: Elevation
+    filePath: prepared_data/somali/Small_Somali_Elevation_10m.tif
+    type: raster
+  - name: Buildings
+    filePath: prepared_data/somali/Small_Somali_Building_Density_10m.tif
+    type: raster
+  - name: Population
+    filePath: prepared_data/somali/population_2020_1km.tif
+    type: raster
+  - name: t2m
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: t2m
+  - name: tp
+    filePath: prepared_data/somali/merged_2020_2023.nc
+    type: timeseries
+    variable: tp
+
+tokens:
+  - token: "temperature"
+    layer: "t2m"
+  - token: "precipitation"
+    layer: "tp"
+  - token: "population"
+    layer: "Population"
+  - token: "building_density"
+    layer: "Buildings"
+  - token: "elevation"
+    layer: "Elevation"
+
+agentLayers:
+  - name: "Mosquitoes"
+    rules:
+      - condition: "temperature < 273.15 || temperature > 318.15"
+        action: "die"
+        priority: 10
+      - condition: "stage == 'ADULT' && energy < 0.75 && !resting"
+        action: "feed"
+        priority: 9
+      - condition: "stage == 'ADULT' && energy < 0.8 && resting"
+        action: "rest"
+        priority: 8
+      - condition: "stage == 'ADULT' && gravid && energy < 0.8"
+        action: "feed"
+        priority: 8
+      - condition: "stage == 'ADULT' && energy > 0.6 && !gravid"
+        action: "get_gravid"
+        priority: 8
+      - condition: "(precipitation > 0.008 || temperature < 285.15) && building_density > 0.1 && !resting"
+        action: "rest_in_building"
+        priority: 6
+      - condition: "stage == 'ADULT' && !resting && !gravid && stageAgeTick < 2000"
+        action: "move_random"
+        priority: 3
+      - condition: "true"
+        action: "rest"
+        priority: 2
+      - condition: "gravid && alive"
+        action: "seek_tank"
+        priority: 90
+      - condition: "gravid && alive && temperature > 280.15 && getTotalLarvae < 30000"
+        action: "lay_eggs"
+        priority: 80
+
+  - name: "WaterTanks"
+    rules:
+      - condition: "true"
+        action: "evaporate"
+        priority: 1
+      - condition: "larvalCount > capacity * 0.7 && waterVolume > 0"
+        action: "thin_larvae"
+        priority: 5
+      - condition: "temperature < 273.15 && waterVolume > 0"
+        action: "freeze"
+        priority: 3
+
+inert_agents:
+  max_larvae_capacity: 389
+  mortality_intensity: 0.5220699900187684
+  min_larvae_retain: 10
+  max_water_volume: 100.0
+  hatch_fraction_min: 0.08661499211385447
+  hatch_fraction_max: 0.4392346506246809
+
+seeding:
+  seedAcrossFullStudySite: true
+  useOccurrencePoints: false
+  tanksToSeed: 222
+  mosquitoesToSeed: 4275
+  habitatGridSizeX: 100
+  habitatGridSizeY: 100
+  tankSuitability:
+    floorSuitability: 0.05
+    stochasticJitter: 0.30
+    layers:
+      - name: Population
+        weight: 1.0
+        cap: 100.0
+        power: 1.0
+      - name: Buildings
+        weight: 0.0
+        cap: 1.0
+        power: 1.0
+
+project:
+  defaultAgentSearchRadius: 0.015066525691060758
+  defaultAgentStep: 0.00031434097739865835
+  defaultMaxAgentAge: 2880
+  maxAgeMultiplierEgg: 0.05
+  maxAgeMultiplierLarva: 0.45
+  maxAgeMultiplierPupa: 0.15
+  maxAgeMultiplierAdult: 0.35

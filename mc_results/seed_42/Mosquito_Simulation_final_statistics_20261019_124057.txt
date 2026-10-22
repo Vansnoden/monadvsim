@@ -1,0 +1,47 @@
+================================================================================
+FINAL SIMULATION STATISTICS
+================================================================================
+
+SIMULATION METADATA
+----------------------------------------
+Project Name: Mosquito Simulation
+Timestamp: 2026-10-19 12:40:57
+Total Runtime: 820.54 seconds
+
+AGENT STATISTICS
+----------------------------------------
+Mosquitoes          :    32,342 agents
+WaterTanks          :       333 agents
+TOTAL               :    32,675 agents
+
+SPATIAL REGISTRY STATISTICS
+----------------------------------------
+totalRemoves             : 4670
+maxAgentsPerCell         : 171
+totalAgents              : 32683
+avgAgentsPerCell         : 6.714059577248642E-4
+gridCells                : 48678448
+cellSizeDegrees          : 0.0011859404555406624
+queryCount               : 269517
+totalInserts             : 37353
+totalUpdates             : 207678
+
+LAYER STATISTICS
+----------------------------------------
+Raster Layers: 5
+Agent Layers: 2
+Other Layers: 0
+Total Layers: 7
+
+SYSTEM RESOURCES
+----------------------------------------
+Memory Used: 677 MB
+Memory Total: 1024 MB
+Memory Max: 1024 MB
+Memory Usage: 66.1%
+
+PERFORMANCE METRICS
+----------------------------------------
+Final Tick: 500
+Average Tick Time: 386.50 ms
+================================================================================
